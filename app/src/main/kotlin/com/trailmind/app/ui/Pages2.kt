@@ -27,6 +27,7 @@ class CompassPage(host: MainActivity) : Page(host) {
     private var gridText: TextView? = null
     private var sunText: TextView? = null
     private var calibrate: View? = null
+    private var interference: View? = null
 
     private val onHeading: () -> Unit = { update() }
     private val onFix: (Fix) -> Unit = { update() }
@@ -50,6 +51,9 @@ class CompassPage(host: MainActivity) : Page(host) {
         calibrate = ui.banner("Compass accuracy is low. Move the phone in a figure-of-eight away from metal, magnets and the phone case clasp.").also {
             it.visibility = View.GONE; addView(it)
         }
+        interference = ui.banner("Magnetic interference: the compass may be wrong here. Move away from metal, magnets and electronics, then move the phone in a figure-of-eight.").also {
+            it.visibility = View.GONE; addView(it)
+        }
         addView(ui.card(padding = 12) {
             gravity = Gravity.CENTER_HORIZONTAL
             addView(CompassView(host).also { dial = it })
@@ -71,15 +75,16 @@ class CompassPage(host: MainActivity) : Page(host) {
             addView(ui.text("Daylight", Ui.T.LABEL))
             addView(sunText)
         })
-        addView(ui.text("Hold the phone flat. Headings are true north (magnetic declination from your GPS position is applied). Grid references are OSGB36 (±5 m conversion) and only valid in Great Britain.", Ui.T.CAPTION))
+        addView(ui.text("Hold the phone flat, or upright with its back facing the way you look. Headings are true north (magnetic declination from your GPS position is applied). Grid references are OSGB36 (±5 m conversion) and only valid in Great Britain.", Ui.T.CAPTION))
     }
 
     private fun update() {
         val d = dial ?: return
         val heading = host.headingDeg
         d.headingDeg = heading
-        d.unreliable = host.compassUnreliable
+        d.unreliable = host.compassUnreliable || host.compassDisturbed
         calibrate?.visibility = if (host.compassUnreliable && heading != null) View.VISIBLE else View.GONE
+        interference?.visibility = if (host.compassDisturbed && !host.compassUnreliable && heading != null) View.VISIBLE else View.GONE
         headingText?.text = heading?.let {
             "True ${Units.bearing(it)} · magnetic ${Units.bearing(Geo.normalizeDeg(it - host.compass.declinationDeg))} · declination ${"%.1f".format(host.compass.declinationDeg)}°"
         } ?: "Waiting for compass…"

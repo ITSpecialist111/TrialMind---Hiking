@@ -80,6 +80,8 @@ class MainActivity : Activity() {
     /** Latest compass heading, degrees true; null if no sensor data. */
     var headingDeg: Double? = null; private set
     var compassUnreliable = false; private set
+    /** The magnetometer sees more than the Earth's field (steel, magnets, electronics), whatever its calibration says. */
+    var compassDisturbed = false; private set
     private val headingListeners = LinkedHashSet<() -> Unit>()
 
     private var pendingPermission: (() -> Unit)? = null
@@ -92,9 +94,10 @@ class MainActivity : Activity() {
         ui = Ui(this)
         map = MapScreen(this)
         fgLocation = ForegroundLocation(this, app.location)
-        compass = Compass(this) { trueDeg, _, acc ->
+        compass = Compass(this) { trueDeg, _, acc, disturbed ->
             headingDeg = trueDeg
             compassUnreliable = acc <= android.hardware.SensorManager.SENSOR_STATUS_ACCURACY_LOW
+            compassDisturbed = disturbed
             headingListeners.forEach { it() }
         }
         // Edge-to-edge is enforced from API 35; opt in explicitly on older releases.

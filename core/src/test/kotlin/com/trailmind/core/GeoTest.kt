@@ -3,6 +3,7 @@ package com.trailmind.core
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
+import com.trailmind.core.geo.MagneticCheck
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.PathJoin
 import com.trailmind.core.geo.Sun
@@ -15,6 +16,7 @@ import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -137,5 +139,43 @@ class GeoTest {
         assertTrue(abs(minutes - (20 * 60 + 21)) <= 5, "sunset was $set")
         val rise = Instant.ofEpochMilli(t.sunriseMs!!).atZone(ZoneOffset.UTC)
         assertTrue(abs(rise.hour * 60 + rise.minute - (3 * 60 + 43)) <= 5, "sunrise was $rise")
+    }
+
+    // Lydney: about 49.2 µT, dipping 66.3°. In east/north/up that is (0, 19.8, -45.1).
+    @Test
+    fun magneticCheckAcceptsTheEarthsFieldFlatOrUpright() {
+        val flat = MagneticCheck().apply { expect(49.2, 66.3) }
+        repeat(10) { flat.add(0.0, 19.8, -45.1, 0.0, 0.0, 1.0) }
+        assertFalse(flat.disturbed)
+        // Upright with the back facing north: device y is up and z faces south.
+        val upright = MagneticCheck().apply { expect(49.2, 66.3) }
+        repeat(10) { upright.add(0.0, -45.1, -19.8, 0.0, 1.0, 0.0) }
+        assertFalse(upright.disturbed)
+        assertEquals(66.3, upright.dipDeg, 0.5)
+    }
+
+    @Test
+    fun magneticCheckFlagsRealReadingsThatReportedNoProblem() {
+        // Fold7 on a desk, reporting itself fully calibrated: a plausible dip, but 86 µT.
+        val phone = MagneticCheck().apply { expect(49.2, 66.3) }
+        repeat(5) { phone.add(32.64, -24.71, -75.32, -0.0366, 0.0202, 0.9991) }
+        assertTrue(phone.disturbed)
+        assertEquals(63.8, phone.dipDeg, 0.5)
+        // Watch4 face up on its magnetic charger: a plausible strength, but the field points up.
+        val watch = MagneticCheck().apply { expect(49.2, 66.3) }
+        repeat(5) { watch.add(-9.72, 32.10, 46.80, 0.0, 0.0, 1.0) }
+        assertTrue(watch.disturbed)
+    }
+
+    @Test
+    fun magneticCheckWaitsForAPositionAndClearsOnceTheFieldIsClean() {
+        val c = MagneticCheck()
+        repeat(5) { c.add(32.64, -24.71, -75.32, 0.0, 0.0, 1.0) }
+        assertFalse(c.disturbed, "nothing to compare with before a GPS fix")
+        c.expect(49.2, 66.3)
+        c.add(32.64, -24.71, -75.32, 0.0, 0.0, 1.0)
+        assertTrue(c.disturbed)
+        repeat(30) { c.add(0.0, 19.8, -45.1, 0.0, 0.0, 1.0) }
+        assertFalse(c.disturbed)
     }
 }

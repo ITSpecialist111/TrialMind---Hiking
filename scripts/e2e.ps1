@@ -279,11 +279,16 @@ function Length($points) { $m = 0.0; for ($i = 0; $i -lt $points.Count - 1; $i++
 # The emulator takes an ellipsoidal altitude; TrailMind shows height above sea level, about 53 m lower here.
 # The barometer reads what that height gives on a 1003 hPa day, so an uncalibrated altimeter would be ~85 m high.
 $Qnh = 1003.0
+# The emulators' default magnetic field is not the Earth's, which TrailMind rightly reports as interference.
+# This is the Lake District's (50 microtesla dipping 69 degrees) for the emulators' default upright pose.
+$EarthField = '0:-48.02:13.97'
 function Fix($p) {
     $script:LastFix = $p
     Adb $Phone emu geo fix $p[1].ToString('F6', $Inv) $p[0].ToString('F6', $Inv) ($p[2] + 53).ToString('F1', $Inv) | Out-Null
     $hpa = $Qnh * [Math]::Pow(1 - $p[2] / 44330.77, 5.255877)
     Adb $Phone emu sensor set pressure $hpa.ToString('F2', $Inv) | Out-Null
+    # The phone emulator does not keep this setting, so it goes with every fix.
+    Adb $Phone emu sensor set magnetic-field $EarthField | Out-Null
 }
 
 function Walk($points, [double]$interval = 2.1) { foreach ($p in $points) { Fix $p; Start-Sleep -Milliseconds ([int]($interval * 1000)) } }
@@ -342,6 +347,7 @@ try {
         if ($attached -notmatch "(?m)^$([regex]::Escape($d))\s+device\b") { throw "$d is not attached. Start it and check 'adb devices'." }
     }
     if ($Phone -notmatch '^emulator-') { throw "$Phone is not an emulator. GPS is simulated with 'adb emu geo fix', which needs one." }
+    if ($Watch) { Adb $Watch emu sensor set magnetic-field $EarthField | Out-Null }
 
     if (-not $SkipBuild) {
         $gradlew = Join-Path $Root $(if ($env:OS -eq 'Windows_NT') { 'gradlew.bat' } else { 'gradlew' })
@@ -467,8 +473,15 @@ try {
         [bool]$script:saved
     } 10 | Out-Null
     $gpxOut = Join-Path $Out 'exported-hike.gpx'
-    if ($saved) { Adb $Phone pull $saved $gpxOut | Out-Null }
-    $content = if (Test-Path $gpxOut) { Get-Content -Raw -Encoding UTF8 -Path $gpxOut } else { '' }
+    $content = ''
+    # The picker creates the file before the app has written it.
+    if ($saved) {
+        Wait-Until {
+            Adb $Phone pull $saved $gpxOut | Out-Null
+            $script:content = [string](Get-Content -Raw -Encoding UTF8 -Path $gpxOut -ErrorAction SilentlyContinue)
+            $script:content.TrimEnd().EndsWith('</gpx>')
+        } 10 | Out-Null
+    }
     $pts = ([regex]::Matches($content, '<trkpt ')).Count
     $segs = ([regex]::Matches($content, '<trkseg>')).Count
     $times = ([regex]::Matches($content, '<time>')).Count
@@ -495,7 +508,9 @@ try {
         Shot $Phone '06-folded'
         Walk $Dense[61..66]
         Hold $Dense[66] 3
-        $d1 = Get-RecordedMetres
+        # The notification refreshes every 5 s, and the emulator's fixes can pause briefly after a fold.
+        $d1 = $null
+        Wait-Until { $script:d1 = Get-RecordedMetres; $null -ne $script:d1 -and $script:d1 -gt $d0 + 100 } 15 | Out-Null
         Check 'Folded: recording continues' ($null -ne $d0 -and $d1 -gt $d0 + 100) ('{0:N0} m -> {1:N0} m' -f $d0, $d1)
         Adb $Phone emu unfold | Out-Null
         Start-Sleep -Seconds 3
@@ -626,7 +641,7 @@ try {
         Check 'Install the watch app' ($r -match 'Success') $(if ($r -notmatch 'Success') { $r })
         Adb $Watch shell am force-stop $Pkg | Out-Null
         Adb $Watch shell pm clear $Pkg | Out-Null
-        Adb $Watch shell pm grant $Pkg android.permission.BLUETOOTH_CONNECT | Out-Null
+        foreach ($perm in 'BLUETOOTH_CONNECT', 'POST_NOTIFICATIONS') { Adb $Watch shell pm grant $Pkg "android.permission.$perm" | Out-Null }
         Adb $Watch logcat -b all -c | Out-Null
         # A sleeping watch swallows the first touch and stops the app; keep it awake for the test.
         Adb $Watch shell svc power stayon true | Out-Null

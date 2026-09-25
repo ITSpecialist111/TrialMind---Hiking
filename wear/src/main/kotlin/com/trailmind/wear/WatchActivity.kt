@@ -31,6 +31,7 @@ import android.widget.Toast
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
+import com.trailmind.core.geo.MagneticCheck
 import com.trailmind.core.nav.TracBack
 import com.trailmind.core.watch.TileReply
 import com.trailmind.core.watch.WatchProtocol
@@ -75,6 +76,12 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
     private var headingDeg: Float? = null
     private var declination = 0f
     private var declinationAt = 0L
+    // The magnetometer's accuracy is its calibration state; the field check catches what that misses.
+    // Sitting on the magnetic charger upsets both.
+    private var compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private val field = MagneticCheck()
+    private var hasRotation = false
+    private var compassHinted = false
     private var finishArmedUntil = 0L
     private var started = false
     private var mapInfoColor = PILL
@@ -139,6 +146,11 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         // The link runs as a connected-device service, which needs the Bluetooth permission first.
         if (PhoneLink.hasPermission(this)) attachLink() else onLinkStatus(PhoneLink.Status.NO_PERMISSION)
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+        field.reset()
+        hasRotation = false
+        // For its accuracy reports and the field check.
+        sensors.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
         main.post(tick)
     }
 
@@ -336,7 +348,9 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         map.setPosition(if (s.hasFix) LatLon(s.lat, s.lon) else null, s.accuracyM)
         map.setMarkers(latLonOrNull(s.nextLat, s.nextLon), latLonOrNull(s.targetLat, s.targetLon))
         if (s.hasFix && SystemClock.elapsedRealtime() - declinationAt > 60_000) {
-            declination = GeomagneticField(s.lat.toFloat(), s.lon.toFloat(), s.altitudeM.takeIf { !it.isNaN() }?.toFloat() ?: 0f, System.currentTimeMillis()).declination
+            val g = GeomagneticField(s.lat.toFloat(), s.lon.toFloat(), s.altitudeM.takeIf { !it.isNaN() }?.toFloat() ?: 0f, System.currentTimeMillis())
+            declination = g.declination
+            field.expect(g.fieldStrength / 1000.0, g.inclination.toDouble())
             declinationAt = SystemClock.elapsedRealtime()
         }
         renderAll()
@@ -404,7 +418,16 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
     // ---------------------------------------------------------------- compass
 
     override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+            val v = event.values
+            updateCompassProblem {
+                compassAccuracy = event.accuracy
+                if (hasRotation) field.add(v[0].toDouble(), v[1].toDouble(), v[2].toDouble(), rotation[6].toDouble(), rotation[7].toDouble(), rotation[8].toDouble())
+            }
+            return
+        }
         SensorManager.getRotationMatrixFromVector(rotation, event.values)
+        hasRotation = true
         SensorManager.getOrientation(rotation, orientation)
         val deg = ((Math.toDegrees(orientation[0].toDouble()) + declination + 360.0) % 360.0).toFloat()
         val prev = headingDeg
@@ -414,7 +437,31 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         renderNav()
     }
 
-    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
+    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {
+        if (sensor.type == Sensor.TYPE_MAGNETIC_FIELD) updateCompassProblem { compassAccuracy = accuracy }
+    }
+
+    /** Why the heading can't be trusted right now, or null. */
+    private fun compassProblem() = when {
+        compassAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW -> "Calibrate compass"
+        field.disturbed -> "Compass disturbed"
+        else -> null
+    }
+
+    private fun updateCompassProblem(change: () -> Unit) {
+        val before = compassProblem()
+        change()
+        val now = compassProblem()
+        if (now == before) return
+        Log.i(TAG, "compass ${now ?: "ok"}: accuracy $compassAccuracy, %.1f µT dipping %.1f°".format(field.strengthUt, field.dipDeg))
+        if (now != null && !compassHinted) {
+            compassHinted = true
+            val tip = if (field.disturbed && compassAccuracy > SensorManager.SENSOR_STATUS_ACCURACY_LOW) "Magnetic interference: keep the watch away from metal, magnets and its charger"
+            else "Compass needs calibrating: move the watch in a figure-of-eight"
+            Toast.makeText(this, tip, Toast.LENGTH_LONG).show()
+        }
+        renderNav()
+    }
 
     // ---------------------------------------------------------------- rendering
 
@@ -516,9 +563,14 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         navDetail.show(detail)
         navDetail.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
         val scale = dist(dial.radiusM)
+        val problem = if (heading != null) compassProblem() else null
+        navHeading.setTextColor(if (problem != null) ORANGE else Color.WHITE)
         navHeading.show(
-            if (heading != null && dial.headingUp) "${Units.bearing(heading.toDouble())} ${Geo.cardinal(heading.toDouble())} \u00b7 $scale"
-            else "North up \u00b7 $scale",
+            when {
+                problem != null -> problem
+                heading != null && dial.headingUp -> "${Units.bearing(heading.toDouble())} ${Geo.cardinal(heading.toDouble())} \u00b7 $scale"
+                else -> "North up \u00b7 $scale"
+            },
         )
     }
 
