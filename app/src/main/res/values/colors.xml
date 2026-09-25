@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="tm_primary">#1F5B45</color>
+    <color name="tm_primary_dark">#143D2E</color>
+    <color name="tm_accent">#F08A24</color>
+    <color name="tm_background">#F4F6F2</color>
+    <color name="tm_launcher_bg">#1F5B45</color>
+</resources>

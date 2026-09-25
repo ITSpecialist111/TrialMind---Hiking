@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.TrailMind" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/tm_primary</item>
+        <item name="android:colorPrimaryDark">@color/tm_primary_dark</item>
+        <item name="android:colorAccent">@color/tm_accent</item>
+        <item name="android:windowBackground">@color/tm_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

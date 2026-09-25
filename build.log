@@ -1,0 +1,18 @@
+SDK: /usr/local/lib/android/sdk  platform: android-36  build-tools: 37.0.0
+[1/6] Resources (aapt2)
+[2/6] R.java (javac)
+[3/6] Kotlin (kotlinc 2.4.0) – app + core
+[4/6] Dex (d8)
+[5/6] Package + align
+[6/6] Sign (debug key, generated locally and never committed)
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+package: name='com.trailmind.app' versionCode='1' versionName='0.1.0' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'
+minSdkVersion:'26'
+targetSdkVersion:'36'
+-rw-rw-r-- 1 runner runner 899496 Sep 25 11:11 /home/runner/work/HikingApp101/HikingApp101/out-apk/TrailMind-debug.apk
+Done: /home/runner/work/HikingApp101/HikingApp101/out-apk/TrailMind-debug.apk  (install: adb install -r out-apk/TrailMind-debug.apk)
+[lint] Android lint (standalone 8.2.0)
