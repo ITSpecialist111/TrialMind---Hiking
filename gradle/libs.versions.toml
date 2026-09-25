@@ -1,0 +1,9 @@
+[versions]
+kotlin = "2.4.0"
+junit-jupiter = "6.0.1"
+
+[libraries]
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit-jupiter" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
