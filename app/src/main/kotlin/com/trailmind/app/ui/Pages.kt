@@ -2,15 +2,22 @@ package com.trailmind.app.ui
 
 import android.text.InputType
 import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.HikeMeta
 import com.trailmind.app.data.HikeStatus
 import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
+import com.trailmind.app.data.WaymarkedTrails
 import com.trailmind.app.location.TrackingState
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.BoundingBox
+import com.trailmind.core.geo.Geo
+import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.gpx.GpxWriter
@@ -38,24 +45,28 @@ class RoutesPage(host: MainActivity) : Page(host) {
 
     private fun load() = Async.run({ app.db.routes() }) { r -> routes = r.getOrDefault(emptyList()); refresh() }
 
-    override fun render(): View = scaffold("Routes", actions = listOf(ui.button("Import", R.drawable.ic_upload, Ui.B.TONAL) { host.pickGpx() })) {
+    override fun render(): View = scaffold("Routes", actions = listOf(
+        ui.button("Find", R.drawable.ic_route, Ui.B.TONAL) { host.push(RouteFinderPage(host)) },
+        ui.button("Import", R.drawable.ic_upload, Ui.B.TONAL) { host.pickGpx() },
+    )) {
         activeId = app.nav.active?.data?.meta?.id
         val list = routes
         when {
             list == null -> addView(ui.text("Loading…", Ui.T.CAPTION))
             list.isEmpty() -> addView(ui.card(spacing = 10) {
                 addView(ui.text("No routes yet", Ui.T.TITLE))
-                addView(ui.text("Import a GPX track or route (from Komoot, OS Maps, AllTrails exports, a club website…) and TrailMind will show it on the map, estimate timings and warn you if you stray from it.", Ui.T.BODY))
+                addView(ui.text("Find a waymarked route near you or by name, or import a GPX track or route (from Komoot, OS Maps, AllTrails exports, a club website…). TrailMind shows it on the map, estimates timings and warns you if you stray from it.", Ui.T.BODY))
                 addView(ui.text("You can also open or share a .gpx file to TrailMind from your file manager or browser.", Ui.T.CAPTION))
-                addView(ui.button("Import GPX file", R.drawable.ic_upload) { host.pickGpx() })
+                addView(ui.button("Find routes", R.drawable.ic_route) { host.push(RouteFinderPage(host)) })
+                addView(ui.button("Import GPX file", R.drawable.ic_upload, Ui.B.TONAL) { host.pickGpx() })
             })
             else -> list.forEach { r ->
                 val imperial = app.prefs.imperial
                 addView(ui.listItem(
                     r.name,
-                    "${Units.distance(r.distanceM, imperial)} · ↑${Units.elevation(r.ascentM, imperial)}" +
-                        (r.maxEleM?.let { " · max ${Units.elevation(it, imperial)}" } ?: "") +
-                        " · ~${Units.minutes(naismithQuick(r))}",
+                    "${nb(Units.distance(r.distanceM, imperial))} · ${nb("↑" + Units.elevation(r.ascentM, imperial))}" +
+                        (r.maxEleM?.let { " · ${nb("max " + Units.elevation(it, imperial))}" } ?: "") +
+                        " · ${nb("~" + Units.minutes(naismithQuick(r)))}",
                     R.drawable.ic_route,
                     if (r.id == activeId) "Following" else null,
                 ) { host.push(RouteDetailPage(host, r.id)) })
@@ -67,6 +78,136 @@ class RoutesPage(host: MainActivity) : Page(host) {
     private fun naismithQuick(r: RouteMeta): Double {
         val pace = app.prefs.pace
         return (r.distanceM / 1000.0 / pace.flatSpeedKmh * 60.0 + r.ascentM / 10.0) * pace.conditionsFactor
+    }
+}
+
+/** Waymarked routes from OpenStreetMap, listed near you or found by name, added in one tap. */
+class RouteFinderPage(host: MainActivity) : Page(host) {
+    private enum class Mode { NEAR_ME, MAP_VIEW, SEARCH }
+
+    private var mode = Mode.NEAR_ME
+    private var searched = ""
+    private var results: List<WaymarkedTrails.Trail>? = null
+    private var error: String? = null
+    private var noFix = false
+    private var job = 0
+
+    /** One search box for the page's life, so typing is not interrupted when results arrive and the page re-renders. */
+    private val box: EditText by lazy {
+        ui.input("Route name, e.g. Offa's Dyke").apply {
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_SEARCH) { submit(); true } else false }
+        }
+    }
+
+    override fun onShow() { if (results == null && error == null) load(Mode.NEAR_ME) }
+
+    override fun refresh() {
+        val typing = box.hasFocus()
+        super.refresh()
+        if (typing) box.requestFocus()
+    }
+
+    /** The map's visible area; when the map is hidden (cover screen) it has no size, so use an area round its centre. */
+    private fun mapBox(): BoundingBox {
+        val b = host.map.mapView.visibleBounds()
+        val span = Geo.distanceM(LatLon(b.minLat, b.minLon), LatLon(b.maxLat, b.maxLon))
+        return if (span < 500) b.expandedByMetres(NEAR_M) else b
+    }
+
+    private fun load(m: Mode) {
+        val q = box.text.toString().trim()
+        if (m == Mode.SEARCH && q.length < 2) { host.toast("Type at least two letters of the route name"); return }
+        mode = m
+        if (m == Mode.SEARCH) searched = q
+        val fix = app.location.latest
+        noFix = m == Mode.NEAR_ME && fix == null
+        val area = when {
+            m == Mode.SEARCH -> null
+            m == Mode.NEAR_ME && fix != null -> BoundingBox(fix.lat, fix.lon, fix.lat, fix.lon).expandedByMetres(NEAR_M)
+            else -> mapBox()
+        }
+        val id = ++job
+        results = null
+        error = null
+        refresh()
+        Async.run({ if (area != null) WaymarkedTrails.inArea(area) else WaymarkedTrails.search(q) }) { r ->
+            if (id != job) return@run
+            results = r.getOrNull()
+            error = r.exceptionOrNull()?.let { friendly(it) }
+            refresh()
+        }
+    }
+
+    private fun submit() {
+        host.getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(box.windowToken, 0)
+        box.clearFocus()
+        load(Mode.SEARCH)
+    }
+
+    override fun render(): View = scaffold("Find routes") {
+        (box.parent as? ViewGroup)?.removeView(box)
+        addView(ui.row {
+            addView(box, ui.lp(0, weight = 1f))
+            addView(ui.button("Search", null, Ui.B.TONAL) { submit() })
+        })
+        addView(ui.flow {
+            addView(ui.chip("Near me", mode == Mode.NEAR_ME) { load(Mode.NEAR_ME) })
+            addView(ui.chip("In map view", mode == Mode.MAP_VIEW) { load(Mode.MAP_VIEW) })
+        })
+        val list = results
+        val err = error
+        when {
+            err != null -> addView(ui.banner(err))
+            list == null -> addView(ui.text(if (mode == Mode.SEARCH) "Searching…" else "Looking for waymarked routes…", Ui.T.CAPTION))
+            list.isEmpty() -> addView(ui.text(
+                if (mode == Mode.SEARCH) "No waymarked route is called \"$searched\". Try part of the name."
+                else "No waymarked routes here. Zoom the map out and try \"In map view\", or search by name.",
+                Ui.T.CAPTION,
+            ))
+            else -> {
+                addView(ui.text(when (mode) {
+                    Mode.SEARCH -> "Routes matching \"$searched\""
+                    Mode.MAP_VIEW -> "Routes in the map view"
+                    Mode.NEAR_ME -> if (noFix) "No GPS fix yet, so these are routes around the map centre"
+                        else "Routes within ${Units.distance(NEAR_M, app.prefs.imperial)} of you"
+                }, Ui.T.LABEL))
+                list.forEach { t ->
+                    addView(ui.listItem(t.name, listOfNotNull(t.kind, t.ref?.takeIf { it != t.name }).joinToString(" · "), R.drawable.ic_route) { add(t) })
+                }
+            }
+        }
+        addView(ui.text("These are signed routes mapped in OpenStreetMap: national trails, regional ways and local waymarked walks. Tap one to add it to your routes. " + WaymarkedTrails.ATTRIBUTION, Ui.T.CAPTION))
+    }
+
+    private fun add(t: WaymarkedTrails.Trail) {
+        val progress = ui.dialog().setTitle(t.name).setMessage("Downloading the route…").setCancelable(false).show()
+        Async.run({
+            val d = WaymarkedTrails.download(t)
+            d to app.db.insertRoute(d.name, d.points, emptyList())
+        }) { r ->
+            progress.dismiss()
+            r.onSuccess { (d, id) ->
+                host.toast(when {
+                    d.hasElevation -> "Route added"
+                    d.lengthM > WaymarkedTrails.ELEVATION_MAX_M -> "Route added. Heights are only downloaded for routes up to ${Units.distance(WaymarkedTrails.ELEVATION_MAX_M, app.prefs.imperial)}."
+                    else -> "Route added without heights"
+                })
+                host.push(RouteDetailPage(host, id))
+            }.onFailure { e ->
+                ui.dialog().setTitle("Could not add the route").setMessage(friendly(e)).setPositiveButton("OK", null).show()
+            }
+        }
+    }
+
+    private fun friendly(e: Throwable): String = when (e) {
+        is java.net.UnknownHostException, is java.net.ConnectException, is java.net.SocketTimeoutException ->
+            "Waymarked Trails could not be reached. Check your mobile data or Wi-Fi."
+        else -> e.message ?: e.toString()
+    }
+
+    private companion object {
+        const val NEAR_M = 10_000.0
     }
 }
 
@@ -204,7 +345,7 @@ class HikesPage(host: MainActivity) : Page(host) {
                     val live = h.id == TrackingState.hikeId
                     addView(ui.listItem(
                         h.name,
-                        "${fmtDate(h.startMs)} · ${Units.distance(h.distanceM, imperial)} · ${Units.duration(h.durationMs)} · ↑${Units.elevation(h.ascentM, imperial)}",
+                        "${fmtDate(h.startMs)} · ${nb(Units.distance(h.distanceM, imperial))} · ${nb(Units.duration(h.durationMs))} · ${nb("↑" + Units.elevation(h.ascentM, imperial))}",
                         R.drawable.ic_walk,
                         when {
                             live -> "Recording"

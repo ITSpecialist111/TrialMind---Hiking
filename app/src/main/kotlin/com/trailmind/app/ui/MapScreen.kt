@@ -33,7 +33,30 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val p = ui.p
     val mapView = TileMapView(host)
     val view = FrameLayout(host)
-    private val overlay = FrameLayout(host)
+    // Places the map buttons in the gap between the top cards and the bottom bar so they never cover either.
+    private val overlay = object : FrameLayout(host) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            val gap = freeBottom() - freeTop()
+            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 5 else 4
+            val showZoom = gap >= host.dp(fabs * 48 + (fabs - 1) * 10)
+            if (zoomButtons.any { (it.visibility == View.VISIBLE) != showZoom }) {
+                zoomButtons.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+        }
+
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            super.onLayout(changed, l, t, r, b)
+            val top = freeTop()
+            val y = maxOf(top, (top + freeBottom() - fabColumn.measuredHeight) / 2)
+            val x = width - paddingRight - fabColumn.measuredWidth
+            fabColumn.layout(x, y, x + fabColumn.measuredWidth, y + fabColumn.measuredHeight)
+        }
+
+        private fun freeTop() = paddingTop + topColumn.measuredHeight + host.dp(12)
+        private fun freeBottom() = measuredHeight - paddingBottom - recordBar.measuredHeight - host.dp(12)
+    }
     private val topColumn = ui.column(spacing = 8)
     private val statusRow = ui.row(spacing = 8)
     private val gpsChip = ui.chip("GPS off") { host.push(SafetyPage(host)) }
@@ -43,12 +66,22 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val recoverCard = ui.card(color = p.warnContainer, padding = 14, spacing = 8)
     private val fabColumn = ui.column(spacing = 10)
     private var followFab: ImageButton
-    private val recordBar = FrameLayout(host)
+    private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map") { host.setMapFullScreen(!host.mapFullScreen) }
+    private val zoomButtons: List<View>
+    // Caps the recording card at 420 dp in the wide layout without overflowing a narrower map pane.
+    private val recordBar = object : FrameLayout(host) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val cap = host.dp(420)
+            val w = if (wide && MeasureSpec.getSize(widthMeasureSpec) > cap) MeasureSpec.makeMeasureSpec(cap, MeasureSpec.EXACTLY) else widthMeasureSpec
+            super.onMeasure(w, heightMeasureSpec)
+        }
+    }
     private var wide = false
     private var bottomInset = 0
     private var lastStatus = TrackingState.Status.IDLE
     private var builtStatus: TrackingState.Status? = null
     private var shownTrack: MercatorLine? = null
+    private var premiumNoticeShown = false
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
 
     private val ticker = object : Runnable {
@@ -60,7 +93,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     private val onFix: (Fix) -> Unit = { f ->
         mapView.setPosition(LatLon(f.lat, f.lon), f.accuracyM)
-        host.compass.updateLocation(f.lat, f.lon, f.altitudeMslM ?: 0.0)
+        host.compass.updateLocation(f.lat, f.lon, f.altitudeM ?: 0.0)
         updateGps(f)
         updateTarget()
     }
@@ -90,13 +123,17 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         topColumn.addView(targetCard)
         overlay.addView(topColumn, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
+        fabColumn.addView(fullScreenFab)
         fabColumn.addView(ui.fab(R.drawable.ic_layers, "Map layers") { chooseLayer() })
-        fabColumn.addView(ui.fab(R.drawable.ic_add, "Zoom in") { mapView.zoomBy(1.0) })
-        fabColumn.addView(ui.fab(R.drawable.ic_remove, "Zoom out") { mapView.zoomBy(-1.0) })
+        zoomButtons = listOf(
+            ui.fab(R.drawable.ic_add, "Zoom in") { mapView.zoomBy(1.0) },
+            ui.fab(R.drawable.ic_remove, "Zoom out") { mapView.zoomBy(-1.0) },
+        )
+        zoomButtons.forEach { fabColumn.addView(it) }
         followFab = ui.fab(R.drawable.ic_my_location, "My location") { locate() }
         fabColumn.addView(followFab)
         overlay.addView(fabColumn, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
-        overlay.addView(recordBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        overlay.addView(recordBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         recordBar.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ -> updateBottomChrome(bottom - top) }
 
         mapView.setCenter(app.prefs.mapLat, app.prefs.mapLon, app.prefs.mapZoom)
@@ -134,7 +171,14 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     fun onLayoutChanged(wide: Boolean) {
         this.wide = wide
+        fullScreenFab.visibility = if (wide) View.VISIBLE else View.GONE
         updateTracking(force = true)
+    }
+
+    fun onFullScreenChanged(full: Boolean) {
+        fullScreenFab.setImageDrawable(host.getDrawable(if (full) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen)?.mutate()
+            ?.apply { setTint(p.onSurface) })
+        fullScreenFab.contentDescription = if (full) "Exit full-screen map" else "Full-screen map"
     }
 
     fun onResize() = mapView.invalidate()
@@ -193,6 +237,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     private fun updateHint() {
         val s = mapView.source
+        if (!premiumNoticeShown && app.tiles.premiumDenied(s)) {
+            premiumNoticeShown = true
+            host.toast("Zoom 17+ is OS Premium data. Your OS plan is the free OpenData plan, so the map shows zoom 16 enlarged.")
+        }
         mapView.hint = when {
             s.requiresKey && app.prefs.osApiKey.isBlank() ->
                 "Add your free OS Data Hub API key in Settings to show OS maps"
@@ -253,22 +301,56 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     // ---------------------------------------------------------------- overlays
 
+    // What each overlay last showed: GPS fixes arrive every second, and rebuilding identical views
+    // wastes battery and keeps the UI from ever going idle.
+    private var navShown: String? = null
+    private var targetShown: String? = null
+    private var statsShown: String? = null
+    private var waypointsRouteId = Long.MIN_VALUE
+
     private fun updateGps(f: Fix?) {
-        if (f == null) { gpsChip.text = if (host.hasLocationPermission()) "Finding GPS…" else "Location off"; return }
-        val grid = OsGrid.fromWgs84(LatLon(f.lat, f.lon))?.format(6)
-        gpsChip.text = listOfNotNull(grid ?: Units.latLon(f.lat, f.lon), "±${f.accuracyM.toInt()} m").joinToString(" · ")
+        val text = if (f == null) {
+            if (host.hasLocationPermission()) "Finding GPS…" else "Location off"
+        } else {
+            val grid = OsGrid.fromWgs84(LatLon(f.lat, f.lon))?.format(6)
+            listOfNotNull(grid ?: Units.latLon(f.lat, f.lon), "±" + Units.distance(f.accuracyM.toDouble(), app.prefs.imperial)).joinToString(" · ")
+        }
+        if (gpsChip.text.toString() != text) gpsChip.text = text
     }
 
     private fun updateNav() {
         val route = app.nav.active
         mapView.route = route?.line
-        mapView.waypoints = route?.data?.waypoints?.map { MapMarker(it.latLon(), it.name) } ?: emptyList()
-        navCard.removeAllViews()
-        if (route == null) { navCard.visibility = View.GONE; return }
-        navCard.visibility = View.VISIBLE
+        val routeId = route?.data?.meta?.id ?: -1L
+        if (routeId != waypointsRouteId) {
+            waypointsRouteId = routeId
+            mapView.waypoints = route?.data?.waypoints?.map { MapMarker(it.latLon(), it.name) } ?: emptyList()
+        }
+        if (route == null) { navShown = null; navCard.removeAllViews(); navCard.visibility = View.GONE; return }
         val imperial = app.prefs.imperial
         val fix = app.nav.fix
-        navCard.background = rounded(if (app.nav.offRoute) p.dangerContainer else p.surface, host.dp(20).toFloat(), p.outline, host.dp(1))
+        val offRoute = app.nav.offRoute
+        val waiting = if (fix == null) "${Units.distance(route.guide.totalM, imperial)} · planning time ${Units.minutes(route.estimate.planningMinutes)} · waiting for GPS" else null
+        val stats = fix?.let { rf ->
+            listOf(Units.distance(rf.remainingM, imperial), app.nav.remainingMinutes?.let { Units.minutes(it) } ?: "—",
+                "↑" + Units.elevation(rf.remainingAscentM, imperial), "${(rf.progress * 100).toInt()}%")
+        }
+        val status = when {
+            fix == null -> null
+            offRoute -> {
+                val back = app.nav.lastFix?.let { Geo.bearingDeg(LatLon(it.lat, it.lon), fix.snapped) }
+                "Off route by ${Units.distance(fix.offRouteM, imperial)}" + (back?.let { " – route is ${Units.bearing(it)} ${Geo.cardinal(it)}" } ?: "")
+            }
+            fix.atEnd -> "You have reached the end of the route."
+            else -> null
+        }
+        val next = fix?.nextWaypoint?.let { w -> "Next: ${w.waypoint.name} in ${Units.distance(w.alongRouteM, imperial)} (${Units.bearing(w.bearingDeg)})" }
+        val shown = listOf(routeId, route.data.meta.name, offRoute, waiting, stats, status, next).joinToString("|")
+        if (shown == navShown) return
+        navShown = shown
+        navCard.removeAllViews()
+        navCard.visibility = View.VISIBLE
+        navCard.background = rounded(if (offRoute) p.dangerContainer else p.surface, host.dp(20).toFloat(), p.outline, host.dp(1))
         navCard.addView(ui.row(spacing = 8) {
             addView(ui.text("Following", Ui.T.LABEL, p.primary))
             addView(ui.text(route.data.meta.name, Ui.T.TITLE).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, ui.lp(0, weight = 1f))
@@ -276,48 +358,35 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 ui.confirm("Stop following?", "The route will be removed from the map.", "Stop") { app.nav.stopFollowing() }
             })
         })
-        if (fix == null) {
-            navCard.addView(ui.text("${Units.distance(route.guide.totalM, imperial)} · planning time ${Units.minutes(route.estimate.planningMinutes)} · waiting for GPS", Ui.T.CAPTION))
-            return
-        }
-        val remaining = app.nav.remainingMinutes
-        navCard.addView(ui.row(spacing = 16) {
-            addView(ui.stat("To go", Units.distance(fix.remainingM, imperial)))
-            addView(ui.stat("Time", remaining?.let { Units.minutes(it) } ?: "—"))
-            addView(ui.stat("Climb", "↑" + Units.elevation(fix.remainingAscentM, imperial)))
-            addView(ui.stat("Done", "${(fix.progress * 100).toInt()}%"))
+        if (waiting != null) { navCard.addView(ui.text(waiting, Ui.T.CAPTION)); return }
+        if (stats != null) navCard.addView(ui.row(spacing = 12) {
+            listOf("To go", "Time", "Climb", "Done").forEachIndexed { i, label -> addView(ui.stat(label, stats[i]), ui.lp(0, weight = 1f)) }
         })
-        if (app.nav.offRoute) {
-            val here = app.nav.lastFix
-            val back = here?.let { Geo.bearingDeg(LatLon(it.lat, it.lon), fix.snapped) }
-            navCard.addView(ui.text("Off route by ${Units.distance(fix.offRouteM, imperial)}" +
-                (back?.let { " – route is ${Units.bearing(it)} ${Geo.cardinal(it)}" } ?: ""), Ui.T.TITLE, p.danger))
-        } else if (fix.atEnd) {
-            navCard.addView(ui.text("You have reached the end of the route.", Ui.T.CAPTION))
-        }
-        fix.nextWaypoint?.let { w ->
-            navCard.addView(ui.text("Next: ${w.waypoint.name} in ${Units.distance(w.alongRouteM, imperial)} (${Units.bearing(w.bearingDeg)})", Ui.T.CAPTION))
-        }
+        status?.let { navCard.addView(if (offRoute) ui.text(it, Ui.T.TITLE, p.danger) else ui.text(it, Ui.T.CAPTION)) }
+        next?.let { navCard.addView(ui.text(it, Ui.T.CAPTION)) }
     }
 
     private fun updateTarget() {
         val t = app.nav.target
         mapView.target = t
-        targetCard.removeAllViews()
-        if (t == null) { targetCard.visibility = View.GONE; return }
-        targetCard.visibility = View.VISIBLE
+        if (t == null) { targetShown = null; targetCard.removeAllViews(); targetCard.visibility = View.GONE; return }
         val f = app.nav.lastFix
         val grid = OsGrid.fromWgs84(t)?.format(8) ?: Units.latLon(t.lat, t.lon)
+        val detail = if (f != null) {
+            val here = LatLon(f.lat, f.lon)
+            val b = Geo.bearingDeg(here, t)
+            "${Units.distance(Geo.distanceM(here, t), app.prefs.imperial)} · ${Units.bearing(b)} ${Geo.cardinal(b)} (straight line, not a path)"
+        } else "Waiting for GPS to give bearing and distance"
+        if ("$grid|$detail" == targetShown) return
+        targetShown = "$grid|$detail"
+        targetCard.removeAllViews()
+        targetCard.visibility = View.VISIBLE
         targetCard.addView(ui.row(spacing = 8) {
             addView(ui.text("Go to", Ui.T.LABEL, p.accent))
             addView(ui.text(grid, Ui.T.TITLE), ui.lp(0, weight = 1f))
             addView(miniIcon(R.drawable.ic_close, "Clear target") { app.nav.setTarget(null) })
         })
-        if (f != null) {
-            val here = LatLon(f.lat, f.lon)
-            val b = Geo.bearingDeg(here, t)
-            targetCard.addView(ui.text("${Units.distance(Geo.distanceM(here, t), app.prefs.imperial)} · ${Units.bearing(b)} ${Geo.cardinal(b)} (straight line, not a path)", Ui.T.CAPTION))
-        } else targetCard.addView(ui.text("Waiting for GPS to give bearing and distance", Ui.T.CAPTION))
+        targetCard.addView(ui.text(detail, Ui.T.CAPTION))
     }
 
     private fun updateRecover() {
@@ -397,7 +466,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                     addView(ui.fab(R.drawable.ic_stop, "Finish", bg = p.danger, fg = Color.WHITE) { confirmFinish() })
                 }
                 card.addView(row)
-                recordBar.addView(card, FrameLayout.LayoutParams(if (wide) host.dp(420) else -1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+                recordBar.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
                 updateRecordStats()
             }
         }
@@ -406,11 +475,16 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private fun updateRecordStats() {
         val stats = recordBar.findViewWithTag<LinearLayout>("stats") ?: return
         val imperial = app.prefs.imperial
-        stats.removeAllViews()
         val paused = TrackingState.status == TrackingState.Status.PAUSED
-        stats.addView(ui.stat(if (paused) "Paused" else "Time", Units.duration(TrackingState.activeMs())))
-        stats.addView(ui.stat("Distance", Units.distance(TrackingState.distanceM, imperial)))
-        stats.addView(ui.stat("Ascent", "↑" + Units.elevation(TrackingState.ascentM, imperial)))
+        val values = listOf(if (paused) "Paused" else "Time", Units.duration(TrackingState.activeMs()),
+            Units.distance(TrackingState.distanceM, imperial), "↑" + Units.elevation(TrackingState.ascentM, imperial))
+        val shown = values.joinToString("|")
+        if (shown == statsShown && stats.childCount > 0) return
+        statsShown = shown
+        stats.removeAllViews()
+        stats.addView(ui.stat(values[0], values[1]), ui.lp(0, weight = 1f))
+        stats.addView(ui.stat("Distance", values[2]), ui.lp(0, weight = 1f))
+        stats.addView(ui.stat("Ascent", values[3]), ui.lp(0, weight = 1f))
     }
 
     private fun startRecording() {

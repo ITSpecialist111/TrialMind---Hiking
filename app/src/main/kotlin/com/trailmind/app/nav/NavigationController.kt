@@ -12,7 +12,9 @@ import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.RouteData
+import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.location.Fix
+import com.trailmind.app.location.TrackingState
 import com.trailmind.app.map.MercatorLine
 import com.trailmind.app.ui.MainActivity
 import com.trailmind.app.ui.Notifications
@@ -20,9 +22,11 @@ import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.TrackPoint
+import com.trailmind.core.geo.Waypoint
 import com.trailmind.core.nav.OffRouteDetector
 import com.trailmind.core.nav.RouteFix
 import com.trailmind.core.nav.RouteGuide
+import com.trailmind.core.nav.TracBack
 import com.trailmind.core.stats.HikeEstimate
 import com.trailmind.core.stats.HikeEstimator
 import java.util.concurrent.CopyOnWriteArraySet
@@ -73,11 +77,25 @@ class NavigationController(private val app: TrailMindApp) {
     }
 
     fun stopFollowing() {
+        val resume = app.prefs.activeRouteId.takeIf { active?.data?.meta?.id == TRACBACK_ID && it > 0 }
         active = null
-        app.prefs.activeRouteId = -1
         resetGuidance()
         Notifications.manager(app).cancel(Notifications.ID_OFF_ROUTE)
         changed()
+        if (resume != null) follow(resume, persist = false) else app.prefs.activeRouteId = -1
+    }
+
+    /** Guides back along the recorded track to where the hike started. False if too little is recorded. */
+    fun traceBack(): Boolean {
+        val line = TracBack.line(TrackingState.points) ?: return false
+        val start = line.last()
+        val meta = RouteMeta(TRACBACK_ID, TracBack.ROUTE_NAME, System.currentTimeMillis(), 0.0, 0.0, 0.0, null, line.size, 1)
+        val route = build(RouteData(meta, line, listOf(Waypoint(start.lat, start.lon, TracBack.START_NAME)))) ?: return false
+        active = route
+        resetGuidance()
+        lastFix?.let { onFix(it) }
+        changed()
+        return true
     }
 
     /** Re-reads threshold / pace preferences. */
@@ -163,5 +181,10 @@ class NavigationController(private val app: TrailMindApp) {
             app.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         runCatching { v?.vibrate(VibrationEffect.createWaveform(pattern, -1)) }
+    }
+
+    companion object {
+        /** Id of the in-memory "retrace steps" route; stored routes start at 1. */
+        const val TRACBACK_ID = 0L
     }
 }

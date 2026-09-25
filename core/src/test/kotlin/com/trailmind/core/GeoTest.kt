@@ -4,8 +4,10 @@ import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
+import com.trailmind.core.geo.PathJoin
 import com.trailmind.core.geo.Sun
 import com.trailmind.core.geo.TileKey
+import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.geo.WebMercator
 import java.time.Instant
 import java.time.LocalDate
@@ -18,6 +20,34 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GeoTest {
+    @Test
+    fun webMercatorMetresRoundTrip() {
+        // Offa's Dyke Path's southern end at Sedbury Cliffs, as Waymarked Trails reports it.
+        val p = WebMercator.fromMetres(-294810.17, 6733952.16)
+        assertEquals(51.633, p.lat, 0.002)
+        assertEquals(-2.648, p.lon, 0.002)
+        val (x, y) = WebMercator.toMetres(p)
+        assertEquals(-294810.17, x, 0.01)
+        assertEquals(6733952.16, y, 0.01)
+        assertEquals(20_037_508.34, WebMercator.toMetres(LatLon(0.0, 180.0)).first, 0.01)
+    }
+
+    @Test
+    fun pathJoinOrientsAndChainsPieces() {
+        fun pt(lon: Double) = TrackPoint(54.0, lon)
+        val a = listOf(pt(0.000), pt(0.001))
+        val bReversed = listOf(pt(0.003), pt(0.002), pt(0.001))
+        assertEquals(listOf(0.000, 0.001, 0.002, 0.003), PathJoin.join(listOf(a, bReversed)).map { it.lon })
+        // A first piece stored backwards is flipped so the line does not start with a jump.
+        assertEquals(listOf(0.000, 0.001, 0.002, 0.003), PathJoin.join(listOf(a.reversed(), listOf(pt(0.002), pt(0.003)))).map { it.lon })
+        // Unordered sections are chained nearest end first.
+        val far = listOf(pt(0.010), pt(0.011))
+        val near = listOf(pt(0.002), pt(0.003))
+        assertEquals(listOf(0.000, 0.001, 0.002, 0.003, 0.010, 0.011), PathJoin.join(listOf(a, far, near), ordered = false).map { it.lon })
+        // Ordered sections keep their order and are only flipped.
+        assertEquals(listOf(0.000, 0.001, 0.010, 0.011, 0.003, 0.002), PathJoin.join(listOf(a, far, near)).map { it.lon })
+    }
+
     @Test
     fun haversineMatchesKnownDistance() {
         // Snowdon summit to Pen-y-Pass car park ≈ 3.66 km straight line.

@@ -30,10 +30,18 @@ android {
         // Personal app: UI strings live in Kotlin for now.
         disable += setOf("SetTextI18n", "HardcodedText")
     }
+
+    testOptions {
+        unitTests.all { it.useJUnitPlatform() }
+    }
 }
 
 // Deliberately no AndroidX/Play Services: the app uses only the Android framework plus :core,
 // so it has no Google Play dependency and keeps a tiny, auditable dependency surface.
 dependencies {
     implementation(project(":core"))
+    // AGP's built-in Kotlin doesn't pick the kotlin-test JUnit variant automatically, so name it.
+    testImplementation(libs.kotlin.test.junit5)
+    testImplementation(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

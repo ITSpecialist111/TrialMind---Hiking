@@ -13,14 +13,17 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import com.trailmind.app.Async
+import com.trailmind.app.TrailMindApp
 import com.trailmind.app.nav.NavigationController
 import java.util.concurrent.CopyOnWriteArraySet
 
 /** A GPS fix with the best available altitude above mean sea level. */
-data class Fix(val location: Location, val altitudeMslM: Double?, val altitudeIsMsl: Boolean) {
+data class Fix(val location: Location, val altitudeMslM: Double?, val altitudeIsMsl: Boolean, val baroAltitudeM: Double? = null) {
     val lat get() = location.latitude
     val lon get() = location.longitude
     val accuracyM: Float get() = if (location.hasAccuracy()) location.accuracy else 50f
+    /** Barometric altitude (anchored to GPS) when available, otherwise GPS altitude. */
+    val altitudeM: Double? get() = baroAltitudeM ?: altitudeMslM
 }
 
 /** Fan-out of location fixes from the foreground listener and the tracking service. */
@@ -53,6 +56,12 @@ class LocationHub(private val nav: NavigationController) {
          * does disk I/O so must run off the main thread.
          */
         fun toFix(ctx: Context, loc: Location): Fix {
+            val gps = gpsFix(ctx, loc)
+            val baro = (ctx.applicationContext as? TrailMindApp)?.baro?.altitudeFor(loc, gps.altitudeMslM)
+            return if (baro == null) gps else gps.copy(baroAltitudeM = baro)
+        }
+
+        private fun gpsFix(ctx: Context, loc: Location): Fix {
             if (!loc.hasAltitude()) return Fix(loc, null, false)
             if (Build.VERSION.SDK_INT >= 34) {
                 try {

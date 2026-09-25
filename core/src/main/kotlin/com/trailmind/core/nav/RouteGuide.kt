@@ -92,6 +92,17 @@ class RouteGuide(points: List<TrackPoint>, waypoints: List<Waypoint> = emptyList
         )
     }
 
+    /** The point [alongM] metres from the start of the route, clamped to its ends. */
+    fun pointAt(alongM: Double): LatLon {
+        val d = alongM.coerceIn(0.0, totalM)
+        val i = cumulative.binarySearch(d).let { if (it >= 0) it else -it - 2 }.coerceIn(0, points.size - 2)
+        val span = cumulative[i + 1] - cumulative[i]
+        val f = if (span > 0) (d - cumulative[i]) / span else 0.0
+        val a = points[i]
+        val b = points[i + 1]
+        return LatLon(a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f)
+    }
+
     private fun remainingAscent(i: Int, fraction: Double): Double {
         val a = points[i].ele
         val b = points[i + 1].ele

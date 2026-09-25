@@ -8,11 +8,14 @@ object Notifications {
     const val CH_TRACKING = "tracking"
     const val CH_ALERTS = "alerts"
     const val CH_DOWNLOADS = "downloads"
+    const val CH_WATCH = "watch"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
     const val ID_DOWNLOAD = 3
     const val ID_DOWNLOAD_DONE = 4
+    const val ID_WEATHER = 5
+    const val ID_WATCH_LINK = 6
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -23,11 +26,15 @@ object Notifications {
             setShowBadge(false)
         })
         m.createNotificationChannel(NotificationChannel(CH_ALERTS, "Navigation alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Off-route warnings while following a route"
+            description = "Off-route and weather warnings"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 400, 200, 400)
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {
+            setShowBadge(false)
+        })
+        m.createNotificationChannel(NotificationChannel(CH_WATCH, "Watch link", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Shown while TrailMind keeps your watch connected in the background"
             setShowBadge(false)
         })
     }

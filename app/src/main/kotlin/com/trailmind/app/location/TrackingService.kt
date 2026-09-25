@@ -27,6 +27,7 @@ import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.nav.TrackFilter
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 
 /**
  * Records a hike as a `location` foreground service, so tracking continues with the screen off
@@ -48,6 +49,9 @@ class TrackingService : Service(), LocationListener {
     private var lastCheckpointMs = 0L
     private var lastNotifyMs = 0L
     private var updatesActive = false
+    private var weatherAlertMs = 0L
+    // TrackingState is updated asynchronously on the main thread, so the service keeps its own copy.
+    @Volatile private var paused = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,6 +69,11 @@ class TrackingService : Service(), LocationListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Must call startForeground promptly after startForegroundService, and nothing is recorded if it's refused.
+        if (!running) {
+            if (!goForeground(buildNotification("Starting GPS…"))) return START_NOT_STICKY
+            running = true
+        }
         when (intent?.action) {
             ACTION_START -> handler.post { startNew(intent.getStringExtra(EXTRA_NAME)) }
             ACTION_RESUME_HIKE -> handler.post { resumeExisting(intent.getLongExtra(EXTRA_HIKE, -1)) }
@@ -78,11 +87,6 @@ class TrackingService : Service(), LocationListener {
                     if (h != null && h.status == HikeStatus.RECORDING) resumeExisting(h.id) else stopSelf()
                 }
             }
-        }
-        // Must call startForeground promptly after startForegroundService.
-        if (!running) {
-            if (!goForeground(buildNotification("Starting GPS…"))) return START_NOT_STICKY
-            running = true
         }
         return START_STICKY
     }
@@ -114,6 +118,7 @@ class TrackingService : Service(), LocationListener {
         hikeId = app.db.createHike(title, now, routeId)
         seq = 0
         segment = 0
+        paused = false
         filter.reset()
         TrackingState.begin(hikeId, title, now, emptyList(), 0)
         startUpdates()
@@ -128,6 +133,7 @@ class TrackingService : Service(), LocationListener {
         segment = (last?.second ?: -1) + 1
         val segments = app.db.hikeSegments(id)
         filter.reset()
+        paused = false
         app.db.setHikeStatus(id, HikeStatus.RECORDING)
         TrackingState.begin(id, h.name, h.startMs, segments, h.durationMs)
         startUpdates()
@@ -136,6 +142,7 @@ class TrackingService : Service(), LocationListener {
     private fun pause() {
         if (hikeId < 0) return
         stopUpdates()
+        paused = true
         app.db.setHikeStatus(hikeId, HikeStatus.PAUSED)
         TrackingState.pause()
         checkpoint(force = true)
@@ -146,6 +153,7 @@ class TrackingService : Service(), LocationListener {
         if (hikeId < 0) return
         segment++
         filter.reset()
+        paused = false
         app.db.setHikeStatus(hikeId, HikeStatus.RECORDING)
         TrackingState.resume()
         startUpdates()
@@ -178,6 +186,7 @@ class TrackingService : Service(), LocationListener {
         try {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2_000L, 0f, this, thread.looper)
             updatesActive = true
+            app.baro.acquire()
         } catch (e: Exception) {
             Log.w(TAG, "requestLocationUpdates failed", e)
         }
@@ -188,13 +197,14 @@ class TrackingService : Service(), LocationListener {
         if (!updatesActive) return
         runCatching { lm.removeUpdates(this) }
         updatesActive = false
+        app.baro.release()
     }
 
     override fun onLocationChanged(location: Location) {
         val fix = LocationHub.toFix(this, location)
         app.location.publish(fix)
-        if (hikeId < 0 || TrackingState.status == TrackingState.Status.PAUSED) return
-        val p = TrackPoint(location.latitude, location.longitude, fix.altitudeMslM, location.time, fix.accuracyM)
+        if (hikeId < 0 || paused) return
+        val p = TrackPoint(location.latitude, location.longitude, fix.altitudeM, location.time, fix.accuracyM)
         if (filter.accept(p)) {
             try {
                 app.db.appendHikePoint(hikeId, seq++, segment, p)
@@ -204,13 +214,14 @@ class TrackingService : Service(), LocationListener {
             TrackingState.add(p)
         }
         checkpoint(force = false)
+        checkWeather()
         val now = System.currentTimeMillis()
         if (now - lastNotifyMs > 5_000) {
             lastNotifyMs = now
             Async.main.post {
                 val imperial = app.prefs.imperial
                 val text = "${Units.distance(TrackingState.distanceM, imperial)} · ${Units.duration(TrackingState.activeMs())} · " +
-                    "↑${Units.elevation(TrackingState.ascentM, imperial)} · ±${fix.accuracyM.toInt()} m"
+                    "↑${Units.elevation(TrackingState.ascentM, imperial)} · ±${Units.distance(fix.accuracyM.toDouble(), imperial)}"
                 Notifications.manager(this).notify(Notifications.ID_TRACKING, buildNotification(text))
             }
         }
@@ -232,10 +243,31 @@ class TrackingService : Service(), LocationListener {
         }
     }
 
+    /** The barometer's storm alarm: warns at most every 3 hours while sea-level pressure falls fast. */
+    private fun checkWeather() {
+        val change = app.baro.change3hHpa() ?: return
+        val now = System.currentTimeMillis()
+        if (change > -app.baro.stormDropHpa || now - weatherAlertMs < 3 * 3_600_000L) return
+        weatherAlertMs = now
+        val text = String.format(Locale.ROOT, "Air pressure has fallen %.1f hPa in 3 hours, so the weather may be turning. " +
+            "Check the forecast and your way off the hill.", -change)
+        val open = PendingIntent.getActivity(this, 11, Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(this, Notifications.CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat_hike)
+            .setContentTitle("Weather warning")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        runCatching { Notifications.manager(this).notify(Notifications.ID_WEATHER, n) }
+        app.watch.weatherAlert(text)
+    }
+
     private fun buildNotification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
-        val paused = TrackingState.status == TrackingState.Status.PAUSED
         val toggle = PendingIntent.getService(this, 2, Intent(this, TrackingService::class.java)
             .setAction(if (paused) ACTION_RESUME else ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 3, Intent(this, TrackingService::class.java).setAction(ACTION_STOP),

@@ -9,11 +9,6 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
-    plugins {
-        // Android Gradle Plugin (Google Maven). If Android Studio reports this exact version as
-        // unavailable, bump it to the latest stable AGP 9.x.
-        id("com.android.application") version "9.0.0"
-    }
 }
 
 dependencyResolutionManagement {
@@ -30,4 +25,6 @@ include(":core")
 
 if (!coreOnly) {
     include(":app")
+    // Wear OS companion (Galaxy Watch4 and later); talks to :app over Bluetooth, no Google Play services.
+    include(":wear")
 }

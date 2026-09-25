@@ -22,8 +22,12 @@ data class TileSource(
     val downloadMaxZoom: Int = maxZoom,
     val note: String = "",
     val packId: Long? = null,
+    /** First zoom of charged Premium data; the provider's terms allow caching those tiles for 24 hours only. */
+    val premiumFromZoom: Int? = null,
 ) {
     val isOnline: Boolean get() = template != null
+
+    fun isPremium(z: Int) = premiumFromZoom != null && z >= premiumFromZoom
 }
 
 object TileSources {
@@ -45,9 +49,10 @@ object TileSources {
         requiresKey = true,
         offlineDownloadAllowed = true,
         downloadMaxZoom = 16,
+        premiumFromZoom = 17,
         note = "Needs your own free OS Data Hub API key. Zoom 7–16 is OS OpenData; zoom 17–20 is " +
-            "Premium and counts against your plan's free allowance. Offline storage is subject to " +
-            "the OS Data Hub terms for your plan. The 1:25k Explorer-style 'Leisure' layer is only " +
+            "Premium, counts against your plan's free allowance and is kept for 24 hours at most. " +
+            "Offline packs only include OpenData zooms. The 1:25k Explorer-style 'Leisure' layer is only " +
             "offered in British National Grid (EPSG:27700), which TrailMind does not render yet.",
     )
 

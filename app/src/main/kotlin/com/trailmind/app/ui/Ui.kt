@@ -1,5 +1,6 @@
 package com.trailmind.app.ui
 
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.content.res.ColorStateList
@@ -57,6 +58,9 @@ fun View.dp(v: Number): Int = context.dp(v)
 
 fun Context.toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 
+/** Non-breaking spaces, so a value such as "2h 25m" or "↑800 m" never wraps in the middle. */
+fun nb(s: String) = s.replace(' ', '\u00A0')
+
 fun rounded(color: Int, radiusPx: Float, strokeColor: Int? = null, strokePx: Int = 0) = GradientDrawable().apply {
     setColor(color)
     cornerRadius = radiusPx
@@ -65,6 +69,41 @@ fun rounded(color: Int, radiusPx: Float, strokeColor: Int? = null, strokePx: Int
 
 fun ripple(content: Drawable?, rippleColor: Int, mask: Drawable? = null) =
     RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask ?: content ?: rounded(Color.WHITE, 0f))
+
+/** Lays children out left to right and wraps onto new lines, so no chip or button is ever pushed off-screen. */
+@SuppressLint("ViewConstructor")
+class FlowLayout(ctx: Context, private val gapPx: Int) : ViewGroup(ctx) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val size = MeasureSpec.getSize(widthMeasureSpec)
+        val maxW = if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE else size - paddingLeft - paddingRight
+        val childW = MeasureSpec.makeMeasureSpec(if (maxW == Int.MAX_VALUE) 0 else maxW, if (maxW == Int.MAX_VALUE) MeasureSpec.UNSPECIFIED else MeasureSpec.AT_MOST)
+        var x = 0; var y = 0; var rowH = 0; var widest = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            c.measure(childW, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gapPx; rowH = 0 }
+            x += c.measuredWidth + gapPx
+            rowH = maxOf(rowH, c.measuredHeight)
+            widest = maxOf(widest, x - gapPx)
+        }
+        setMeasuredDimension(resolveSize(widest + paddingLeft + paddingRight, widthMeasureSpec),
+            resolveSize(y + rowH + paddingTop + paddingBottom, heightMeasureSpec))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val maxW = r - l - paddingLeft - paddingRight
+        var x = 0; var y = 0; var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gapPx; rowH = 0 }
+            c.layout(paddingLeft + x, paddingTop + y, paddingLeft + x + c.measuredWidth, paddingTop + y + c.measuredHeight)
+            x += c.measuredWidth + gapPx
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+    }
+}
 
 /** Small declarative helpers so pages read clearly without XML layouts. */
 class Ui(val ctx: Context) {
@@ -99,6 +138,8 @@ class Ui(val ctx: Context) {
         clipToPadding = false
         addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
+
+    fun flow(spacing: Int = 8, block: FlowLayout.() -> Unit = {}): FlowLayout = FlowLayout(ctx, dp(spacing)).apply(block)
 
     enum class T { DISPLAY, TITLE, HEADLINE, BODY, LABEL, CAPTION, MONO }
 
@@ -178,9 +219,16 @@ class Ui(val ctx: Context) {
         if (onClick != null) { isClickable = true; setOnClickListener { onClick() } }
     }
 
+    /** Label over a value; both shrink to fit a weighted column instead of being clipped. */
     fun stat(label: String, value: String, big: Boolean = false): LinearLayout = column {
-        addView(text(label, T.LABEL))
-        addView(text(value, if (big) T.HEADLINE else T.TITLE))
+        addView(text(label, T.LABEL).apply {
+            maxLines = 1
+            setAutoSizeTextTypeUniformWithConfiguration(8, 12, 1, TypedValue.COMPLEX_UNIT_SP)
+        }, lp())
+        addView(text(value, if (big) T.HEADLINE else T.TITLE).apply {
+            maxLines = 1
+            setAutoSizeTextTypeUniformWithConfiguration(10, if (big) 24 else 17, 1, TypedValue.COMPLEX_UNIT_SP)
+        }, lp())
     }
 
     /** Grid of stat tiles, [cols] per row. */
@@ -268,7 +316,7 @@ class Ui(val ctx: Context) {
                 setOnClickListener { onBack() }
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
         } else addView(View(ctx), LinearLayout.LayoutParams(dp(12), 1))
-        addView(text(title, T.HEADLINE).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
+        addView(text(title, T.HEADLINE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
         actions.forEach { addView(it) }
     }
 

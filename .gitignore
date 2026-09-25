@@ -6,6 +6,7 @@ local.properties
 .idea
 .toolcache
 out-apk
+out-e2e
 captures
 *.keystore
 !debug-sample.keystore

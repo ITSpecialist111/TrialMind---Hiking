@@ -16,9 +16,19 @@ class Prefs(context: Context) {
         get() = sp.getString("os_api_key", "") ?: ""
         set(v) = sp.edit().putString("os_api_key", v.trim()).apply()
 
+    /** The OS key's project can load Premium zooms, as last seen by Save & test or the map. */
+    var osPremium: Boolean
+        get() = sp.getBoolean("os_premium", false)
+        set(v) = sp.edit().putBoolean("os_premium", v).apply()
+
     var baseSourceId: String
         get() = sp.getString("base_source", "osm") ?: "osm"
         set(v) = sp.edit().putString("base_source", v).apply()
+
+    /** Wide layout: the map fills the window, with the navigation rail and side pane hidden. */
+    var mapFullScreen: Boolean
+        get() = sp.getBoolean("map_full_screen", false)
+        set(v) = sp.edit().putBoolean("map_full_screen", v).apply()
 
     var imperial: Boolean
         get() = sp.getBoolean("imperial", false)
@@ -77,4 +87,13 @@ class Prefs(context: Context) {
     var emergencyContact: String
         get() = sp.getString("emergency_contact", "") ?: ""
         set(v) = sp.edit().putString("emergency_contact", v.trim()).apply()
+
+    var watchEnabled: Boolean
+        get() = sp.getBoolean("watch_enabled", false)
+        set(v) = sp.edit().putBoolean("watch_enabled", v).apply()
+
+    /** Bluetooth address of the watch the user picked; connections from any other device are refused. */
+    var watchAddress: String
+        get() = sp.getString("watch_address", "") ?: ""
+        set(v) = sp.edit().putString("watch_address", v).apply()
 }

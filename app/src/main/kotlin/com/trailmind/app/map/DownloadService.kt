@@ -3,6 +3,7 @@ package com.trailmind.app.map
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -85,10 +86,12 @@ class DownloadService : Service() {
                     "This source does not permit offline downloads.")
                 return
             }
-            val tiles = tilesFor(meta) ?: run {
+            val tiles = tilesFor(meta, meta.minZoom, meta.maxZoom) ?: run {
                 db.updatePackProgress(packId, 0, 0, 0, PackStatus.FAILED, "The route for this pack was deleted.")
                 return
             }
+            val premiumFrom = maxOf(meta.maxZoom + 1, source.premiumFromZoom ?: Int.MAX_VALUE)
+            val premiumTiles = if (meta.premiumMaxZoom >= premiumFrom) tilesFor(meta, premiumFrom, meta.premiumMaxZoom).orEmpty() else emptySequence()
             val mb = app.tiles.openPack(meta) ?: run {
                 db.updatePackProgress(packId, 0, 0, 0, PackStatus.FAILED, "Pack file missing.")
                 return
@@ -126,18 +129,37 @@ class DownloadService : Service() {
                 }
                 if (authFailures >= 3) { message = "Access denied by the tile server. Check your API key and plan."; break }
                 if (noNetwork >= 5) { message = "No internet connection (or offline-only mode is on)."; break }
-                if ((done + failed) % 25 == 0L) {
-                    DownloadState.done = done; DownloadState.failed = failed
-                    db.updatePackProgress(packId, done, failed, bytes, PackStatus.DOWNLOADING)
-                    DownloadState.changed()
-                    Notifications.manager(this).notify(Notifications.ID_DOWNLOAD,
-                        progressNotification("Downloading ${meta.name}", done, meta.tileTotal))
-                }
+                if ((done + failed) % 25 == 0L) progress(packId, meta.name, done, failed, bytes, meta.tileTotal)
                 Thread.sleep(POLITE_DELAY_MS)
             }
+            // Premium zooms go to the browse cache, which OS allows to keep them for 24 hours; the pack keeps OpenData only.
+            var premiumFailed = 0L
+            var premiumNote: String? = null
+            if (!cancelled && message == null) for (k in premiumTiles) {
+                if (cancelled) break
+                if (app.tiles.hasFreshPremium(source, k)) { done++; continue }
+                when (val r = app.tiles.fetchNetwork(source, k)) {
+                    is TileProvider.Fetch.Ok -> { app.tiles.storePremium(source, k, r.bytes); done++; noNetwork = 0 }
+                    is TileProvider.Fetch.Http -> {
+                        if (r.code == 401 || r.code == 403) { premiumNote = "Your OS plan doesn't include Premium data, so only the OpenData map was saved."; break }
+                        premiumFailed++
+                        if (r.code == 429) Thread.sleep(5_000)
+                    }
+                    TileProvider.Fetch.NoNetwork -> { noNetwork++; Thread.sleep(2_000) }
+                    else -> premiumFailed++
+                }
+                if (noNetwork >= 5) { message = "No internet connection (or offline-only mode is on)."; break }
+                if ((done + failed + premiumFailed) % 25 == 0L) progress(packId, meta.name, done, failed + premiumFailed, bytes, meta.tileTotal)
+                Thread.sleep(POLITE_DELAY_MS)
+            }
+            if (meta.premiumMaxZoom >= premiumFrom && !cancelled && message == null && premiumNote == null && premiumFailed == 0L) {
+                db.updatePack(packId, ContentValues().apply { put("premium_ms", System.currentTimeMillis()) })
+            }
+            failed += premiumFailed
+            if (message == null) message = premiumNote
             val status = when {
-                message != null && done == 0L -> PackStatus.FAILED
-                cancelled || message != null -> PackStatus.PAUSED
+                message != null && message != premiumNote && done == 0L -> PackStatus.FAILED
+                cancelled || (message != null && message != premiumNote) -> PackStatus.PAUSED
                 failed > 0 -> PackStatus.PARTIAL
                 else -> PackStatus.COMPLETE
             }
@@ -164,14 +186,21 @@ class DownloadService : Service() {
         }
     }
 
-    private fun tilesFor(meta: PackMeta): Sequence<TileKey>? {
+    private fun progress(packId: Long, name: String, done: Long, failed: Long, bytes: Long, total: Long) {
+        DownloadState.done = done; DownloadState.failed = failed
+        TrailMindApp.instance.db.updatePackProgress(packId, done, failed, bytes, PackStatus.DOWNLOADING)
+        DownloadState.changed()
+        Notifications.manager(this).notify(Notifications.ID_DOWNLOAD, progressNotification("Downloading $name", done, total))
+    }
+
+    private fun tilesFor(meta: PackMeta, minZoom: Int, maxZoom: Int): Sequence<TileKey>? {
         val routeId = meta.routeId
         if (routeId != null) {
             val route = TrailMindApp.instance.db.routeData(routeId) ?: return null
-            return TileCoverage.corridor(route.points.map { it.latLon() }, meta.bufferM, meta.minZoom, meta.maxZoom)
+            return TileCoverage.corridor(route.points.map { it.latLon() }, meta.bufferM, minZoom, maxZoom)
         }
         val b = meta.bounds ?: return emptySequence()
-        return TileCoverage.box(b, meta.minZoom, meta.maxZoom)
+        return TileCoverage.box(b, minZoom, maxZoom)
     }
 
     private fun progressNotification(text: String, done: Long, total: Long): Notification {

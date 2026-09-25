@@ -68,9 +68,13 @@ data class PackMeta(
     val attribution: String,
     val createdMs: Long,
     val message: String?,
+    /** Highest Premium zoom pre-loaded with the pack (0 = none). Those tiles live in the browse cache for 24 hours. */
+    val premiumMaxZoom: Int = 0,
+    /** When the Premium tiles were last fully loaded. */
+    val premiumMs: Long = 0,
 )
 
-class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 1) {
+class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -109,11 +113,17 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 1) 
                min_lat REAL, min_lon REAL, max_lat REAL, max_lon REAL, route_id INTEGER, buffer_m REAL NOT NULL DEFAULT 0,
                tile_total INTEGER NOT NULL DEFAULT 0, tile_done INTEGER NOT NULL DEFAULT 0, tile_failed INTEGER NOT NULL DEFAULT 0,
                bytes INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'png',
-               attribution TEXT NOT NULL DEFAULT '', created_ms INTEGER NOT NULL, message TEXT)""",
+               attribution TEXT NOT NULL DEFAULT '', created_ms INTEGER NOT NULL, message TEXT,
+               premium_max_zoom INTEGER NOT NULL DEFAULT 0, premium_ms INTEGER NOT NULL DEFAULT 0)""",
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE packs ADD COLUMN premium_max_zoom INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE packs ADD COLUMN premium_ms INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 
     // ---------------------------------------------------------------- routes
 
@@ -307,10 +317,10 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 1) 
     fun insertPack(
         name: String, kind: PackKind, sourceId: String, fileName: String, minZoom: Int, maxZoom: Int,
         bounds: BoundingBox?, routeId: Long?, bufferM: Double, tileTotal: Long, status: PackStatus,
-        format: String, attribution: String,
+        format: String, attribution: String, premiumMaxZoom: Int = 0,
     ): Long = writableDatabase.insertOrThrow("packs", null, ContentValues().apply {
         put("name", name); put("kind", kind.name); put("source_id", sourceId); put("file_name", fileName)
-        put("min_zoom", minZoom); put("max_zoom", maxZoom)
+        put("min_zoom", minZoom); put("max_zoom", maxZoom); put("premium_max_zoom", premiumMaxZoom)
         bounds?.let { put("min_lat", it.minLat); put("min_lon", it.minLon); put("max_lat", it.maxLat); put("max_lon", it.maxLon) }
         routeId?.let { put("route_id", it) }
         put("buffer_m", bufferM); put("tile_total", tileTotal); put("status", status.name)
@@ -356,6 +366,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 1) 
             status = runCatching { PackStatus.valueOf(c.str("status")) }.getOrDefault(PackStatus.FAILED),
             format = c.str("format"), attribution = c.str("attribution"), createdMs = c.long("created_ms"),
             message = c.optString(c.getColumnIndexOrThrow("message")),
+            premiumMaxZoom = c.int("premium_max_zoom"), premiumMs = c.long("premium_ms"),
         )
     }
 }

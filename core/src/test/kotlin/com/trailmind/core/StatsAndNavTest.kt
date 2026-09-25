@@ -85,6 +85,9 @@ class StatsAndNavTest {
         assertEquals(600.0, next.alongRouteM, 2.0)
         assertFalse(fix.atEnd)
         assertTrue(guide.locate(route.last().latLon()).atEnd)
+        assertEquals(0.0, Geo.distanceM(guide.pointAt(-5.0), route.first().latLon()), 0.01)
+        assertEquals(0.0, Geo.distanceM(guide.pointAt(455.0), Geo.destination(route.first().latLon(), 90.0, 455.0)), 0.5)
+        assertEquals(0.0, Geo.distanceM(guide.pointAt(5_000.0), route.last().latLon()), 0.01)
     }
 
     @Test

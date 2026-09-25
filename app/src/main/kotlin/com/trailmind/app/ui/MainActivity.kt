@@ -1,6 +1,7 @@
 package com.trailmind.app.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -20,6 +21,7 @@ import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
@@ -48,7 +50,7 @@ class MainActivity : Activity() {
         HIKES("Hikes", R.drawable.ic_walk),
         COMPASS("Compass", R.drawable.ic_compass),
         OFFLINE("Offline", R.drawable.ic_download),
-        ASSIST("Assist", R.drawable.ic_sparkle),
+        ASSIST("Beacon", R.drawable.ic_sparkle),
         SAFETY("Safety", R.drawable.ic_sos),
         SETTINGS("Settings", R.drawable.ic_tune),
         MORE("More", R.drawable.ic_menu),
@@ -62,12 +64,18 @@ class MainActivity : Activity() {
 
     var wide = false; private set
     var tab = Tab.MAP; private set
+
+    /** Wide layout only: the map fills the window and the rail and side pane are hidden. */
+    val mapFullScreen get() = wide && app.prefs.mapFullScreen
     private val stack = ArrayList<Page>()
     private val insets = Rect()
     private var contentFrame: FrameLayout? = null
     private var navBar: LinearLayout? = null
+    private var railFrame: View? = null
+    private var navTabs: List<Tab> = emptyList()
     private val navButtons = HashMap<Tab, View>()
     private var lastWidthDp = -1
+    private var lastCompactRail = false
 
     /** Latest compass heading, degrees true; null if no sensor data. */
     var headingDeg: Double? = null; private set
@@ -75,6 +83,7 @@ class MainActivity : Activity() {
     private val headingListeners = LinkedHashSet<() -> Unit>()
 
     private var pendingPermission: (() -> Unit)? = null
+    private var pendingBluetooth: (() -> Unit)? = null
     private var pendingExport: String? = null
     private var backCallback: Any? = null
 
@@ -114,13 +123,17 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        app.baro.acquire()
         fgLocation.start()
         map.onStart()
+        app.watch.setUiVisible(true)
     }
 
     override fun onStop() {
         fgLocation.stop()
         map.onStop()
+        app.watch.setUiVisible(false)
+        app.baro.release()
         super.onStop()
     }
 
@@ -139,13 +152,16 @@ class MainActivity : Activity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (newConfig.screenWidthDp != lastWidthDp) {
+        if (newConfig.screenWidthDp != lastWidthDp || compactRail(newConfig) != lastCompactRail) {
             val wasWide = wide
             val nowWide = newConfig.screenWidthDp >= WIDE_DP
-            if (wasWide != nowWide) buildLayout() else map.onResize()
+            if (wasWide != nowWide || (nowWide && compactRail(newConfig) != lastCompactRail)) buildLayout() else map.onResize()
             showTab(tab, keepStack = true)
         }
     }
+
+    /** Short wide windows (e.g. the cover screen in landscape) can't fit all rail destinations. */
+    private fun compactRail(c: Configuration) = c.screenHeightDp < 600
 
     fun addHeadingListener(l: () -> Unit) = headingListeners.add(l)
     fun removeHeadingListener(l: () -> Unit) = headingListeners.remove(l)
@@ -156,16 +172,19 @@ class MainActivity : Activity() {
 
     private fun buildLayout() {
         lastWidthDp = resources.configuration.screenWidthDp
+        lastCompactRail = compactRail(resources.configuration)
         wide = lastWidthDp >= WIDE_DP
         detach(map.view)
         stack.forEach { detach(it.root) }
         navButtons.clear()
+        railFrame = null
         val p = ui.p
         val content = FrameLayout(this).apply { setBackgroundColor(p.bg) }
         contentFrame = content
         val root: ViewGroup
         if (!wide) {
-            val nav = buildNavBar(listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.MORE), vertical = false)
+            navTabs = listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.MORE)
+            val nav = buildNavBar(navTabs, vertical = false)
             navBar = nav
             root = FrameLayout(this).apply {
                 addView(map.view, FrameLayout.LayoutParams(-1, -1))
@@ -173,13 +192,22 @@ class MainActivity : Activity() {
                 addView(nav, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             }
         } else {
-            val nav = buildNavBar(listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.OFFLINE, Tab.ASSIST, Tab.SAFETY, Tab.SETTINGS), vertical = true)
+            navTabs = if (lastCompactRail) listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.MORE)
+            else listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.OFFLINE, Tab.ASSIST, Tab.SAFETY, Tab.SETTINGS)
+            val nav = buildNavBar(navTabs, vertical = true, logo = !lastCompactRail)
             navBar = nav
+            val rail = ScrollView(this).apply {
+                isFillViewport = true
+                isVerticalScrollBarEnabled = false
+                elevation = dp(8).toFloat()
+                addView(nav)
+            }
+            railFrame = rail
             val paneWidth = (resources.configuration.screenWidthDp * 0.42f).coerceIn(340f, 460f)
             root = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setBackgroundColor(p.bg)
-                addView(nav, LinearLayout.LayoutParams(dp(88), -1))
+                addView(rail, LinearLayout.LayoutParams(dp(88), -1))
                 addView(content, LinearLayout.LayoutParams(dp(paneWidth), -1))
                 addView(FrameLayout(this@MainActivity).apply { addView(map.view, FrameLayout.LayoutParams(-1, -1)) },
                     LinearLayout.LayoutParams(0, -1, 1f))
@@ -199,16 +227,32 @@ class MainActivity : Activity() {
         }
         setContentView(root)
         map.onLayoutChanged(wide)
+        applyMapFullScreen()
     }
 
-    private fun buildNavBar(tabs: List<Tab>, vertical: Boolean): LinearLayout {
+    fun setMapFullScreen(on: Boolean) {
+        if (app.prefs.mapFullScreen == on) return
+        app.prefs.mapFullScreen = on
+        applyMapFullScreen()
+    }
+
+    private fun applyMapFullScreen() {
+        val full = mapFullScreen
+        railFrame?.visibility = if (full) View.GONE else View.VISIBLE
+        if (wide) contentFrame?.visibility = if (full) View.GONE else View.VISIBLE
+        map.onFullScreenChanged(full)
+        applyInsets()
+        updateBackCallback()
+    }
+
+    private fun buildNavBar(tabs: List<Tab>, vertical: Boolean, logo: Boolean = true): LinearLayout {
         val p = ui.p
         return LinearLayout(this).apply {
             orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
             gravity = if (vertical) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
             setBackgroundColor(p.surface)
             elevation = dp(8).toFloat()
-            if (vertical) addView(ImageView(this@MainActivity).apply {
+            if (vertical && logo) addView(ImageView(this@MainActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 contentDescription = "TrailMind"
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(8); bottomMargin = dp(12) })
@@ -252,10 +296,7 @@ class MainActivity : Activity() {
 
     private fun updateNavSelection() {
         val p = ui.p
-        val selected = when {
-            !wide && tab in listOf(Tab.OFFLINE, Tab.ASSIST, Tab.SAFETY, Tab.SETTINGS) -> Tab.MORE
-            else -> tab
-        }
+        val selected = if (tab in navTabs) tab else Tab.MORE
         navButtons.forEach { (t, v) ->
             val sel = t == selected
             val pill = v.findViewWithTag<FrameLayout>("pill")
@@ -273,8 +314,12 @@ class MainActivity : Activity() {
             nav.post { map.setInsets(insets.left, insets.top, insets.right, nav.height) ; stack.lastOrNull()?.setBottomInset(nav.height) }
         } else {
             nav.setPadding(insets.left, insets.top + dp(8), 0, insets.bottom)
+            railFrame?.let { r ->
+                val lp = r.layoutParams as? LinearLayout.LayoutParams
+                if (lp != null && lp.width != dp(88) + insets.left) { lp.width = dp(88) + insets.left; r.layoutParams = lp }
+            }
             contentFrame?.setPadding(0, insets.top, 0, 0)
-            map.setInsets(0, insets.top, insets.right, insets.bottom)
+            map.setInsets(if (mapFullScreen) insets.left else 0, insets.top, insets.right, insets.bottom)
             stack.lastOrNull()?.setBottomInset(insets.bottom)
         }
     }
@@ -295,6 +340,7 @@ class MainActivity : Activity() {
 
     /** Switches tab. With [keepStack] the current page stack is re-attached (used after fold/unfold). */
     fun showTab(t: Tab, keepStack: Boolean = false) {
+        if (!keepStack && t != tab) setMapFullScreen(false)
         if (!keepStack) {
             val onboarding = (stack.firstOrNull() as? OnboardingPage)?.takeIf { !app.prefs.onboardingAccepted }
             stack.lastOrNull()?.onHide()
@@ -312,6 +358,7 @@ class MainActivity : Activity() {
     }
 
     fun push(page: Page) {
+        setMapFullScreen(false)
         stack.lastOrNull()?.onHide()
         stack.add(page)
         attachTop()
@@ -336,9 +383,9 @@ class MainActivity : Activity() {
             detach(top.root)
             frame.addView(top.root, FrameLayout.LayoutParams(-1, -1))
             top.ensureRendered()
-            frame.visibility = View.VISIBLE
+            frame.visibility = if (mapFullScreen) View.GONE else View.VISIBLE
         } else {
-            frame.visibility = if (wide) View.VISIBLE else View.GONE
+            frame.visibility = if (wide && !mapFullScreen) View.VISIBLE else View.GONE
         }
         updateNavSelection()
         applyInsets()
@@ -353,10 +400,11 @@ class MainActivity : Activity() {
     /** True if [page] is not the root of the current stack (so it gets a back arrow). */
     fun canGoBackWithin(page: Page): Boolean = stack.indexOf(page) > 0
 
-    fun canGoBack(): Boolean = (stack.size > 1 && stack.last() !is OnboardingPage) || (!wide && tab != Tab.MAP)
+    fun canGoBack(): Boolean = mapFullScreen || (stack.size > 1 && stack.last() !is OnboardingPage) || (!wide && tab != Tab.MAP)
 
     fun goBack() {
         when {
+            mapFullScreen -> setMapFullScreen(false)
             stack.size > 1 -> pop()
             !wide && tab != Tab.MAP -> showTab(Tab.MAP)
         }
@@ -376,6 +424,8 @@ class MainActivity : Activity() {
         }
     }
 
+    // Only reached below API 33; newer releases use the OnBackInvokedCallback from updateBackCallback().
+    @SuppressLint("GestureBackNavigation")
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (canGoBack()) goBack() else @Suppress("DEPRECATION") super.onBackPressed()
@@ -403,8 +453,23 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Runs [then] once "Nearby devices" (Bluetooth connect) is granted; not needed before Android 12. */
+    fun withBluetoothPermission(then: () -> Unit) {
+        if (app.watch.hasPermission()) { then(); return }
+        pendingBluetooth = then
+        requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), RC_BLUETOOTH)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RC_BLUETOOTH) {
+            val then = pendingBluetooth
+            pendingBluetooth = null
+            if (app.watch.hasPermission()) then?.invoke() else toast("TrailMind needs the Nearby devices permission to reach your watch.")
+            app.watch.refresh()
+            stack.lastOrNull()?.refresh()
+            return
+        }
         if (requestCode != RC_PERMS) return
         fgLocation.stop(); fgLocation.start()
         val then = pendingPermission
@@ -606,6 +671,7 @@ class MainActivity : Activity() {
         const val EDGE_GALLERY = "com.google.aiedge.gallery"
         private const val RC_PERMS = 10
         private const val RC_NOTIF = 11
+        private const val RC_BLUETOOTH = 12
         private const val RC_GPX = 20
         private const val RC_MBTILES = 21
         private const val RC_EXPORT = 22

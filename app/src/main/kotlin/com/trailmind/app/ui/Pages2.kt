@@ -6,6 +6,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.trailmind.app.R
 import com.trailmind.app.location.Fix
+import com.trailmind.app.nav.NavigationController
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
@@ -92,8 +93,12 @@ class CompassPage(host: MainActivity) : Page(host) {
             val here = LatLon(f.lat, f.lon)
             gridText?.text = OsGrid.fromWgs84(here)?.format(10) ?: Units.latLon(f.lat, f.lon)
             posText?.text = buildString {
-                append(Units.latLon(f.lat, f.lon)).append(" · ±${f.accuracyM.toInt()} m")
-                f.altitudeMslM?.let { append(" · alt ${Units.elevation(it, imperial)}") ; if (!f.altitudeIsMsl) append(" (GPS ellipsoid, ~50 m high)") }
+                append(Units.latLon(f.lat, f.lon)).append(" · ±").append(Units.distance(f.accuracyM.toDouble(), imperial))
+                f.altitudeM?.let {
+                    append(" · alt ${Units.elevation(it, imperial)}")
+                    if (f.baroAltitudeM != null) append(" (barometric)")
+                    if (!f.altitudeIsMsl) append(" (GPS ellipsoid, ~50 m high)")
+                }
                 append(" · fix ${timeOf(f.location.time)}")
             }
             val sun = Sun.today(here)
@@ -139,21 +144,35 @@ class CompassPage(host: MainActivity) : Page(host) {
 class MorePage(host: MainActivity) : Page(host) {
     override fun render(): View = scaffold("More") {
         addView(ui.listItem("Offline maps", "Download OS map areas along routes, or import MBTiles", R.drawable.ic_download) { host.push(OfflinePage(host)) })
-        addView(ui.listItem("Hike assistant", "Offline briefing, and a prompt for Gemma in AI Edge Gallery", R.drawable.ic_sparkle) { host.push(AssistantPage(host)) })
+        addView(ui.listItem("Beacon", "Offline hike assistant: a rule-based briefing, and a prompt for Gemma", R.drawable.ic_sparkle) { host.push(AssistantPage(host)) })
         addView(ui.listItem("Safety & location", "Grid reference, share location, emergency numbers", R.drawable.ic_sos) { host.push(SafetyPage(host)) })
         addView(ui.listItem("Settings", "OS API key, units, pace, alerts, map sources", R.drawable.ic_tune) { host.push(SettingsPage(host)) })
-        addView(ui.text("Unfold your phone for a side-by-side map and panel layout.", Ui.T.CAPTION))
+        if (!host.wide) addView(ui.text("Unfold your phone for a side-by-side map and panel layout.", Ui.T.CAPTION))
     }
 }
 
 // ====================================================================== dashboard (wide layout, map tab)
 
 class DashboardPage(host: MainActivity) : Page(host) {
-    private val onNav: () -> Unit = { refresh() }
+    private var shown: String? = null
+    private var profile: ElevationProfileView? = null
+    // Every GPS fix notifies; only rebuild when something on this page would actually change.
+    private val onNav: () -> Unit = {
+        profile?.cursorM = app.nav.fix?.alongM
+        if (signature() != shown) refresh()
+    }
     override fun onShow() { app.nav.addListener(onNav) }
     override fun onHide() { app.nav.removeListener(onNav) }
 
+    private fun signature(): String {
+        val f = app.location.latest
+        return listOf(app.nav.active?.data?.meta?.id, app.prefs.imperial, f?.accuracyM?.toInt(), f?.altitudeM?.toInt(),
+            f?.let { OsGrid.fromWgs84(LatLon(it.lat, it.lon))?.format(8) }).joinToString("|")
+    }
+
     override fun render(): View = scaffold("TrailMind", back = false) {
+        shown = signature()
+        profile = null
         val imperial = app.prefs.imperial
         val route = app.nav.active
         val f = app.location.latest
@@ -163,7 +182,7 @@ class DashboardPage(host: MainActivity) : Page(host) {
                 val here = LatLon(f.lat, f.lon)
                 addView(ui.text(OsGrid.fromWgs84(here)?.format(8) ?: Units.latLon(f.lat, f.lon), Ui.T.TITLE))
                 val sun = Sun.today(here)
-                addView(ui.text("±${f.accuracyM.toInt()} m" + (f.altitudeMslM?.let { " · ${Units.elevation(it, imperial)}" } ?: "") +
+                addView(ui.text("±" + Units.distance(f.accuracyM.toDouble(), imperial) + (f.altitudeM?.let { " · ${Units.elevation(it, imperial)}" } ?: "") +
                     " · sunset ${timeOf(sun.sunsetMs)}", Ui.T.CAPTION))
             } else addView(ui.text("Waiting for GPS…", Ui.T.CAPTION))
         })
@@ -176,8 +195,12 @@ class DashboardPage(host: MainActivity) : Page(host) {
                     "Ascent" to "↑" + Units.elevation(route.estimate.ascentM, imperial),
                     "Plan" to Units.minutes(route.estimate.planningMinutes),
                 )))
-                addView(ElevationProfileView(host, imperial).also { it.setPoints(route.data.points); it.cursorM = app.nav.fix?.alongM })
-                addView(ui.button("Route details", R.drawable.ic_route, Ui.B.TONAL) { host.push(RouteDetailPage(host, route.data.meta.id)) })
+                addView(ElevationProfileView(host, imperial).also { it.setPoints(route.data.points); it.cursorM = app.nav.fix?.alongM; profile = it })
+                if (route.data.meta.id == NavigationController.TRACBACK_ID) {
+                    addView(ui.button("Stop retracing", R.drawable.ic_close, Ui.B.TONAL) { app.nav.stopFollowing() })
+                } else {
+                    addView(ui.button("Route details", R.drawable.ic_route, Ui.B.TONAL) { host.push(RouteDetailPage(host, route.data.meta.id)) })
+                }
             })
         } else {
             addView(ui.card(spacing = 10) {

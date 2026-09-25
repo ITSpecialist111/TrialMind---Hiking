@@ -1,8 +1,10 @@
 package com.trailmind.app.ui
 
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import com.trailmind.app.TrailMindApp
 
 /** A screen shown in the content area (full-screen on the cover display, side pane when unfolded). */
@@ -19,8 +21,16 @@ abstract class Page(val host: MainActivity) {
 
     open fun refresh() {
         rendered = true
+        val scrollY = firstScroll(root)?.scrollY ?: 0
         root.removeAllViews()
         root.addView(render(), FrameLayout.LayoutParams(-1, -1))
+        if (scrollY > 0) firstScroll(root)?.let { s -> s.post { s.scrollTo(0, scrollY) } }
+    }
+
+    private fun firstScroll(v: View): ScrollView? = when (v) {
+        is ScrollView -> v
+        is ViewGroup -> (0 until v.childCount).firstNotNullOfOrNull { firstScroll(v.getChildAt(it)) }
+        else -> null
     }
 
     fun setBottomInset(px: Int) = root.setPadding(0, 0, 0, px)

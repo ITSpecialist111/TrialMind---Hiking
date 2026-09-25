@@ -3,11 +3,13 @@ package com.trailmind.core.geo
 import kotlin.math.PI
 import kotlin.math.atan
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sinh
+import kotlin.math.tan
 
 data class TileKey(val z: Int, val x: Int, val y: Int) {
     /** MBTiles stores rows in TMS order (origin bottom-left). */
@@ -65,5 +67,16 @@ object WebMercator {
 
     /** Ground resolution in metres per pixel at [lat]. */
     fun metresPerPixel(lat: Double, zoom: Double): Double =
-        cos(Math.toRadians(lat)) * 2 * PI * 6_378_137.0 / mapSize(zoom)
+        cos(Math.toRadians(lat)) * 2 * PI * EARTH_RADIUS / mapSize(zoom)
+
+    /** EPSG:3857 projected metres (x east, y north) for [p]. */
+    fun toMetres(p: LatLon): Pair<Double, Double> {
+        val lat = p.lat.coerceIn(-MAX_LAT, MAX_LAT)
+        return EARTH_RADIUS * Math.toRadians(p.lon) to EARTH_RADIUS * ln(tan(PI / 4 + Math.toRadians(lat) / 2))
+    }
+
+    fun fromMetres(x: Double, y: Double): LatLon =
+        LatLon(Math.toDegrees(2 * atan(exp(y / EARTH_RADIUS)) - PI / 2), Math.toDegrees(x / EARTH_RADIUS))
+
+    private const val EARTH_RADIUS = 6_378_137.0
 }

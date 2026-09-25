@@ -155,6 +155,8 @@ class TileMapView(context: Context) : View(context) {
     private val dst = RectF()
     private val src = Rect()
     private val path = Path()
+    private val labelBoxes = ArrayList<RectF>()
+    private val labelTry = RectF()
 
     // --- camera
 
@@ -318,6 +320,7 @@ class TileMapView(context: Context) : View(context) {
             val bmp = provider.cached(src0, key)
             if (bmp != null) {
                 canvas.drawBitmap(bmp, null, dst, tilePaint)
+                if (provider.isApproximate(src0, key)) provider.request(src0, key)
             } else {
                 provider.request(src0, key)
                 if (!drawFallback(canvas, src0, key)) {
@@ -385,6 +388,7 @@ class TileMapView(context: Context) : View(context) {
     private fun toScreenY(lat: Double, h: Float) = (WebMercator.latToY(lat, zoom) - WebMercator.latToY(centerLat, zoom) + h / 2).toFloat()
 
     private fun drawWaypoints(canvas: Canvas, w: Float, h: Float) {
+        var placed = 0
         for (m in waypoints) {
             val x = toScreenX(m.position.lon, w)
             val y = toScreenY(m.position.lat, h)
@@ -393,8 +397,22 @@ class TileMapView(context: Context) : View(context) {
             canvas.drawCircle(x, y, 5 * density, wpFill)
             if (zoom >= 12 && m.label.isNotBlank()) {
                 val label = if (m.label.length > 24) m.label.take(23) + "…" else m.label
-                canvas.drawText(label, x + 9 * density, y + 4 * density, labelHalo)
-                canvas.drawText(label, x + 9 * density, y + 4 * density, labelPaint)
+                val tw = labelPaint.measureText(label)
+                val top = y - 8 * density
+                val bottom = y + 7 * density
+                // Right of the marker first, then left; a label that fits neither side is left out rather than overlapping.
+                for (side in 0..1) {
+                    val left = if (side == 0) x + 9 * density else x - 9 * density - tw
+                    labelTry.set(left - 2 * density, top, left + tw + 2 * density, bottom)
+                    var clash = false
+                    for (i in 0 until placed) if (RectF.intersects(labelBoxes[i], labelTry)) { clash = true; break }
+                    if (clash) continue
+                    if (placed == labelBoxes.size) labelBoxes.add(RectF())
+                    labelBoxes[placed++].set(labelTry)
+                    canvas.drawText(label, left, y + 4 * density, labelHalo)
+                    canvas.drawText(label, left, y + 4 * density, labelPaint)
+                    break
+                }
             }
         }
     }

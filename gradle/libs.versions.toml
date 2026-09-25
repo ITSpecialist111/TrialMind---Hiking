@@ -1,9 +1,16 @@
 [versions]
 kotlin = "2.4.0"
 junit-jupiter = "6.0.1"
+# 1.19+ needs compileSdk 37 and AGP 9.1.
+androidx-core = "1.18.0"
+wear-ongoing = "1.1.0"
 
 [libraries]
+androidx-core = { module = "androidx.core:core", version.ref = "androidx-core" }
+wear-ongoing = { module = "androidx.wear:wear-ongoing", version.ref = "wear-ongoing" }
 junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
