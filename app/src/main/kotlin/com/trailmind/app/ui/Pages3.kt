@@ -310,6 +310,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
     private var data: RouteData? = null
     private var startMs: Long = nextQuarterHour()
     private var forecast: PointForecast? = null
+    private var facilities: com.trailmind.app.data.SavedFacilities? = null
     private var fetching = false
 
     override fun onShow() {
@@ -322,9 +323,10 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
 
     private fun load() {
         val id = routeId ?: run { refresh(); return }
-        Async.run({ app.db.routeData(id) to OpenMeteo.saved(host, id) }) { r ->
+        Async.run({ Triple(app.db.routeData(id), OpenMeteo.saved(host, id), com.trailmind.app.data.OverpassFacilities.saved(host, id)) }) { r ->
             data = r.getOrNull()?.first
             forecast = r.getOrNull()?.second
+            facilities = r.getOrNull()?.third
             refresh()
         }
     }
@@ -344,6 +346,8 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
             imperial = app.prefs.imperial,
             highPoint = HikeEstimator.highPoint(d.points, app.prefs.pace),
             forecast = forecast,
+            facilities = facilities?.items.orEmpty(),
+            facilitiesPartial = facilities?.partial == true,
         )
     }
 
@@ -408,6 +412,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
                 val warn = line.startsWith("⚠") || line.contains("after sunset", true) || line.contains("dark", true)
                 addView(ui.text("•  $line", Ui.T.BODY, if (warn) p.danger else p.onSurface))
             }
+            if (inp.facilities.isNotEmpty()) addView(ui.text(com.trailmind.app.data.OverpassFacilities.ATTRIBUTION, Ui.T.CAPTION))
         })
         val prompt = Briefing.gemmaPrompt(inp)
         addView(ui.card(spacing = 10) {

@@ -51,6 +51,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("show_offline_areas", true)
         set(v) = sp.edit().putBoolean("show_offline_areas", v).apply()
 
+    var showFacilities: Boolean
+        get() = sp.getBoolean("show_facilities", true)
+        set(v) = sp.edit().putBoolean("show_facilities", v).apply()
+
     var flatSpeedKmh: Double
         get() = sp.getFloat("flat_speed", 4.5f).toDouble()
         set(v) = sp.edit().putFloat("flat_speed", v.toFloat()).apply()

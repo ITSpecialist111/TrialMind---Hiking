@@ -17,6 +17,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import com.trailmind.app.TrailMindApp
 import com.trailmind.core.format.Units
+import com.trailmind.core.geo.Facility
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
@@ -112,6 +113,8 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; invalidate() }
     var waypoints: List<MapMarker> = emptyList()
         set(v) { field = v; invalidate() }
+    var facilities: List<Facility> = emptyList()
+        set(v) { field = v; invalidate() }
     var target: LatLon? = null
         set(v) { field = v; invalidate() }
     var searchPin: MapMarker? = null
@@ -163,6 +166,11 @@ class TileMapView(context: Context) : View(context) {
     private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(110, 25, 118, 210) }
     private val wpFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(142, 36, 170) }
+    private val facilityFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 96, 85) }
+    private val facilityText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textSize = 9 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
+    }
+    private val facilityBoxes = ArrayList<RectF>()
     private val markRing = strokePaint(Color.rgb(142, 36, 170), 1.5f)
     private val markText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(142, 36, 170); textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
@@ -365,6 +373,7 @@ class TileMapView(context: Context) : View(context) {
             canvas.drawCircle(x, y, 4 * density, controlPaint)
         }
         drawDistanceMarks(canvas, w, h)
+        drawFacilities(canvas, w, h)
         drawWaypoints(canvas, w, h)
         drawTarget(canvas, w, h)
         drawSearchPin(canvas, w, h)
@@ -584,6 +593,42 @@ class TileMapView(context: Context) : View(context) {
     private fun toScreenX(lon: Double, w: Float) = (WebMercator.lonToX(lon, zoom) - WebMercator.lonToX(centerLon, zoom) + w / 2).toFloat()
     private fun toScreenY(lat: Double, h: Float) = (WebMercator.latToY(lat, zoom) - WebMercator.latToY(centerLat, zoom) + h / 2).toFloat()
 
+    private fun drawFacilities(canvas: Canvas, w: Float, h: Float) {
+        if (zoom < 13) return
+        var occupied = 0
+        val radius = 10 * density
+        for (item in facilities) {
+            val x = toScreenX(item.position.lon, w)
+            val y = toScreenY(item.position.lat, h)
+            if (x < radius || y < radius || x > w - radius || y > h - radius) continue
+            val left = x - 14 * density
+            val top = y - 14 * density
+            val right = x + 14 * density
+            val bottom = y + 14 * density
+            if ((0 until occupied).any { facilityBoxes[it].intersects(left, top, right, bottom) }) continue
+            val box = if (occupied < facilityBoxes.size) facilityBoxes[occupied] else RectF().also { facilityBoxes.add(it) }
+            box.set(left, top, right, bottom)
+            occupied++
+            canvas.drawCircle(x, y, radius + 2 * density, white)
+            canvas.drawCircle(x, y, radius, facilityFill)
+            canvas.drawText(item.category.glyph, x, y + facilityText.textSize * 0.35f, facilityText)
+            if (zoom >= 16 && item.name.isNotBlank()) {
+                val length = minOf(24, item.name.length)
+                val labelLeft = x + 13 * density
+                val labelTop = y - 9 * density
+                val labelRight = labelLeft + labelPaint.measureText(item.name, 0, length)
+                val labelBottom = y + 7 * density
+                if (labelRight < w && (0 until occupied).none { facilityBoxes[it].intersects(labelLeft, labelTop, labelRight, labelBottom) }) {
+                    val labelBox = if (occupied < facilityBoxes.size) facilityBoxes[occupied] else RectF().also { facilityBoxes.add(it) }
+                    labelBox.set(labelLeft, labelTop, labelRight, labelBottom)
+                    occupied++
+                    canvas.drawText(item.name, 0, length, labelLeft, y + 4 * density, labelHalo)
+                    canvas.drawText(item.name, 0, length, labelLeft, y + 4 * density, labelPaint)
+                }
+            }
+        }
+    }
+
     private fun drawDistanceMarks(canvas: Canvas, w: Float, h: Float) {
         if (distanceMarks.isEmpty()) return
         val every = DistanceMarks.every(distanceStepM / WebMercator.metresPerPixel(centerLat, zoom), 56.0 * density)
@@ -697,7 +742,7 @@ class TileMapView(context: Context) : View(context) {
 
     private fun drawScaleAndAttribution(canvas: Canvas, w: Float, fullH: Float) {
         val h = fullH - bottomChromePx
-        val attr = source.attribution
+        val attr = source.attribution + if (facilities.isNotEmpty() && zoom >= 13) " · Facilities: © OpenStreetMap contributors" else ""
         val pad = 6 * density
         attrPaint.textSize = 10.5f * density
         var tw = attrPaint.measureText(attr)

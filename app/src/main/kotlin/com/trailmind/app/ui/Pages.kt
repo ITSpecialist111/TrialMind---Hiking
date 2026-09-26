@@ -11,11 +11,14 @@ import com.trailmind.app.R
 import com.trailmind.app.data.HikeMeta
 import com.trailmind.app.data.HikeStatus
 import com.trailmind.app.data.OpenMeteo
+import com.trailmind.app.data.OverpassFacilities
 import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
+import com.trailmind.app.data.SavedFacilities
 import com.trailmind.app.data.WaymarkedTrails
 import com.trailmind.app.location.TrackingState
 import com.trailmind.core.format.Units
+import com.trailmind.core.geo.FacilityCategory
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
@@ -215,8 +218,18 @@ class RouteFinderPage(host: MainActivity) : Page(host) {
 
 class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host) {
     private var data: RouteData? = null
+    private var facilities: SavedFacilities? = null
+    private var facilityFilter: FacilityCategory? = null
+    private var facilityCacheUnreadable = false
+    private var showAllFacilities = false
     private var loaded = false
+    private var loading = false
     private var profile: ElevationProfileView? = null
+    private val facilityListener: (Result<SavedFacilities>) -> Unit = { result ->
+        result.onSuccess { facilities = it; facilityCacheUnreadable = false; showAllFacilities = false; host.map.updateFacilities() }
+            .onFailure { host.toast("Could not find facilities: ${it.message ?: "connection failed"}") }
+        refresh()
+    }
     private val navListener: () -> Unit = {
         val following = app.nav.active?.data?.meta?.id == routeId
         if (following != wasFollowing) refresh() else profile?.cursorM = if (following) app.nav.fix?.alongM else null
@@ -225,10 +238,25 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
 
     override fun onShow() {
         app.nav.addListener(navListener)
-        if (!loaded) Async.run({ app.db.routeData(routeId) }) { r -> data = r.getOrNull(); loaded = true; refresh() }
+        OverpassFacilities.addListener(routeId, facilityListener)
+        if (!loading) {
+            loading = true
+            Async.run({ Triple(app.db.routeData(routeId), OverpassFacilities.saved(host.applicationContext, routeId), OverpassFacilities.hasSaved(host.applicationContext, routeId)) }) { r ->
+            if (!loaded) data = r.getOrNull()?.first
+            facilities = r.getOrNull()?.second
+            facilityCacheUnreadable = r.getOrNull()?.third == true && facilities == null
+            loaded = true
+            loading = false
+            refresh()
+            }
+        }
+        if (loaded) refresh()
     }
 
-    override fun onHide() { app.nav.removeListener(navListener) }
+    override fun onHide() {
+        app.nav.removeListener(navListener)
+        OverpassFacilities.removeListener(routeId, facilityListener)
+    }
 
     override fun render(): View {
         val d = data
@@ -271,6 +299,59 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Offline map", R.drawable.ic_download, Ui.B.TONAL) { host.push(OfflinePage(host, routeId)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.TONAL) { host.push(AssistantPage(host, routeId)) }, ui.lp(0, weight = 1f))
             })
+            addView(ui.card(spacing = 8) {
+                addView(ui.text("Facilities along the way", Ui.T.TITLE))
+                val saved = facilities
+                if (facilityCacheUnreadable) addView(ui.text("Saved facilities couldn't be read. Update to fetch them again.", Ui.T.CAPTION))
+                else if (saved == null) addView(ui.text("Find parking, toilets, water, food, transport and places to stay near this route. Save the results for offline use.", Ui.T.CAPTION))
+                else {
+                    addView(ui.text("Updated ${fmtDate(saved.fetchedMs)}", Ui.T.CAPTION))
+                    if (saved.partial) addView(ui.text("Long route or response limit: showing a limited selection of nearby facilities.", Ui.T.CAPTION))
+                    if (saved.items.isEmpty()) addView(ui.text(if (saved.partial) "No facilities returned in the limited results." else "No mapped facilities found near this route.", Ui.T.CAPTION))
+                    else {
+                        addView(ui.flow {
+                            saved.items.groupingBy { it.category }.eachCount().forEach { (category, count) ->
+                                addView(ui.chip("${category.label} $count", facilityFilter == category) {
+                                    facilityFilter = if (facilityFilter == category) null else category
+                                    refresh()
+                                })
+                            }
+                        })
+                        val visible = saved.items.filter { facilityFilter == null || it.category == facilityFilter }
+                        (if (showAllFacilities) visible else visible.take(60)).forEach { item ->
+                            val title = item.name.ifBlank { item.category.label }
+                            val detail = "${item.category.label} · at ${Units.distance(item.alongM, imperial)}, ${Units.distance(item.offM, imperial)} off route" +
+                                item.openingHours.takeIf { it.isNotBlank() }?.let { " · Hours: $it" }.orEmpty() +
+                                item.ele.toDoubleOrNull()?.let { " · ${Units.elevation(it, imperial)} high" }.orEmpty()
+                            addView(ui.listItem(title, detail) {
+                                if (app.nav.active?.data?.meta?.id == routeId) host.map.centerOn(item.position, 16.0)
+                                else app.nav.follow(routeId) { if (it != null) host.map.centerOn(item.position, 16.0) }
+                            })
+                        }
+                        if (!showAllFacilities && visible.size > 60) addView(ui.button("Show all ${visible.size}", R.drawable.ic_search, Ui.B.TONAL) {
+                            showAllFacilities = true
+                            refresh()
+                        })
+                    }
+                    addView(ui.switch("Show facilities on the map", app.prefs.showFacilities) {
+                        app.prefs.showFacilities = it
+                        host.map.updateFacilities()
+                    })
+                }
+                val fetching = OverpassFacilities.isFetching(routeId)
+                val online = !app.prefs.offlineOnly && OverpassFacilities.online(host)
+                if (fetching) {
+                    addView(ui.text("Finding facilities… Long routes can take about two minutes. You can leave this page and return.", Ui.T.CAPTION))
+                    addView(ui.button("Finding facilities", R.drawable.ic_search, Ui.B.TONAL) {}.apply { isEnabled = false })
+                } else if (!online) {
+                    addView(ui.text("Connect to the internet to find or update facilities. Saved results are still available.", Ui.T.CAPTION))
+                    addView(ui.button(if (saved == null && !facilityCacheUnreadable) "Find facilities" else "Update", R.drawable.ic_search, Ui.B.TONAL) {}.apply { isEnabled = false })
+                } else addView(ui.button(if (saved == null && !facilityCacheUnreadable) "Find facilities" else "Update", R.drawable.ic_search, Ui.B.TONAL) {
+                    OverpassFacilities.start(host, routeId, d.points.map { it.latLon() })
+                    refresh()
+                })
+                addView(ui.text(OverpassFacilities.ATTRIBUTION, Ui.T.CAPTION))
+            })
             val start = d.points.first().latLon()
             addView(ui.card(spacing = 4) {
                 addView(ui.text("Start", Ui.T.LABEL))
@@ -299,7 +380,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Delete", R.drawable.ic_delete, Ui.B.TEXT) {
                     ui.confirm("Delete route?", "\"${d.meta.name}\" will be removed. Recorded hikes are kept.", "Delete") {
                         if (following) app.nav.stopFollowing()
-                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId) }) { host.goBack() }
+                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId); OverpassFacilities.delete(host, routeId) }) { host.goBack() }
                     }
                 }, ui.lp(0, weight = 1f))
             })

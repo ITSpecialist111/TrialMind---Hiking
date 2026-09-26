@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.HikeStatus
+import com.trailmind.app.data.OverpassFacilities
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.TrackingState
@@ -88,6 +89,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var shownTrack: MercatorLine? = null
     private var premiumNoticeShown = false
     private var offlineAreasKey: Any? = null
+    private var facilitiesRouteId = -1L
+    private var facilitiesJob = 0
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
     private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
 
@@ -460,6 +463,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val route = app.nav.active
         mapView.route = route?.line
         val routeId = route?.data?.meta?.id ?: -1L
+        if (routeId != facilitiesRouteId) {
+            facilitiesRouteId = routeId
+            updateFacilities()
+        }
         if (routeId != waypointsRouteId) {
             waypointsRouteId = routeId
             mapView.waypoints = route?.data?.waypoints?.map { MapMarker(it.latLon(), it.name) } ?: emptyList()
@@ -508,6 +515,18 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         })
         status?.let { navCard.addView(if (offRoute) ui.text(it, Ui.T.TITLE, p.danger) else ui.text(it, Ui.T.CAPTION)) }
         next?.let { navCard.addView(ui.text(it, Ui.T.CAPTION)) }
+    }
+
+    fun updateFacilities() {
+        val routeId = facilitiesRouteId
+        val job = ++facilitiesJob
+        mapView.facilities = emptyList()
+        if (routeId < 0 || !app.prefs.showFacilities) return
+        Async.run({ OverpassFacilities.saved(host, routeId)?.items.orEmpty() }) { result ->
+            if (job == facilitiesJob && routeId == facilitiesRouteId && app.prefs.showFacilities) {
+                mapView.facilities = result.getOrDefault(emptyList())
+            }
+        }
     }
 
     private fun updateTarget() {

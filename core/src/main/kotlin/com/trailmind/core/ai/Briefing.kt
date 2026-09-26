@@ -2,6 +2,8 @@ package com.trailmind.core.ai
 
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.LatLon
+import com.trailmind.core.geo.Facility
+import com.trailmind.core.geo.FacilityCategory
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.SunTimes
 import com.trailmind.core.stats.HighPoint
@@ -26,6 +28,8 @@ data class BriefingInput(
     val highPoint: HighPoint? = null,
     /** Forecast for [highPoint], fetched earlier and kept offline. */
     val forecast: PointForecast? = null,
+    val facilities: List<Facility> = emptyList(),
+    val facilitiesPartial: Boolean = false,
 )
 
 /**
@@ -81,6 +85,18 @@ object Briefing {
         lines += "Start ${grid ?: Units.latLon(input.start.lat, input.start.lon)}" +
             if (input.start == input.end) " (circular)." else "; finish ${OsGrid.fromWgs84(input.end)?.format(6) ?: Units.latLon(input.end.lat, input.end.lon)}."
         if (input.waypointNames.isNotEmpty()) lines += "Waypoints: ${input.waypointNames.take(12).joinToString(", ")}."
+        if (input.facilities.isNotEmpty()) {
+            val priority = listOf(FacilityCategory.PARKING, FacilityCategory.TOILETS, FacilityCategory.WATER,
+                FacilityCategory.CAFE, FacilityCategory.PUB, FacilityCategory.BUS, FacilityCategory.RAIL)
+            val stops = input.facilities.distinctBy { it.category }
+                .sortedWith(compareBy { priority.indexOf(it.category).let { index -> if (index < 0) priority.size else index } })
+                .take(4).sortedBy { it.alongM }.map { item ->
+                val where = if (item.alongM < 150) "at the start" else "at ${Units.distance(item.alongM, input.imperial)}"
+                val title = if (item.name.isBlank()) item.category.label else "${item.name.take(30)} ${item.category.label.lowercase()}"
+                "$title $where"
+            }
+            lines += "Facilities${if (input.facilitiesPartial) " (limited results)" else ""}: ${stops.joinToString("; ")}."
+        }
         lines += "Tell someone your route and return time. In the UK call 999 or 112, ask for Police, then Mountain Rescue."
         return lines
     }
