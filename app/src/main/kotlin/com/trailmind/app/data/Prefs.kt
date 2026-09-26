@@ -70,6 +70,14 @@ class Prefs(context: Context) {
         get() = sp.getInt("off_route_m", 60)
         set(v) = sp.edit().putInt("off_route_m", v).apply()
 
+    var daylightMarginMinutes: Int
+        get() = sp.getInt("daylight_margin_min", 30).takeIf { it == 0 || it == 30 || it == 60 } ?: 30
+        set(v) { require(v == 0 || v == 30 || v == 60); sp.edit().putInt("daylight_margin_min", v).apply() }
+
+    var daylightAlertState: String
+        get() = sp.getString("daylight_alert_state", "") ?: ""
+        set(v) = sp.edit().putString("daylight_alert_state", v).apply()
+
     var activeRouteId: Long
         get() = sp.getLong("active_route", -1)
         set(v) = sp.edit().putLong("active_route", v).apply()

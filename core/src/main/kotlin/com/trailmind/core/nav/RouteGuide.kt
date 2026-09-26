@@ -57,23 +57,47 @@ class RouteGuide(points: List<TrackPoint>, waypoints: List<Waypoint> = emptyList
     }
 
     private var lastAlong: Double? = null
+    private var lastTimeMs: Long? = null
+    private var pendingJump = 0
 
     fun reset() {
         lastAlong = null
+        lastTimeMs = null
+        pendingJump = 0
     }
 
     /**
      * Snaps [pos] to the route. For loops/out-and-back routes, among near-equal candidates the one
      * closest to the previous progress wins so the walker doesn't "teleport" to the return leg.
      */
-    fun locate(pos: LatLon): RouteFix {
+    fun locate(pos: LatLon, timeMs: Long = System.currentTimeMillis()): RouteFix {
         val prev = lastAlong
-        val best = nearestSegment(pos, prev)
+        val elapsed = lastTimeMs?.let { ((timeMs - it).coerceAtLeast(0L) / 1000.0).coerceAtMost(3600.0) } ?: 0.0
+        val window = 150.0 + 12.0 * elapsed
+        val best = nearestSegment(pos, prev, window, elapsed)
         val (i, proj) = best
         val a = points[i]
         val b = points[i + 1]
         val along = cumulative[i] + proj.fraction * (cumulative[i + 1] - cumulative[i])
+        if (prev != null && (along < prev - window || along > prev + maxOf(window, 750.0)) && elapsed < 300.0) {
+            pendingJump++
+            if (pendingJump < 2) return fixAt(prev, pos)
+        }
+        pendingJump = 0
         lastAlong = along
+        lastTimeMs = timeMs
+        return makeFix(i, proj, along, pos)
+    }
+
+    private fun fixAt(along: Double, pos: LatLon): RouteFix {
+        val snapped = pointAt(along)
+        val i = cumulative.binarySearch(along).let { if (it >= 0) it.coerceAtMost(points.size - 2) else (-it - 2).coerceIn(0, points.size - 2) }
+        val fraction = ((along - cumulative[i]) / (cumulative[i + 1] - cumulative[i])).coerceIn(0.0, 1.0)
+        val projection = com.trailmind.core.geo.SegmentProjection(fraction, Geo.distanceM(pos, snapped), snapped)
+        return makeFix(i, projection, along, pos)
+    }
+
+    private fun makeFix(i: Int, proj: com.trailmind.core.geo.SegmentProjection, along: Double, pos: LatLon): RouteFix {
         val remainingAscent = remainingAscent(i, proj.fraction)
         val next = waypointsAlong.firstOrNull { it.second > along + 5.0 }?.let { (w, wAlong) ->
             WaypointAhead(w, wAlong - along, Geo.distanceM(pos, w.latLon()), Geo.bearingDeg(pos, w.latLon()))
@@ -85,7 +109,7 @@ class RouteGuide(points: List<TrackPoint>, waypoints: List<Waypoint> = emptyList
             alongM = along,
             remainingM = (totalM - along).coerceAtLeast(0.0),
             remainingAscentM = remainingAscent,
-            routeBearingDeg = Geo.bearingDeg(a.latLon(), b.latLon()),
+            routeBearingDeg = Geo.bearingDeg(points[i].latLon(), points[i + 1].latLon()),
             progress = if (totalM > 0) (along / totalM).coerceIn(0.0, 1.0) else 0.0,
             nextWaypoint = next,
             atEnd = totalM - along < 25.0,
@@ -116,7 +140,8 @@ class RouteGuide(points: List<TrackPoint>, waypoints: List<Waypoint> = emptyList
         return (cumulative[i] + proj.fraction * (cumulative[i + 1] - cumulative[i])) to proj.distanceM
     }
 
-    private fun nearestSegment(pos: LatLon, prevAlong: Double?): Pair<Int, com.trailmind.core.geo.SegmentProjection> {
+    private fun nearestSegment(pos: LatLon, prevAlong: Double?, window: Double = Double.MAX_VALUE,
+        elapsed: Double = 0.0): Pair<Int, com.trailmind.core.geo.SegmentProjection> {
         val projections = ArrayList<Pair<Int, com.trailmind.core.geo.SegmentProjection>>(points.size)
         var minDist = Double.MAX_VALUE
         for (i in 0 until points.size - 1) {
@@ -126,17 +151,33 @@ class RouteGuide(points: List<TrackPoint>, waypoints: List<Waypoint> = emptyList
         }
         val best = projections.minBy { it.second.distanceM }
         if (prevAlong == null) return best
-        // Only local minima are genuine alternative "legs" (e.g. the return half of an
-        // out-and-back); neighbouring segments of the same leg are never better candidates.
-        val candidates = projections.filterIndexed { idx, (_, p) ->
-            p.distanceM <= minDist + AMBIGUITY_M &&
-                (idx == 0 || p.distanceM <= projections[idx - 1].second.distanceM) &&
-                (idx == projections.size - 1 || p.distanceM <= projections[idx + 1].second.distanceM)
+        val forward = projections.filter { (i, p) ->
+            val along = cumulative[i] + p.fraction * (cumulative[i + 1] - cumulative[i])
+            along in (prevAlong - window)..(prevAlong + window) && p.distanceM <= 100.0
+        }.minByOrNull { it.second.distanceM }
+        val bestAlong = cumulative[best.first] + best.second.fraction * (cumulative[best.first + 1] - cumulative[best.first])
+        if (elapsed < 300.0 && bestAlong < prevAlong - window && forward != null) {
+            val forwardAlong = cumulative[forward.first] + forward.second.fraction * (cumulative[forward.first + 1] - cumulative[forward.first])
+            if (forward.second.distanceM * 3.0 + abs(forwardAlong - prevAlong) * 0.1 <
+                best.second.distanceM * 3.0 + abs(bestAlong - prevAlong) * 0.1) return forward
         }
-        if (candidates.size <= 1) return best
+        if (bestAlong < prevAlong - window) {
+            val ahead = projections.filter { (i, p) ->
+                val along = cumulative[i] + p.fraction * (cumulative[i + 1] - cumulative[i])
+                p.distanceM <= minDist + AMBIGUITY_M &&
+                    along > prevAlong && (along <= prevAlong + maxOf(window, 750.0) ||
+                        along - prevAlong < prevAlong - bestAlong)
+            }.minByOrNull { (i, p) -> cumulative[i] + p.fraction * (cumulative[i + 1] - cumulative[i]) }
+            if (ahead != null) return ahead
+        }
+        val candidates = projections.filter { (i, p) ->
+            val along = cumulative[i] + p.fraction * (cumulative[i + 1] - cumulative[i])
+            p.distanceM <= minDist + AMBIGUITY_M && abs(along - prevAlong) <= window
+        }
+        if (candidates.isEmpty()) return best
         return candidates.minBy { (i, p) ->
             val along = cumulative[i] + p.fraction * (cumulative[i + 1] - cumulative[i])
-            abs(along - prevAlong)
+            p.distanceM * 3.0 + abs(along - prevAlong) * 0.1 + if (along < prevAlong - 5.0) 3.0 else 0.0
         }
     }
 

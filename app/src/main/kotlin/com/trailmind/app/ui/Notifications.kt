@@ -16,6 +16,8 @@ object Notifications {
     const val ID_DOWNLOAD_DONE = 4
     const val ID_WEATHER = 5
     const val ID_WATCH_LINK = 6
+    const val ID_DAYLIGHT = 7
+    const val ID_DUSK = 8
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -26,7 +28,7 @@ object Notifications {
             setShowBadge(false)
         })
         m.createNotificationChannel(NotificationChannel(CH_ALERTS, "Navigation alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Off-route and weather warnings"
+            description = "Off-route, weather and daylight warnings"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 400, 200, 400)
         })

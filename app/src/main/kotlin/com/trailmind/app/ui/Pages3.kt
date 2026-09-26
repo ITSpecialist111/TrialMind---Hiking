@@ -405,6 +405,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
         val d = data
         if (d == null || d.meta.id != routeId) { addView(ui.text("Loading…", Ui.T.CAPTION)); return@scaffold }
         val inp = input(d)
+        addView(ui.text(startByText(host, d.points, app.prefs.pace, app.prefs.daylightMarginMinutes, startMs), Ui.T.BODY))
         addView(weatherCard(d.meta.id, inp.highPoint))
         addView(ui.card(spacing = 8) {
             addView(ui.text("Offline briefing", Ui.T.TITLE))
@@ -579,6 +580,10 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 prefs.offRouteThresholdM = it.toInt(); app.nav.settingsChanged(); refresh()
             })
             addView(ui.text("Alerts need 3 consecutive GPS fixes beyond this distance (after allowing for GPS accuracy), then vibrate and notify.", Ui.T.CAPTION))
+            addView(ui.text("Daylight margin", Ui.T.LABEL))
+            addView(chips(listOf(0, 30, 60).map { "$it min" to it.toDouble() }, prefs.daylightMarginMinutes.toDouble()) {
+                prefs.daylightMarginMinutes = it.toInt(); app.nav.settingsChanged(); refresh()
+            })
             addView(ui.switch("Offline only (never use mobile data for maps)", prefs.offlineOnly) { prefs.offlineOnly = it; app.tiles.clearErrors() })
         })
 

@@ -331,6 +331,10 @@ class WatchLink(private val app: TrailMindApp) {
         conn?.send(WatchProtocol.ALERT, WatchProtocol.alert(WatchProtocol.ALERT_WEATHER, text))
     }
 
+    fun daylightAlert(text: String) {
+        conn?.send(WatchProtocol.ALERT, WatchProtocol.alert(WatchProtocol.ALERT_INFO, text))
+    }
+
     private inner class Connection(private val socket: BluetoothSocket) {
         private val out = DataOutputStream(BufferedOutputStream(socket.outputStream, 16 * 1024))
         private val outbox = Outbox()

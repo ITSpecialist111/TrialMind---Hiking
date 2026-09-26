@@ -202,6 +202,35 @@ class GeoTest {
         assertTrue(abs(rise.hour * 60 + rise.minute - (3 * 60 + 43)) <= 5, "sunrise was $rise")
     }
 
+    @Test
+    fun londonSeptemberSunsetAndCivilDusk() {
+        val times = Sun.times(LocalDate.of(2026, 9, 26), LatLon(51.5074, -0.1278))
+        val zone = java.time.ZoneId.of("Europe/London")
+        fun minutes(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).let { it.hour * 60 + it.minute }
+        // US Naval Observatory: London 18:50 sunset, 19:23 civil dusk (BST).
+        assertEquals(LocalDate.of(2026, 9, 26), Instant.ofEpochMilli(times.sunsetMs!!).atZone(zone).toLocalDate())
+        assertEquals(LocalDate.of(2026, 9, 26), Instant.ofEpochMilli(times.civilDuskMs!!).atZone(zone).toLocalDate())
+        assertTrue(abs(minutes(times.sunsetMs!!) - (18 * 60 + 50)) <= 1, "sunset ${minutes(times.sunsetMs)}")
+        assertTrue(abs(minutes(times.civilDuskMs!!) - (19 * 60 + 23)) <= 1, "dusk ${minutes(times.civilDuskMs)}")
+    }
+
+    @Test
+    fun forestOfDeanAndLerwickCivilDusk() {
+        val zone = java.time.ZoneId.of("Europe/London")
+        fun minutes(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).let { it.hour * 60 + it.minute }
+        val forest = Sun.times(LocalDate.of(2026, 9, 26), LatLon(51.78, -2.54))
+        assertTrue(abs(minutes(forest.sunsetMs!!) - (19 * 60 + 2)) <= 4)
+        assertTrue(abs(minutes(forest.civilDuskMs!!) - (19 * 60 + 33)) <= 3)
+        val lydney = Sun.times(LocalDate.of(2026, 9, 26), LatLon(51.73, -2.53))
+        // US Naval Observatory at 51.73 N, 2.53 W: sunset 18:59, civil dusk 19:33 BST.
+        assertTrue(abs(minutes(lydney.sunsetMs!!) - (18 * 60 + 59)) <= 1, "Lydney sunset ${minutes(lydney.sunsetMs)}")
+        assertTrue(abs(minutes(lydney.civilDuskMs!!) - (19 * 60 + 33)) <= 1, "Lydney dusk ${minutes(lydney.civilDuskMs)}")
+        val lerwick = Sun.times(LocalDate.of(2026, 6, 21), LatLon(60.155, -1.145))
+        assertTrue(abs(minutes(lerwick.sunsetMs!!) - (22 * 60 + 34)) <= 5)
+        assertEquals(LocalDate.of(2026, 6, 22), Instant.ofEpochMilli(lerwick.civilDuskMs!!).atZone(zone).toLocalDate())
+        assertTrue(abs(minutes(lerwick.civilDuskMs!!) - 26) <= 5)
+    }
+
     // Lydney: about 49.2 µT, dipping 66.3°. In east/north/up that is (0, 19.8, -45.1).
     @Test
     fun magneticCheckAcceptsTheEarthsFieldFlatOrUpright() {

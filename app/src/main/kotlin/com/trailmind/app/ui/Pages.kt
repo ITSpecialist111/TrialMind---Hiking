@@ -275,7 +275,8 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     "Tobler" to Units.minutes(est.toblerMinutes),
                     "Highest" to (d.meta.maxEleM?.let { Units.elevation(it, imperial) } ?: "—"),
                 )))
-                addView(ui.text("Planning time ${Units.minutes(est.planningMinutes)} (slower of Naismith+Langmuir and Tobler at ${app.prefs.flatSpeedKmh} km/h, ×${app.prefs.conditionsFactor} for conditions). Excludes breaks.", Ui.T.CAPTION))
+                addView(ui.text("Planning time ${Units.minutes(est.planningMinutes)} (slower of Naismith+Langmuir and Tobler at ${Units.speedKmh(app.prefs.flatSpeedKmh / 3.6, imperial)}, ×${app.prefs.conditionsFactor} for conditions). Excludes breaks.", Ui.T.CAPTION))
+                addView(ui.text(startByText(host, d.points, app.prefs.pace, app.prefs.daylightMarginMinutes, System.currentTimeMillis()), Ui.T.BODY))
             })
             addView(ui.card(padding = 12) {
                 addView(ui.text("Elevation profile", Ui.T.LABEL))

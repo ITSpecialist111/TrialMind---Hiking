@@ -91,6 +91,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var offlineAreasKey: Any? = null
     private var facilitiesRouteId = -1L
     private var facilitiesJob = 0
+    private var startByKey: Any? = null
+    private var startByLine: String? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
     private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
 
@@ -496,7 +498,29 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             else -> null
         }
         val next = fix?.nextWaypoint?.let { w -> "Next: ${w.waypoint.name} in ${Units.distance(w.alongRouteM, imperial)} (${Units.bearing(w.bearingDeg)})" }
-        val shown = listOf(routeId, route.data.meta.name, offRoute, waiting, stats, status, next).joinToString("|")
+        val daylight = app.nav.daylight
+        val sunset = app.nav.daylightSun?.sunsetMs
+        val daylightLine = if (fix != null && !app.nav.routeStarted) {
+            val now = System.currentTimeMillis()
+            val key = Triple(route, app.prefs.pace, app.prefs.daylightMarginMinutes to now / 60_000L)
+            if (key != startByKey) {
+                startByKey = key
+                startByLine = startByText(host, route.data.points, app.prefs.pace, app.prefs.daylightMarginMinutes, now)
+            }
+            startByLine
+        }
+        else if (fix != null && daylight?.darkNow == true)
+            "It's dark now. " + (daylight.nextSunriseMs?.let { "Sunrise ${finishTime(host, it)}" } ?: "No sunrise time available.")
+        else if (fix != null && daylight != null && sunset == null)
+            if (daylight.darkNow == false) "No sunset today at this location." else "Daylight times unavailable here."
+        else if (fix != null && daylight != null && sunset != null)
+            if (daylight.afterSafeSunset == true && daylight.finishMs > sunset)
+                "Finish ≈ ${finishTime(host, daylight.finishMs)}, after sunset (${clockTime(host, sunset)})"
+            else if (daylight.afterSafeSunset == true)
+                "Finish ≈ ${finishTime(host, daylight.finishMs)}, inside ${app.prefs.daylightMarginMinutes} min sunset margin (${clockTime(host, sunset)})"
+            else "Finish ≈ ${finishTime(host, daylight.finishMs)} · sunset ${clockTime(host, sunset)}"
+        else null
+        val shown = listOf(routeId, route.data.meta.name, offRoute, waiting, stats, status, next, daylightLine).joinToString("|")
         if (shown == navShown) return
         navShown = shown
         navCard.removeAllViews()
@@ -515,6 +539,26 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         })
         status?.let { navCard.addView(if (offRoute) ui.text(it, Ui.T.TITLE, p.danger) else ui.text(it, Ui.T.CAPTION)) }
         next?.let { navCard.addView(ui.text(it, Ui.T.CAPTION)) }
+        if (daylightLine != null) {
+            navCard.addView(ui.text(daylightLine, Ui.T.CAPTION, if (app.nav.routeStarted && daylight?.afterSafeSunset == true) p.danger else p.onSurface).apply {
+                setOnClickListener {
+                    if (daylight == null || sunset == null) return@setOnClickListener
+                    val margin = app.prefs.daylightMarginMinutes
+                    val back = daylight.walkBackMinutes?.let { "Going back to the start now takes about ${Units.minutes(it)}.\n" } ?: ""
+                    val turn = daylight.turnBackByMs?.let {
+                        "Turn back by ${finishTime(host, it)} to be down before sunset with $margin min to spare.\n"
+                    } ?: ""
+                    val dusk = app.nav.daylightSun?.civilDuskMs?.let { "Civil dusk (dark by) ${finishTime(host, it)}.\n" } ?: ""
+                    val left = if (daylight.darkNow == true) "It's dark now" else
+                        daylight.daylightLeftMs?.takeIf { it > 0 }?.let { "${Units.duration(it)} of daylight left" } ?: "Sunset has passed"
+                    ui.dialog().setTitle("Daylight check").setMessage(
+                        "Estimated finish ${finishTime(host, daylight.finishMs)}. Sunset ${clockTime(host, sunset)}; " +
+                            "$left.\n" +
+                            back + turn + dusk + "Estimate uses route climb, your pace and conditions; allow extra for breaks and poor weather."
+                    ).setPositiveButton("OK", null).show()
+                }
+            })
+        }
     }
 
     fun updateFacilities() {

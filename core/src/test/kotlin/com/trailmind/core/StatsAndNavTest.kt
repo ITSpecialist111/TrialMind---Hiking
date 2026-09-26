@@ -15,6 +15,7 @@ import com.trailmind.core.nav.OffRouteDetector
 import com.trailmind.core.nav.RouteGuide
 import com.trailmind.core.nav.TrackFilter
 import com.trailmind.core.stats.HighPoint
+import com.trailmind.core.stats.Daylight
 import com.trailmind.core.stats.HikeEstimator
 import com.trailmind.core.stats.PaceSettings
 import com.trailmind.core.stats.TrackStats
@@ -72,6 +73,70 @@ class StatsAndNavTest {
     }
 
     @Test
+    fun daylightFinishTurnBackAndPace() {
+        val route = line(1001).map { it.copy(ele = null) }
+        val now = 1_000_000_000L
+        val pace = PaceSettings(5.0)
+        val sun = SunTimes(now - 6 * 3_600_000, now + 3 * 3_600_000, false, false, now + 4 * 3_600_000)
+        val walked = route.take(501)
+        val remaining = route.drop(500)
+        val normal = Daylight.estimate(now, remaining, walked, null, pace, sun, 30)
+        assertEquals(60.0, normal.remainingMinutes, 1.0)
+        assertEquals(60.0, normal.walkBackMinutes!!, 1.0)
+        assertTrue(kotlin.math.abs(normal.turnBackByMs!! - (now + 90 * 60_000)) < 60_000)
+        assertTrue(kotlin.math.abs(normal.startByMs!! - (now + 90 * 60_000)) < 60_000)
+        assertFalse(normal.afterSafeSunset!!)
+        val slow = Daylight.estimate(now, remaining, walked, 120.0, pace, sun, 30)
+        assertEquals(120.0, slow.remainingMinutes, 2.0)
+        assertTrue(kotlin.math.abs(slow.turnBackByMs!! - (now + 30 * 60_000)) < 60_000)
+        assertTrue(kotlin.math.abs(slow.finishMs - (now + 120 * 60_000)) <= 120_000L)
+        val late = Daylight.estimate(now, route, emptyList(), null, pace,
+            sun.copy(sunsetMs = now + 90 * 60_000, civilDuskMs = now + 110 * 60_000), 30)
+        assertNull(late.walkBackMinutes)
+        assertNull(late.turnBackByMs)
+        assertTrue(late.afterSafeSunset!!)
+        assertTrue(late.afterCivilDusk!!)
+        assertTrue(late.startByMs!! < now)
+        assertNull(Daylight.estimate(now, route, emptyList(), null, pace,
+            sun.copy(sunriseMs = now - 30 * 60_000, sunsetMs = now + 90 * 60_000), 30).startByMs)
+        val polar = Daylight.estimate(now, route, emptyList(), null, pace, SunTimes(null, null, true, false), 30)
+        assertNull(polar.daylightLeftMs)
+        assertNull(polar.afterSafeSunset)
+        assertNull(polar.turnBackByMs)
+        assertNull(polar.startByMs)
+    }
+
+    @Test
+    fun daylightBeforeSunriseAndAcrossTheAutumnClockChange() {
+        val zone = java.time.ZoneId.of("Europe/London")
+        val date = java.time.LocalDate.of(2026, 10, 25)
+        val route = line(1001).map { it.copy(ele = null) }
+        val at = com.trailmind.core.geo.LatLon(51.73, -2.53)
+        val sun = com.trailmind.core.geo.Sun.times(date, at)
+        val before = sun.sunriseMs!! - 2 * 3_600_000L
+        val predawn = Daylight.estimate(before, route, emptyList(), null, PaceSettings(), sun, 30, zone)
+        assertEquals(true, predawn.darkNow)
+        assertEquals(sun.sunriseMs, predawn.nextSunriseMs)
+        assertEquals(true, predawn.afterSafeSunset)
+        assertEquals(true, predawn.afterCivilDusk)
+        assertNull(predawn.daylightLeftMs)
+        val lateNow = date.atTime(23, 30).atZone(zone).toInstant().toEpochMilli()
+        val late = Daylight.estimate(lateNow, route, emptyList(), null, PaceSettings(), sun, 30, zone)
+        assertEquals(true, late.darkNow)
+        assertEquals(com.trailmind.core.geo.Sun.times(date.plusDays(1), route.first().latLon()).sunriseMs, late.nextSunriseMs)
+        assertEquals(true, late.afterCivilDusk)
+        assertEquals(date.plusDays(1), java.time.Instant.ofEpochMilli(late.finishMs).atZone(zone).toLocalDate())
+        val noSunset = Daylight.estimate(before, route, emptyList(), null, PaceSettings(),
+            SunTimes(before - 60_000, null, false, false), 30, zone)
+        assertNull(noSunset.darkNow)
+        assertNull(noSunset.afterSafeSunset)
+        val polarNight = Daylight.estimate(before, route, emptyList(), null, PaceSettings(),
+            SunTimes(null, null, false, true), 30, zone)
+        assertEquals(true, polarNight.darkNow)
+        assertEquals(true, polarNight.afterCivilDusk)
+    }
+
+    @Test
     fun routeGuideTracksProgressAndWaypoints() {
         val route = line(101, 1.0) // 1 km east, climbing 100 m
         val wpEnd = Waypoint(route.last().lat, route.last().lon, "Top")
@@ -109,6 +174,152 @@ class StatsAndNavTest {
         val onReturn = guide.locate(out[45].latLon())
         assertTrue(onReturn.offRouteM < 1.0, "snapped ${onReturn.offRouteM} m away")
         assertTrue(onReturn.alongM < 500, "should snap to the outbound leg nearest the walker")
+    }
+
+    @Test
+    fun loopEndDoesNotSnapToItsStart() {
+        val start = com.trailmind.core.geo.LatLon(51.73, -2.53)
+        val route = listOf(start, Geo.destination(start, 90.0, 1000.0),
+            Geo.destination(start, 0.0, 800.0), Geo.destination(start, 270.0, 1000.0), start)
+            .map { com.trailmind.core.geo.TrackPoint(it.lat, it.lon) }
+        val guide = RouteGuide(route)
+        val end = guide.totalM
+        guide.locate(guide.pointAt(end - 180.0), 0)
+        val nearEnd = guide.locate(guide.pointAt(end - 118.0), 10_000)
+        assertEquals(118.0, nearEnd.remainingM, 3.0)
+        val jump = guide.locate(start, 11_000)
+        assertTrue(jump.remainingM < 120.0, "jump picked opening leg: ${jump.remainingM}")
+        val endNearStart = Geo.destination(start, 0.0, 55.0)
+        val offset = RouteGuide(route.dropLast(1) + com.trailmind.core.geo.TrackPoint(endNearStart.lat, endNearStart.lon))
+        offset.locate(offset.pointAt(offset.totalM - 350.0), 0)
+        offset.locate(offset.pointAt(offset.totalM - 118.0), 10_000)
+        repeat(3) { step ->
+            val remaining = offset.locate(start, 11_000L + 1000L * step).remainingM
+            assertTrue(remaining < 120.0, "car-park fix picked opening leg: $remaining")
+        }
+    }
+
+    @Test
+    fun loopStartDoesNotSnapToItsFinishFromMidRoute() {
+        val origin = com.trailmind.core.geo.LatLon(51.73, -2.53)
+        val route = listOf(origin, Geo.destination(origin, 90.0, 1000.0),
+            Geo.destination(origin, 0.0, 800.0), Geo.destination(origin, 270.0, 1000.0), origin)
+            .map { com.trailmind.core.geo.TrackPoint(it.lat, it.lon) }
+        val guide = RouteGuide(route)
+        guide.locate(guide.pointAt(guide.totalM * 0.37), 0)
+        guide.locate(origin, 1_000)
+        val atStart = guide.locate(origin, 2_000)
+        assertTrue(atStart.remainingM > guide.totalM - 10.0, "start snapped to finish: ${atStart.remainingM}")
+    }
+
+    @Test
+    fun jumpNearFinishPrefersCloserProgressOnOverlappingLeg() {
+        val origin = LatLon(51.73, -2.53)
+        val east = Geo.destination(origin, 90.0, 1000.0)
+        val north = Geo.destination(origin, 0.0, 500.0)
+        val northEast = Geo.destination(north, 90.0, 1000.0)
+        val end = Geo.destination(origin, 90.0, 200.0)
+        val route = listOf(origin, east, northEast, north, origin, end)
+            .map { TrackPoint(it.lat, it.lon) }
+        val guide = RouteGuide(route)
+        guide.locate(guide.pointAt(2100.0), 0)
+        guide.locate(guide.pointAt(3100.0), 1_000)
+        val nearFinish = guide.locate(guide.pointAt(3100.0), 2_000)
+        assertEquals(100.0, nearFinish.remainingM, 5.0)
+    }
+
+    @Test
+    fun shortcutToEarlierParallelLegDoesNotStayOnDistantLeg() {
+        val origin = LatLon(51.73, -2.53)
+        val outward = line(101, start = origin)
+        val returnStart = Geo.destination(outward.last().latLon(), 0.0, 90.0)
+        val returning = (1..100).map { step ->
+            Geo.destination(returnStart, 270.0, step * 10.0).let { TrackPoint(it.lat, it.lon) }
+        }
+        val guide = RouteGuide(outward + TrackPoint(returnStart.lat, returnStart.lon) + returning)
+        guide.locate(guide.pointAt(1590.0), 0)
+        val shortcut = outward[50].latLon()
+        guide.locate(shortcut, 1_000)
+        val recovered = guide.locate(shortcut, 2_000)
+        assertTrue(recovered.offRouteM < 5.0, "on-route shortcut reported ${recovered.offRouteM} m away")
+        assertTrue(recovered.alongM < 600.0, "shortcut stayed on the return leg: ${recovered.alongM}")
+    }
+
+    @Test
+    fun overlappingReturnAndFigureEightCrossingRetainDirection() {
+        val out = line(51)
+        val guide = RouteGuide(out + out.reversed().drop(1))
+        guide.locate(out[40].latLon(), 0)
+        guide.locate(out[45].latLon(), 10_000)
+        guide.locate(out.last().latLon(), 20_000)
+        guide.locate(out[45].latLon(), 30_000)
+        assertEquals(100.0, guide.locate(out[10].latLon(), 100_000).remainingM, 2.0)
+        val origin = com.trailmind.core.geo.LatLon(51.73, -2.53)
+        val corners = listOf(Geo.destination(origin, 315.0, 150.0), origin,
+            Geo.destination(origin, 45.0, 150.0), origin,
+            Geo.destination(origin, 225.0, 150.0), origin, Geo.destination(origin, 135.0, 150.0))
+        val crossing = RouteGuide(corners.map { com.trailmind.core.geo.TrackPoint(it.lat, it.lon) })
+        crossing.locate(crossing.pointAt(crossing.cumulative[1] + 30.0), 0)
+        crossing.locate(crossing.pointAt(crossing.cumulative[2] - 10.0), 10_000)
+        val approach = crossing.locate(crossing.pointAt(crossing.cumulative[2] + 30.0), 20_000)
+        val near = crossing.locate(crossing.pointAt(crossing.cumulative[3] - 20.0), 30_000)
+        val center = crossing.locate(origin, 40_000)
+        assertTrue(center.alongM > crossing.cumulative[1], "approach ${approach.alongM}, near ${near.alongM}, center ${center.alongM}")
+    }
+
+    @Test
+    fun rejectsOneJumpButAcceptsRestartOrLongGap() {
+        val guide = RouteGuide(line(301))
+        guide.locate(guide.pointAt(2800.0), 0)
+        assertTrue(guide.locate(guide.pointAt(50.0), 1000).remainingM < 500.0)
+        assertTrue(guide.locate(guide.pointAt(50.0), 2000).alongM < 100.0)
+        guide.reset()
+        guide.locate(guide.pointAt(2800.0), 0)
+        assertTrue(guide.locate(guide.pointAt(50.0), 600_000).alongM < 100.0)
+        guide.reset()
+        guide.locate(guide.pointAt(2800.0), 0)
+        assertTrue(guide.locate(guide.pointAt(50.0), 3_600_000).alongM < 100.0)
+        guide.reset()
+        guide.locate(guide.pointAt(1000.0), 0)
+        guide.locate(guide.pointAt(2000.0), 1_000)
+        assertEquals(2000.0, guide.locate(guide.pointAt(2000.0), 2_000).alongM, 5.0)
+        guide.locate(guide.pointAt(1900.0), 3_000)
+        guide.locate(guide.pointAt(1550.0), 4_000)
+        assertEquals(1550.0, guide.locate(guide.pointAt(1550.0), 5_000).alongM, 5.0)
+    }
+
+    @Test
+    fun routeStartRequiresTravelOrRecordingOnCorridor() {
+        val guide = RouteGuide(line(1001))
+        val start = com.trailmind.core.nav.RouteStart()
+        assertFalse(start.update(guide.locate(guide.pointAt(150.0), 0), false))
+        assertFalse(start.update(guide.locate(guide.pointAt(151.0), 10_000), false))
+        assertTrue(start.update(guide.locate(guide.pointAt(200.0), 20_000), false))
+        val recording = com.trailmind.core.nav.RouteStart()
+        assertFalse(recording.update(guide.locate(Geo.destination(guide.pointAt(300.0), 0.0, 100.0)), true))
+        assertTrue(recording.update(guide.locate(guide.pointAt(300.0)), true))
+    }
+
+    @Test
+    fun watchDaylightAlertFitsRoundScreenAndUsesExistingInfoFrame() {
+        for (dark in listOf(false, true)) {
+            val text = Daylight.watchAlert(dark)
+            assertTrue(text.length <= 44)
+            val payload = com.trailmind.core.watch.WatchProtocol.alert(
+                com.trailmind.core.watch.WatchProtocol.ALERT_INFO, text)
+            com.trailmind.core.watch.WatchProtocol.reader(payload).use { reader ->
+                assertEquals(com.trailmind.core.watch.WatchProtocol.ALERT_INFO, reader.readUnsignedByte())
+                assertEquals(text, reader.readUTF())
+            }
+        }
+    }
+
+    @Test
+    fun daylightAlertsDoNotDoubleFireWhenBothThresholdsAreAlreadyPast() {
+        assertEquals(1, Daylight.alertDue(true, true, false, false))
+        assertEquals(0, Daylight.alertDue(true, true, true, true))
+        assertEquals(2, Daylight.alertDue(true, true, true, false))
+        assertEquals(0, Daylight.alertDue(false, false, false, false))
     }
 
     @Test
