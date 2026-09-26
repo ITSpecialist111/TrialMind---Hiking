@@ -633,6 +633,24 @@ try {
     Check 'Found route added with its line and heights' ($dist -ge 30000 -and $dist -le 40000 -and $high -ge 400 -and $high -le 520) ('{0:N0} m long, highest {1:N0} m' -f $dist, $high)
     Shot $Phone '11-found-route'
 
+    Section 'Mountain weather'
+    # The route's name can also be on the map's guidance card; the chip is the clickable one.
+    $pickRoute = {
+        $chip = @(Find-Nodes $Phone '^Helvellyn via Striding Edge$') | Where-Object { $_.GetAttribute('clickable') -eq 'true' } | Select-Object -First 1
+        if ($chip) { $c = @(Get-Center $chip); Adb $Phone shell input tap $c[0] $c[1] | Out-Null; Start-Sleep -Milliseconds 800 }
+    }
+    $forecastLine = '^.  Forecast for the high point \(950 m\) at about \d\d:\d\d: -?\d+.C'
+    OpenTab 'Beacon' | Out-Null
+    & $pickRoute
+    Check 'Beacon offers the high-point forecast' (ScrollTo $Phone '^Get forecast$')
+    Tap $Phone '^Get forecast$' | Out-Null
+    Check 'Briefing has the forecast for when you reach the high point' ((Wait-Ui $Phone '^Update forecast$' 30) -and (ScrollTo $Phone $forecastLine))
+    Shot $Phone '12-mountain-weather'
+    OpenTab 'Map' | Out-Null
+    OpenTab 'Beacon' | Out-Null
+    & $pickRoute
+    Check 'Forecast kept on the phone' ((ScrollTo $Phone '^Update forecast$') -and (ScrollTo $Phone $forecastLine))
+
     Section 'Watch companion'
     if (-not $Watch) {
         Skip 'Watch companion' 'no -Watch serial given'

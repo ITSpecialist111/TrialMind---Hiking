@@ -10,6 +10,7 @@ import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.HikeMeta
 import com.trailmind.app.data.HikeStatus
+import com.trailmind.app.data.OpenMeteo
 import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.data.WaymarkedTrails
@@ -297,7 +298,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Delete", R.drawable.ic_delete, Ui.B.TEXT) {
                     ui.confirm("Delete route?", "\"${d.meta.name}\" will be removed. Recorded hikes are kept.", "Delete") {
                         if (following) app.nav.stopFollowing()
-                        Async.run({ app.db.deleteRoute(routeId) }) { host.goBack() }
+                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId) }) { host.goBack() }
                     }
                 }, ui.lp(0, weight = 1f))
             })

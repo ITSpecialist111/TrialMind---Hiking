@@ -10,12 +10,17 @@ import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.geo.Waypoint
 import com.trailmind.core.map.TilePolicy
+import com.trailmind.core.nav.DistanceMarks
 import com.trailmind.core.nav.OffRouteDetector
 import com.trailmind.core.nav.RouteGuide
 import com.trailmind.core.nav.TrackFilter
+import com.trailmind.core.stats.HighPoint
 import com.trailmind.core.stats.HikeEstimator
 import com.trailmind.core.stats.PaceSettings
 import com.trailmind.core.stats.TrackStats
+import com.trailmind.core.weather.ForecastHour
+import com.trailmind.core.weather.MountainWeather
+import com.trailmind.core.weather.PointForecast
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -178,5 +183,81 @@ class StatsAndNavTest {
         val prompt = Briefing.gemmaPrompt(input)
         assertTrue(prompt.contains("Route: Test"))
         assertTrue(prompt.contains("Tarn"))
+    }
+
+    @Test
+    fun distanceMarksEveryKilometreOrMile() {
+        val guide = RouteGuide(line(351)) // 3.5 km
+        val km = DistanceMarks.along(guide, DistanceMarks.stepM(imperial = false))
+        assertEquals(3, km.size)
+        km.forEachIndexed { i, m -> assertEquals((i + 1) * 1000.0, Geo.distanceM(guide.points.first().latLon(), m), 1.0) }
+        assertEquals(2, DistanceMarks.along(guide, DistanceMarks.stepM(imperial = true)).size)
+        assertEquals(1, DistanceMarks.every(stepPx = 80.0, minPx = 56.0))
+        assertEquals(5, DistanceMarks.every(stepPx = 20.0, minPx = 56.0))
+        assertEquals(500, DistanceMarks.every(stepPx = 0.01, minPx = 56.0))
+    }
+
+    @Test
+    fun highPointAndTheTimeToReachIt() {
+        // 4 km, climbing to 500 m halfway, then back down.
+        val pts = line(401).mapIndexed { i, p -> p.copy(ele = 100.0 + 2.0 * minOf(i, 400 - i)) }
+        val hp = assertNotNull(HikeEstimator.highPoint(pts))
+        assertEquals(500.0, hp.eleM)
+        assertEquals(2000.0, Geo.distanceM(pts.first().latLon(), hp.position), 1.0)
+        val all = HikeEstimator.estimate(pts).planningMinutes
+        assertTrue(hp.minutesFromStart > all / 2 && hp.minutesFromStart < all, "${hp.minutesFromStart} of $all")
+        assertNull(HikeEstimator.highPoint(line(10).map { it.copy(ele = null) }))
+    }
+
+    private fun hour(
+        timeMs: Long = 0L, t: Double = 7.0, feels: Double = 2.7, wind: Double = 23.0, gust: Double = 49.3, from: Double = 238.0,
+        rain: Double = 8.0, mm: Double = 0.0, low: Double = 87.0, vis: Double = 11_680.0, frz: Double = 2020.0,
+    ) = ForecastHour(timeMs, t, feels, wind, gust, from, rain, mm, low, vis, frz)
+
+    @Test
+    fun mountainWeatherInWalkersTerms() {
+        // Helvellyn's summit (950 m) as Open-Meteo forecast it on 26 September 2026.
+        val h = hour()
+        assertEquals(
+            "7°C, feels like 3°C, wind WSW 23 km/h gusting 49 km/h, 8% chance of rain, low cloud 87% (the tops may be in cloud), freezing level 2020 m",
+            MountainWeather.summary(h, imperial = false),
+        )
+        assertTrue(MountainWeather.summary(h, imperial = true).contains("gusting 31 mph"))
+        assertTrue(MountainWeather.warnings(h, 950.0, imperial = false).isEmpty())
+        val wild = MountainWeather.warnings(hour(feels = -4.0, gust = 85.0, frz = 800.0, vis = 300.0), 950.0, imperial = false)
+        assertEquals(4, wild.size, wild.joinToString("\n"))
+        assertTrue(wild[0].startsWith("Gusts of 85 km/h: dangerous"))
+        // Values the source doesn't give are left out and never warned about.
+        val sparse = hour(feels = Double.NaN, from = Double.NaN, frz = Double.NaN, vis = Double.NaN)
+        assertEquals("7°C, wind 23 km/h gusting 49 km/h, 8% chance of rain, low cloud 87% (the tops may be in cloud)", MountainWeather.summary(sparse, false))
+        assertTrue(MountainWeather.warnings(sparse, 950.0, false).isEmpty())
+    }
+
+    @Test
+    fun forecastHourNearestTheTime() {
+        val t0 = 1_790_380_800_000L
+        val f = PointForecast(t0, (0 until 3).map { hour(timeMs = t0 + it * 3_600_000L, t = it.toDouble()) })
+        assertEquals(1.0, f.at(t0 + 40 * 60_000L)?.temperatureC)
+        assertEquals(2.0, f.at(t0 + 3 * 3_600_000L)?.temperatureC)
+        assertNull(f.at(t0 + 4 * 3_600_000L))
+    }
+
+    @Test
+    fun briefingUsesTheSavedForecastForTheHighPoint() {
+        val start = 1_790_380_800_000L // 00:00 UTC
+        val base = BriefingInput(
+            routeName = "Helvellyn", estimate = HikeEstimator.estimate(line(401)), start = LatLon(54.54, -2.95), end = LatLon(54.54, -2.95),
+            maxEleM = 950.0, waypointNames = emptyList(), sun = null, plannedStartMs = start, zone = ZoneOffset.UTC,
+        )
+        assertTrue(Briefing.ruleBased(base).any { it.startsWith("High point 950 m") })
+        // 2 h 30 of walking to the top is 3 h with breaks.
+        val hp = HighPoint(LatLon(54.527, -3.016), 950.0, minutesFromStart = 150.0)
+        val forecast = PointForecast(start - 3_600_000L, (0 until 6).map { hour(timeMs = start + it * 3_600_000L, gust = if (it == 3) 70.0 else 30.0) })
+        val lines = Briefing.ruleBased(base.copy(highPoint = hp, forecast = forecast))
+        assertTrue(lines.any { it.startsWith("Forecast for the high point (950 m) at about 03:00: 7°C") }, lines.joinToString("\n"))
+        assertTrue(lines.any { it.startsWith("⚠ Gusts of 70 km/h") })
+        assertFalse(lines.any { it.startsWith("High point") })
+        val tomorrow = Briefing.ruleBased(base.copy(plannedStartMs = start + 86_400_000L, highPoint = hp, forecast = forecast))
+        assertTrue(tomorrow.any { it.startsWith("The saved forecast doesn't reach") }, tomorrow.joinToString("\n"))
     }
 }

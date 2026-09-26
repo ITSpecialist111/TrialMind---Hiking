@@ -149,7 +149,7 @@ class CompassPage(host: MainActivity) : Page(host) {
 class MorePage(host: MainActivity) : Page(host) {
     override fun render(): View = scaffold("More") {
         addView(ui.listItem("Offline maps", "Download OS map areas along routes, or import MBTiles", R.drawable.ic_download) { host.push(OfflinePage(host)) })
-        addView(ui.listItem("Beacon", "Offline hike assistant: a rule-based briefing, and a prompt for Gemma", R.drawable.ic_sparkle) { host.push(AssistantPage(host)) })
+        addView(ui.listItem("Beacon", "Offline hike assistant: a rule-based briefing with mountain weather, and a prompt for Gemma", R.drawable.ic_sparkle) { host.push(AssistantPage(host)) })
         addView(ui.listItem("Safety & location", "Grid reference, share location, emergency numbers", R.drawable.ic_sos) { host.push(SafetyPage(host)) })
         addView(ui.listItem("Settings", "OS API key, units, pace, alerts, map sources", R.drawable.ic_tune) { host.push(SettingsPage(host)) })
         if (!host.wide) addView(ui.text("Unfold your phone for a side-by-side map and panel layout.", Ui.T.CAPTION))

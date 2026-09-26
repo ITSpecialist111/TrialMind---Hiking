@@ -522,6 +522,7 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         val heading = headingDeg
         dial.headingDeg = heading
         dial.position = here
+        dial.imperial = s.imperial
         val next = latLonOrNull(s.nextLat, s.nextLon)
         val ahead = latLonOrNull(s.aheadLat, s.aheadLon)
         val target = latLonOrNull(s.targetLat, s.targetLon)

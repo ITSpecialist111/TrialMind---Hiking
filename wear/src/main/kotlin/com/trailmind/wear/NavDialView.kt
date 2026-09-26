@@ -6,11 +6,15 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import com.trailmind.core.geo.LatLon
+import com.trailmind.core.geo.TrackPoint
+import com.trailmind.core.nav.DistanceMarks
+import com.trailmind.core.nav.RouteGuide
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -28,11 +32,15 @@ class NavDialView(ctx: Context) : View(ctx) {
     var position: LatLon? = null
         set(v) { field = v; invalidate() }
     var route: List<LatLon> = emptyList()
-        set(v) { field = v; invalidate() }
+        set(v) { field = v; updateMarks(); invalidate() }
+    /** Distance marks go every mile rather than every kilometre. */
+    var imperial = false
+        set(v) { if (field != v) { field = v; updateMarks(); invalidate() } }
     var track: List<List<LatLon>> = emptyList()
         set(v) { field = v; invalidate() }
     var onTap: (() -> Unit)? = null
 
+    private var marks: List<LatLon> = emptyList()
     private var pointerDeg: Double? = null
     private var scaleIndex = 2
     /** Metres from the centre to the edge of the breadcrumb plot. */
@@ -50,6 +58,10 @@ class NavDialView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    private fun updateMarks() {
+        marks = if (route.size < 2) emptyList() else DistanceMarks.along(RouteGuide(route.map { TrackPoint(it.lat, it.lon) }), DistanceMarks.stepM(imperial))
+    }
+
     private val density = resources.displayMetrics.density
     private fun dp(v: Float) = v * density
     private val bold = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -62,6 +74,10 @@ class NavDialView(ctx: Context) : View(ctx) {
     private val pointerLine = stroke(Color.WHITE, 4f)
     private val youPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 205, 64); style = Paint.Style.FILL }
     private val startPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(127, 209, 174); style = Paint.Style.FILL }
+    private val markFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; style = Paint.Style.FILL }
+    private val markRing = stroke(Color.rgb(199, 125, 219), 1.5f)
+    private val markText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(10f); textAlign = Paint.Align.CENTER; typeface = bold }
+    private val rect = RectF()
     private val path = Path()
     private val clip = Path()
     private val pt = FloatArray(2)
@@ -115,6 +131,17 @@ class NavDialView(ctx: Context) : View(ctx) {
             line(route, routePaint)
             track.forEach { line(it, trackPaint) }
             track.firstOrNull()?.firstOrNull()?.let { project(it); canvas.drawCircle(pt[0], pt[1], dp(5f), startPaint) }
+            val every = DistanceMarks.every(DistanceMarks.stepM(imperial) * k, dp(28f).toDouble())
+            val r = dp(7f)
+            for (i in every..marks.size step every) {
+                project(marks[i - 1])
+                val label = i.toString()
+                val half = maxOf(r, markText.measureText(label) / 2 + dp(3f))
+                rect.set(pt[0] - half, pt[1] - r, pt[0] + half, pt[1] + r)
+                canvas.drawRoundRect(rect, r, r, markFill)
+                canvas.drawRoundRect(rect, r, r, markRing)
+                canvas.drawText(label, pt[0], pt[1] + markText.textSize * 0.36f, markText)
+            }
             canvas.restore()
         }
 

@@ -25,6 +25,7 @@ import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
+import com.trailmind.core.nav.DistanceMarks
 
 /** The map plus its floating controls: status chips, route guidance card, go-to target, recording bar. */
 class MapScreen(private val host: MainActivity) : TileMapView.Listener {
@@ -307,6 +308,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var targetShown: String? = null
     private var statsShown: String? = null
     private var waypointsRouteId = Long.MIN_VALUE
+    private var distanceMarksKey: Any? = null
 
     private fun updateGps(f: Fix?) {
         val text = if (f == null) {
@@ -325,6 +327,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         if (routeId != waypointsRouteId) {
             waypointsRouteId = routeId
             mapView.waypoints = route?.data?.waypoints?.map { MapMarker(it.latLon(), it.name) } ?: emptyList()
+        }
+        val marksKey = route?.let { it to app.prefs.imperial }
+        if (marksKey != distanceMarksKey) {
+            distanceMarksKey = marksKey
+            mapView.distanceStepM = DistanceMarks.stepM(app.prefs.imperial)
+            mapView.distanceMarks = route?.let { DistanceMarks.along(it.guide, mapView.distanceStepM) } ?: emptyList()
         }
         if (route == null) { navShown = null; navCard.removeAllViews(); navCard.visibility = View.GONE; return }
         val imperial = app.prefs.imperial

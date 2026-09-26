@@ -19,6 +19,7 @@ import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
+import com.trailmind.core.nav.DistanceMarks
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
@@ -89,6 +90,10 @@ class TileMapView(context: Context) : View(context) {
 
     var route: MercatorLine? = null
         set(v) { field = v; invalidate() }
+    /** Points along [route] every [distanceStepM]; element i is labelled i + 1. */
+    var distanceMarks: List<LatLon> = emptyList()
+        set(v) { field = v; invalidate() }
+    var distanceStepM = 1000.0
     var track: MercatorLine? = null
         set(v) { field = v; invalidate() }
     var waypoints: List<MapMarker> = emptyList()
@@ -133,6 +138,10 @@ class TileMapView(context: Context) : View(context) {
     private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(110, 25, 118, 210) }
     private val wpFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(142, 36, 170) }
+    private val markRing = strokePaint(Color.rgb(142, 36, 170), 1.5f)
+    private val markText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(142, 36, 170); textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
+    }
     private val targetFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(211, 47, 47) }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(30, 30, 30); textSize = 12 * density; isFakeBoldText = true
@@ -284,6 +293,7 @@ class TileMapView(context: Context) : View(context) {
         drawTiles(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
         track?.let { drawLine(canvas, it, trackPaint, w, h) }
+        drawDistanceMarks(canvas, w, h)
         drawWaypoints(canvas, w, h)
         drawTarget(canvas, w, h)
         drawPosition(canvas, w, h)
@@ -386,6 +396,24 @@ class TileMapView(context: Context) : View(context) {
 
     private fun toScreenX(lon: Double, w: Float) = (WebMercator.lonToX(lon, zoom) - WebMercator.lonToX(centerLon, zoom) + w / 2).toFloat()
     private fun toScreenY(lat: Double, h: Float) = (WebMercator.latToY(lat, zoom) - WebMercator.latToY(centerLat, zoom) + h / 2).toFloat()
+
+    private fun drawDistanceMarks(canvas: Canvas, w: Float, h: Float) {
+        if (distanceMarks.isEmpty()) return
+        val every = DistanceMarks.every(distanceStepM / WebMercator.metresPerPixel(centerLat, zoom), 56.0 * density)
+        val r = 8 * density
+        for (k in every..distanceMarks.size step every) {
+            val m = distanceMarks[k - 1]
+            val x = toScreenX(m.lon, w)
+            val y = toScreenY(m.lat, h)
+            if (x < -r || y < -r || x > w + r || y > h + r) continue
+            val label = k.toString()
+            val half = maxOf(r, markText.measureText(label) / 2 + 4 * density)
+            dst.set(x - half, y - r, x + half, y + r)
+            canvas.drawRoundRect(dst, r, r, white)
+            canvas.drawRoundRect(dst, r, r, markRing)
+            canvas.drawText(label, x, y + markText.textSize * 0.36f, markText)
+        }
+    }
 
     private fun drawWaypoints(canvas: Canvas, w: Float, h: Float) {
         var placed = 0

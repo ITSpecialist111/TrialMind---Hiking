@@ -3,10 +3,12 @@ package com.trailmind.app.ui
 import android.content.Intent
 import android.net.Uri
 import android.text.InputType
+import android.text.format.DateUtils
 import android.view.View
 import android.widget.TextView
 import com.trailmind.app.Async
 import com.trailmind.app.R
+import com.trailmind.app.data.OpenMeteo
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.PackStatus
@@ -31,7 +33,9 @@ import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
 import com.trailmind.core.map.TileCoverage
 import com.trailmind.core.map.TilePolicy
+import com.trailmind.core.stats.HighPoint
 import com.trailmind.core.stats.HikeEstimator
+import com.trailmind.core.weather.PointForecast
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -305,6 +309,8 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
     private var routeId: Long? = presetRouteId
     private var data: RouteData? = null
     private var startMs: Long = nextQuarterHour()
+    private var forecast: PointForecast? = null
+    private var fetching = false
 
     override fun onShow() {
         Async.run({ app.db.routes() }) { r ->
@@ -316,7 +322,11 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
 
     private fun load() {
         val id = routeId ?: run { refresh(); return }
-        Async.run({ app.db.routeData(id) }) { r -> data = r.getOrNull(); refresh() }
+        Async.run({ app.db.routeData(id) to OpenMeteo.saved(host, id) }) { r ->
+            data = r.getOrNull()?.first
+            forecast = r.getOrNull()?.second
+            refresh()
+        }
     }
 
     private fun input(d: RouteData): BriefingInput {
@@ -332,13 +342,42 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
             sun = Sun.times(date, start),
             plannedStartMs = startMs,
             imperial = app.prefs.imperial,
+            highPoint = HikeEstimator.highPoint(d.points, app.prefs.pace),
+            forecast = forecast,
         )
+    }
+
+    private fun weatherCard(id: Long, hp: HighPoint?): View = ui.card(spacing = 8) {
+        addView(ui.text("Mountain weather", Ui.T.TITLE))
+        val f = forecast
+        addView(ui.text(when {
+            hp == null -> "This route has no heights, so there's no high point to forecast."
+            fetching -> "Getting the forecast…"
+            f == null -> "Get the forecast for the high point (${Units.elevation(hp.eleM, app.prefs.imperial)}) before you go. " +
+                "It's saved on the phone, so the briefing below still has it without signal."
+            else -> "Saved ${DateUtils.getRelativeTimeSpanString(f.fetchedMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)}. " +
+                "The briefing below uses the hour you'd reach the high point."
+        }, Ui.T.CAPTION))
+        if (hp != null && !fetching) addView(ui.button(if (f == null) "Get forecast" else "Update forecast", R.drawable.ic_download, Ui.B.TONAL) { fetchForecast(id, hp) })
+        addView(ui.text(OpenMeteo.ATTRIBUTION, Ui.T.CAPTION))
+    }
+
+    private fun fetchForecast(id: Long, hp: HighPoint) {
+        fetching = true
+        refresh()
+        Async.run({ OpenMeteo.fetch(host, id, hp.position, hp.eleM) }) { r ->
+            fetching = false
+            r.onSuccess { if (id == routeId) forecast = it }
+                .onFailure { host.toast("Couldn't get the forecast: ${it.message ?: "no connection"}") }
+            refresh()
+        }
     }
 
     override fun render(): View = scaffold("Beacon") {
         addView(ui.card(spacing = 8) {
             addView(ui.text("How this works", Ui.T.LABEL))
-            addView(ui.text("Beacon builds a briefing on-device from your route, pace settings and sunset time using fixed rules (no AI, no internet). " +
+            addView(ui.text("Beacon builds a briefing on-device from your route, pace settings and sunset time using fixed rules (no AI). " +
+                "Only the mountain forecast needs internet, and it's saved for use without signal. " +
                 "For a richer write-up, it can hand a prompt to Google AI Edge Gallery, which runs Gemma locally. Edge Gallery has no app-to-app API, so the prompt is copied for you to paste. " +
                 "AI output can be wrong – never rely on it for safety decisions.", Ui.T.CAPTION))
         })
@@ -362,6 +401,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
         val d = data
         if (d == null || d.meta.id != routeId) { addView(ui.text("Loading…", Ui.T.CAPTION)); return@scaffold }
         val inp = input(d)
+        addView(weatherCard(d.meta.id, inp.highPoint))
         addView(ui.card(spacing = 8) {
             addView(ui.text("Offline briefing", Ui.T.TITLE))
             Briefing.ruleBased(inp).forEach { line ->

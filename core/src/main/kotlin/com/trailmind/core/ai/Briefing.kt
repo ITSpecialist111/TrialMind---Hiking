@@ -4,7 +4,10 @@ import com.trailmind.core.format.Units
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.SunTimes
+import com.trailmind.core.stats.HighPoint
 import com.trailmind.core.stats.HikeEstimate
+import com.trailmind.core.weather.MountainWeather
+import com.trailmind.core.weather.PointForecast
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -20,6 +23,9 @@ data class BriefingInput(
     val plannedStartMs: Long,
     val zone: ZoneId = ZoneId.systemDefault(),
     val imperial: Boolean = false,
+    val highPoint: HighPoint? = null,
+    /** Forecast for [highPoint], fetched earlier and kept offline. */
+    val forecast: PointForecast? = null,
 )
 
 /**
@@ -29,6 +35,9 @@ data class BriefingInput(
  */
 object Briefing {
     private val clock = DateTimeFormatter.ofPattern("HH:mm")
+    private val dayClock = DateTimeFormatter.ofPattern("EEE HH:mm")
+    /** Moving time plus breaks. */
+    private const val WITH_BREAKS = 1.2
 
     fun ruleBased(input: BriefingInput): List<String> {
         val e = input.estimate
@@ -36,8 +45,8 @@ object Briefing {
         lines += "${Units.distance(e.distanceM, input.imperial)} with ${Units.elevation(e.ascentM, input.imperial)} of ascent " +
             "and ${Units.elevation(e.descentM, input.imperial)} of descent."
         lines += "Estimated moving time ${Units.minutes(e.naismithMinutes)} (Naismith/Langmuir) – " +
-            "${Units.minutes(e.toblerMinutes)} (Tobler). Add breaks: plan for ${Units.minutes(e.planningMinutes * 1.2)}."
-        val finish = input.plannedStartMs + (e.planningMinutes * 1.2 * 60_000).toLong()
+            "${Units.minutes(e.toblerMinutes)} (Tobler). Add breaks: plan for ${Units.minutes(e.planningMinutes * WITH_BREAKS)}."
+        val finish = input.plannedStartMs + (e.planningMinutes * WITH_BREAKS * 60_000).toLong()
         val sunset = input.sun?.sunsetMs
         if (sunset != null) {
             val margin = (sunset - finish) / 60_000
@@ -49,7 +58,20 @@ object Briefing {
         } else if (input.sun?.polarNight == true) {
             lines += "⚠ No sunrise at this location today."
         }
-        input.maxEleM?.let {
+        val hp = input.highPoint
+        val forecast = input.forecast
+        if (hp != null && forecast != null) {
+            val eta = input.plannedStartMs + (hp.minutesFromStart * WITH_BREAKS * 60_000).toLong()
+            val where = "the high point (${Units.elevation(hp.eleM, input.imperial)})"
+            val hour = forecast.at(eta)
+            if (hour == null) {
+                lines += "The saved forecast doesn't reach ${fmt(eta, input.zone, dayClock)}, when you'd be at $where: update it nearer the time."
+            } else {
+                lines += "Forecast for $where at about ${fmt(eta, input.zone)}: ${MountainWeather.summary(hour, input.imperial)} " +
+                    "(Open-Meteo, fetched ${fmt(forecast.fetchedMs, input.zone, dayClock)})."
+                MountainWeather.warnings(hour, hp.eleM, input.imperial).forEach { lines += "⚠ $it" }
+            }
+        } else input.maxEleM?.let {
             if (it >= 600) lines += "High point ${Units.elevation(it, input.imperial)}: expect it to be colder and windier than the valley (≈1°C per 150 m) and check the mountain forecast."
         }
         if (e.ascentM / (e.distanceM / 1000.0).coerceAtLeast(0.1) > 80) {
@@ -74,5 +96,5 @@ object Briefing {
         appendLine("- Planned start: ${fmt(input.plannedStartMs, input.zone)} local time")
     }
 
-    private fun fmt(ms: Long, zone: ZoneId): String = clock.format(Instant.ofEpochMilli(ms).atZone(zone))
+    private fun fmt(ms: Long, zone: ZoneId, format: DateTimeFormatter = clock): String = format.format(Instant.ofEpochMilli(ms).atZone(zone))
 }

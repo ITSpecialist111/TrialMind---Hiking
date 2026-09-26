@@ -1,6 +1,7 @@
 package com.trailmind.core.stats
 
 import com.trailmind.core.geo.Geo
+import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.TrackPoint
 import kotlin.math.abs
 import kotlin.math.exp
@@ -28,6 +29,9 @@ data class PaceSettings(
         require(conditionsFactor in 0.5..3.0) { "conditions factor must be 0.5-3" }
     }
 }
+
+/** A route's highest point and the planning time, before breaks, to walk there from the start. */
+data class HighPoint(val position: LatLon, val eleM: Double, val minutesFromStart: Double)
 
 /**
  * Walking-time estimates. These are rules of thumb for fit adults on paths: always allow extra for
@@ -71,6 +75,16 @@ object HikeEstimator {
             ascentM = ascent,
             descentM = descent,
         )
+    }
+
+    /** The first of the highest points of [points], or null when they have no heights. */
+    fun highPoint(points: List<TrackPoint>, pace: PaceSettings = PaceSettings()): HighPoint? {
+        var best = -1
+        var bestEle = Double.NEGATIVE_INFINITY
+        points.forEachIndexed { i, p -> val e = p.ele; if (e != null && e > bestEle) { best = i; bestEle = e } }
+        if (best < 0) return null
+        val minutes = if (best == 0) 0.0 else estimate(points.subList(0, best + 1), pace).planningMinutes
+        return HighPoint(points[best].latLon(), bestEle, minutes)
     }
 
     private const val TOBLER_A = 6.0
