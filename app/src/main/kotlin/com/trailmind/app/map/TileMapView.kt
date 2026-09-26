@@ -73,6 +73,7 @@ class TileMapView(context: Context) : View(context) {
     interface Listener {
         fun onCameraChanged() {}
         fun onLongPress(at: LatLon) {}
+        fun onSingleTap(at: LatLon) {}
         fun onFollowChanged(follow: Boolean) {}
     }
 
@@ -98,6 +99,10 @@ class TileMapView(context: Context) : View(context) {
     }.coerceAtMost(21.0)
 
     var route: MercatorLine? = null
+        set(v) { field = v; invalidate() }
+    var plannedLegs: List<Pair<MercatorLine, Boolean>> = emptyList()
+        set(v) { field = v; invalidate() }
+    var planControls: List<LatLon> = emptyList()
         set(v) { field = v; invalidate() }
     /** Points along [route] every [distanceStepM]; element i is labelled i + 1. */
     var distanceMarks: List<LatLon> = emptyList()
@@ -142,6 +147,12 @@ class TileMapView(context: Context) : View(context) {
     private val bgColor = Color.rgb(238, 241, 234)
     private val routeCasing = strokePaint(Color.WHITE, 8f)
     private val routePaint = strokePaint(Color.rgb(142, 36, 170), 5f)
+    private val planCasing = strokePaint(Color.WHITE, 8f)
+    private val planPaint = strokePaint(Color.rgb(0, 83, 92), 5f)
+    private val straightPaint = strokePaint(Color.rgb(0, 83, 92), 5f).apply {
+        pathEffect = DashPathEffect(floatArrayOf(9 * density, 7 * density), 0f)
+    }
+    private val controlPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 83, 92) }
     private val trackPaint = strokePaint(Color.rgb(240, 110, 20), 4f)
     private val targetLine = strokePaint(Color.rgb(211, 47, 47), 2.5f).apply {
         pathEffect = DashPathEffect(floatArrayOf(10 * density, 8 * density), 0f)
@@ -268,6 +279,18 @@ class TileMapView(context: Context) : View(context) {
 
     // --- gestures
 
+    private class PendingTap(val point: LatLon) {
+        lateinit var delivery: Runnable
+    }
+    private val pendingTaps = ArrayList<PendingTap>()
+
+    fun flushPendingTaps() {
+        pendingTaps.toList().forEach { tap ->
+            removeCallbacks(tap.delivery)
+            tap.delivery.run()
+        }
+    }
+
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
             zoomAround(d.focusX, d.focusY, ln(d.scaleFactor.toDouble()) / ln(2.0))
@@ -284,7 +307,15 @@ class TileMapView(context: Context) : View(context) {
             return true
         }
         override fun onDoubleTap(e: MotionEvent): Boolean {
+            pendingTaps.lastOrNull()?.let { pendingTaps.remove(it); removeCallbacks(it.delivery) }
             zoomAround(e.x, e.y, 1.0)
+            return true
+        }
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+            val tap = PendingTap(screenToLatLon(e.x, e.y))
+            tap.delivery = Runnable { if (pendingTaps.remove(tap)) listener?.onSingleTap(tap.point) }
+            pendingTaps += tap
+            postDelayed(tap.delivery, android.view.ViewConfiguration.getDoubleTapTimeout().toLong())
             return true
         }
         override fun onLongPress(e: MotionEvent) {
@@ -307,6 +338,8 @@ class TileMapView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        pendingTaps.forEach { removeCallbacks(it.delivery) }
+        pendingTaps.clear()
         provider.removeListener(tileListener)
         super.onDetachedFromWindow()
     }
@@ -321,6 +354,16 @@ class TileMapView(context: Context) : View(context) {
         drawOfflineAreas(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
         track?.let { drawLine(canvas, it, trackPaint, w, h) }
+        plannedLegs.forEach { (line, snapped) ->
+            drawLine(canvas, line, planCasing, w, h)
+            drawLine(canvas, line, if (snapped) planPaint else straightPaint, w, h)
+        }
+        planControls.forEach { point ->
+            val x = toScreenX(point.lon, w)
+            val y = toScreenY(point.lat, h)
+            canvas.drawCircle(x, y, 6 * density, white)
+            canvas.drawCircle(x, y, 4 * density, controlPaint)
+        }
         drawDistanceMarks(canvas, w, h)
         drawWaypoints(canvas, w, h)
         drawTarget(canvas, w, h)

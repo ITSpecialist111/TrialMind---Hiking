@@ -48,6 +48,7 @@ class RoutesPage(host: MainActivity) : Page(host) {
 
     override fun render(): View = scaffold("Routes", actions = listOf(
         ui.button("Find", R.drawable.ic_route, Ui.B.TONAL) { host.push(RouteFinderPage(host)) },
+        ui.button("Plan", R.drawable.ic_map, Ui.B.TONAL) { host.map.startPlan() },
         ui.button("Import", R.drawable.ic_upload, Ui.B.TONAL) { host.pickGpx() },
     )) {
         activeId = app.nav.active?.data?.meta?.id
@@ -56,7 +57,7 @@ class RoutesPage(host: MainActivity) : Page(host) {
             list == null -> addView(ui.text("Loading…", Ui.T.CAPTION))
             list.isEmpty() -> addView(ui.card(spacing = 10) {
                 addView(ui.text("No routes yet", Ui.T.TITLE))
-                addView(ui.text("Find a waymarked route near you or by name, or import a GPX track or route (from Komoot, OS Maps, AllTrails exports, a club website…). TrailMind shows it on the map, estimates timings and warns you if you stray from it.", Ui.T.BODY))
+                addView(ui.text("Find a waymarked route, plan a walk on the map, or import a GPX track or route. TrailMind shows it on the map, estimates timings and warns you if you stray from it.", Ui.T.BODY))
                 addView(ui.text("You can also open or share a .gpx file to TrailMind from your file manager or browser.", Ui.T.CAPTION))
                 addView(ui.button("Find routes", R.drawable.ic_route) { host.push(RouteFinderPage(host)) })
                 addView(ui.button("Import GPX file", R.drawable.ic_upload, Ui.B.TONAL) { host.pickGpx() })

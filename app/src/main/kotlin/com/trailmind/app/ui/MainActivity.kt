@@ -343,6 +343,7 @@ class MainActivity : Activity() {
 
     /** Switches tab. With [keepStack] the current page stack is re-attached (used after fold/unfold). */
     fun showTab(t: Tab, keepStack: Boolean = false) {
+        if (!keepStack && t != Tab.MAP && t != tab) app.planner.cancelPending()
         if (!keepStack && t != tab) setMapFullScreen(false)
         if (!keepStack) {
             val onboarding = (stack.firstOrNull() as? OnboardingPage)?.takeIf { !app.prefs.onboardingAccepted }

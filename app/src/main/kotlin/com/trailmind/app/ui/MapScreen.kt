@@ -26,6 +26,10 @@ import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.nav.DistanceMarks
+import com.trailmind.core.stats.TrackStats
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** The map plus its floating controls: status chips, route guidance card, go-to target, recording bar. */
 class MapScreen(private val host: MainActivity) : TileMapView.Listener {
@@ -104,6 +108,14 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val onTracking: () -> Unit = { updateTracking() }
     private val onTiles: () -> Unit = { updateHint(); updateOfflineAreas() }
     private val onHeading: () -> Unit = { mapView.headingDeg = host.headingDeg?.toFloat() }
+    private val onPlan: (String?) -> Unit = { message ->
+        if (message != null) host.toast(message)
+        updatePlanner()
+        app.planner.takeSaveResult()?.onSuccess { id ->
+            host.showTab(MainActivity.Tab.ROUTES)
+            host.push(RouteDetailPage(host, id))
+        }?.onFailure { host.toast("Could not save this route.") }
+    }
 
     init {
         mapView.listener = this
@@ -151,6 +163,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         app.nav.addListener(onNav)
         TrackingState.addListener(onTracking)
         app.tiles.addListener(onTiles)
+        app.planner.addListener(onPlan)
         host.addHeadingListener(onHeading)
         app.location.latest?.let(onFix)
         applySource()
@@ -164,6 +177,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         app.nav.removeListener(onNav)
         TrackingState.removeListener(onTracking)
         app.tiles.removeListener(onTiles)
+        app.planner.removeListener(onPlan)
         host.removeHeadingListener(onHeading)
         Async.main.removeCallbacks(ticker)
     }
@@ -321,15 +335,105 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     override fun onLongPress(at: LatLon) {
         val grid = OsGrid.fromWgs84(at)?.format(8)
-        val items = arrayOf("Go to here (bearing & distance)", "Copy position", "Offline map of this area…")
+        val items = arrayOf("Plan a route from here", "Go to here (bearing & distance)", "Copy position", "Offline map of this area…")
         ui.dialog().setTitle(grid ?: Units.latLon(at.lat, at.lon))
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> app.nav.setTarget(at)
-                    1 -> host.copy("Position", listOfNotNull(grid, Units.latLon(at.lat, at.lon)).joinToString(" · "))
-                    2 -> { mapView.setCenter(at.lat, at.lon, maxOf(mapView.zoom, 12.0)); host.showTab(MainActivity.Tab.OFFLINE) }
+                    0 -> startPlan(at)
+                    1 -> app.nav.setTarget(at)
+                    2 -> host.copy("Position", listOfNotNull(grid, Units.latLon(at.lat, at.lon)).joinToString(" · "))
+                    3 -> { mapView.setCenter(at.lat, at.lon, maxOf(mapView.zoom, 12.0)); host.showTab(MainActivity.Tab.OFFLINE) }
                 }
             }.show()
+    }
+
+    override fun onSingleTap(at: LatLon) {
+        if (app.planner.active) app.planner.add(at)
+    }
+
+    fun startPlan(at: LatLon? = null) {
+        mapView.flushPendingTaps()
+        if (app.planner.active && app.planner.plan.controlPoints.isNotEmpty()) {
+            ui.confirm("Start a new plan?", "The unsaved plan will be discarded.", "Discard", danger = true) {
+                app.planner.start(at)
+                host.showMap()
+            }
+        } else {
+            app.planner.start(at)
+            host.showMap()
+        }
+    }
+
+    private fun updatePlanner() {
+        val planner = app.planner
+        mapView.plannedLegs = if (planner.active) planner.plan.legs.flatMap { leg ->
+            leg.parts.map { part -> MercatorLine.of(part.points.map { it.latLon() }) to part.snapped }
+        } else emptyList()
+        mapView.planControls = if (planner.active) planner.plan.controlPoints else emptyList()
+        updateTracking(force = true)
+    }
+
+    fun refreshPlannerDisplay() {
+        if (app.planner.active) updatePlanner()
+    }
+
+    private fun plannerCard() {
+        val planner = app.planner
+        val points = planner.plan.controlPoints
+        val est = planner.plan.estimate(app.prefs.pace)
+        val summary = TrackStats.summarize(planner.plan.line)
+        val card = ui.card(padding = 12, spacing = 6).apply { elevation = host.dp(6).toFloat() }
+        card.addView(ui.row {
+            addView(ui.text("Plan a route", Ui.T.TITLE), ui.lp(0, weight = 1f))
+            addView(miniIcon(R.drawable.ic_close, "Close planner") { closePlanner() })
+        })
+        card.addView(ui.row(spacing = 8) {
+            addView(ui.stat("Distance", Units.distance(summary.distanceM, app.prefs.imperial)), ui.lp(0, weight = 1f))
+            addView(ui.stat("Ascent", Units.elevation(summary.ascentM, app.prefs.imperial)), ui.lp(0, weight = 1f))
+            addView(ui.stat("Time", Units.minutes(est.planningMinutes)), ui.lp(0, weight = 1f))
+        })
+        card.addView(ui.switch("Snap to paths", planner.snap) { mapView.flushPendingTaps(); planner.snap = it; updatePlanner() })
+        card.addView(ui.flow(spacing = 4) {
+            addView(ui.button("Undo", R.drawable.ic_remove, Ui.B.TONAL) { mapView.flushPendingTaps(); planner.undo() }.apply { isEnabled = points.isNotEmpty() })
+            addView(ui.button("Clear", R.drawable.ic_delete, Ui.B.TONAL) { mapView.flushPendingTaps(); planner.clear() }.apply { isEnabled = points.isNotEmpty() })
+            addView(ui.button("Back to start", R.drawable.ic_route, Ui.B.TONAL) { mapView.flushPendingTaps(); planner.backToStart() }.apply {
+                isEnabled = points.size >= 2 && !planner.plan.isLoop && !planner.pending
+            })
+            addView(ui.button("Save", R.drawable.ic_folder) { savePlan() }.apply { isEnabled = points.size >= 2 && !planner.pending && !planner.saving })
+        })
+        card.addView(ui.text(if (planner.pending) "Finding a path…" else if (points.isEmpty()) "Tap the map to add a start point." else if (points.size == 1) "1 point" else "${points.size} points", Ui.T.CAPTION))
+        planner.notice?.let { card.addView(ui.text(it, Ui.T.CAPTION)) }
+        card.addView(ui.text("Routing: BRouter, © OpenStreetMap contributors", Ui.T.CAPTION))
+        recordBar.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+    }
+
+    private fun closePlanner() {
+        mapView.flushPendingTaps()
+        if (app.planner.plan.controlPoints.isEmpty()) app.planner.close()
+        else ui.confirm("Discard this plan?", "The unsaved points will be lost.", "Discard", danger = true) { app.planner.close() }
+    }
+
+    private fun savePlan() {
+        mapView.flushPendingTaps()
+        if (app.planner.saving || app.planner.pending || app.planner.plan.legs.isEmpty()) return
+        val name = SimpleDateFormat("'Walk' d MMM", Locale.UK).format(Date())
+        val input = ui.input("Route name", name)
+        val box = FrameLayout(host).apply {
+            setPadding(host.dp(20), host.dp(8), host.dp(20), 0)
+            addView(input)
+        }
+        val dialog = ui.dialog().setTitle("Save route").setView(box)
+            .setPositiveButton("Save", null).setNegativeButton("Cancel", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+                val title = input.text.toString().trim()
+                if (title.isEmpty()) { input.error = "Give the walk a name."; return@setOnClickListener }
+                if (!app.planner.active || app.planner.pending || app.planner.plan.legs.isEmpty()) return@setOnClickListener
+                dialog.dismiss()
+                app.planner.save(title)
+            }
+        }
+        dialog.show()
     }
 
     // ---------------------------------------------------------------- overlays
@@ -482,6 +586,11 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         if (status != TrackingState.Status.IDLE) clearShownTrack()
         mapView.track = shownTrack ?: TrackingState.line
         mapView.invalidate()
+        if (app.planner.active) {
+            recordBar.removeAllViews()
+            plannerCard()
+            return
+        }
         if (status == builtStatus && !force) { updateRecordStats(); return }
         builtStatus = status
         if (status != TrackingState.Status.IDLE) recoverCard.visibility = View.GONE

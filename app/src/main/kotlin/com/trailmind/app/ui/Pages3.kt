@@ -556,14 +556,14 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
         addView(ui.card(spacing = 6) {
             addView(ui.text("Units & pace", Ui.T.TITLE))
-            addView(ui.switch("Miles and feet", prefs.imperial) { prefs.imperial = it; app.nav.settingsChanged(); refresh() })
+            addView(ui.switch("Miles and feet", prefs.imperial) { prefs.imperial = it; app.nav.settingsChanged(); host.map.refreshPlannerDisplay(); refresh() })
             addView(ui.text("Flat walking speed", Ui.T.LABEL))
             addView(chips(listOf(3.5, 4.0, 4.5, 5.0, 5.5, 6.0).map { Units.speedKmh(it / 3.6, prefs.imperial) to it }, prefs.flatSpeedKmh) {
-                prefs.flatSpeedKmh = it; app.nav.settingsChanged(); refresh()
+                prefs.flatSpeedKmh = it; app.nav.settingsChanged(); host.map.refreshPlannerDisplay(); refresh()
             })
             addView(ui.text("Conditions / group factor", Ui.T.LABEL))
             addView(chips(listOf("Good ×1.0" to 1.0, "Wet ×1.15" to 1.15, "Rough ×1.3" to 1.3, "Snow/slow ×1.5" to 1.5), prefs.conditionsFactor) {
-                prefs.conditionsFactor = it; app.nav.settingsChanged(); refresh()
+                prefs.conditionsFactor = it; app.nav.settingsChanged(); host.map.refreshPlannerDisplay(); refresh()
             })
         })
 
