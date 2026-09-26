@@ -10,13 +10,20 @@ class TileSourceTest {
     private val os = TileSources.builtIns().filter { it.requiresKey }
 
     @Test
-    fun osSourcesMarkPremiumFromZoom17() {
+    fun osSourcesMarkPremiumWhereOsDoes() {
         assertTrue(os.isNotEmpty())
         os.forEach { s ->
-            assertEquals(17, s.premiumFromZoom, s.id)
-            assertFalse(s.isPremium(16), s.id)
-            assertTrue(s.isPremium(17), s.id)
+            // OS: zoom 17+ in Web Mercator, and Leisure zoom 6+ in British National Grid.
+            val from = if (s.grid == TileGrid.BRITISH_NATIONAL_GRID) 6 else 17
+            assertEquals(from, s.premiumFromZoom, s.id)
+            assertFalse(s.isPremium(from - 1), s.id)
+            assertTrue(s.isPremium(from), s.id)
         }
+    }
+
+    @Test
+    fun explorerAndLandrangerIsNeverDownloadable() {
+        assertFalse(TileSources.builtIns().single { it.id == TileSources.OS_LEISURE }.offlineDownloadAllowed)
     }
 
     @Test

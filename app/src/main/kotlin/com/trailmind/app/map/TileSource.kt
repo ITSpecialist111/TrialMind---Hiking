@@ -5,9 +5,12 @@ import com.trailmind.app.data.Prefs
 import com.trailmind.core.map.TilePolicy
 import java.util.Calendar
 
+/** How a source's z/x/y tiles are laid out. */
+enum class TileGrid { WEB_MERCATOR, BRITISH_NATIONAL_GRID }
+
 /**
- * A raster tile source in Web Mercator (EPSG:3857). Either online (URL template) or an imported
- * MBTiles pack ([packId]).
+ * A raster tile source, in Web Mercator (EPSG:3857) unless [grid] says otherwise. Either online (URL
+ * template) or an imported MBTiles pack ([packId]).
  */
 data class TileSource(
     val id: String,
@@ -24,6 +27,7 @@ data class TileSource(
     val packId: Long? = null,
     /** First zoom of charged Premium data; the provider's terms allow caching those tiles for 24 hours only. */
     val premiumFromZoom: Int? = null,
+    val grid: TileGrid = TileGrid.WEB_MERCATOR,
 ) {
     val isOnline: Boolean get() = template != null
 
@@ -35,6 +39,7 @@ object TileSources {
     const val OS_OUTDOOR = "os_outdoor"
     const val OS_ROAD = "os_road"
     const val OS_LIGHT = "os_light"
+    const val OS_LEISURE = "os_leisure"
     const val CUSTOM = "custom"
 
     private fun year() = Calendar.getInstance().get(Calendar.YEAR)
@@ -52,8 +57,23 @@ object TileSources {
         premiumFromZoom = 17,
         note = "Needs your own free OS Data Hub API key. Zoom 7–16 is OS OpenData; zoom 17–20 is " +
             "Premium, counts against your plan's free allowance and is kept for 24 hours at most. " +
-            "Offline packs only include OpenData zooms. The 1:25k Explorer-style 'Leisure' layer is only " +
-            "offered in British National Grid (EPSG:27700), which TrailMind does not render yet.",
+            "Offline packs only include OpenData zooms. For public rights of way, use OS Maps – Explorer & Landranger.",
+    )
+
+    private fun osLeisure() = TileSource(
+        id = OS_LEISURE,
+        name = "OS Maps – Explorer & Landranger",
+        template = "https://api.os.uk/maps/raster/v1/zxy/Leisure_27700/{z}/{x}/{y}.png?key={key}",
+        attribution = "Contains OS data © Crown copyright and database rights ${year()}",
+        minZoom = 0,
+        maxZoom = 9,
+        requiresKey = true,
+        premiumFromZoom = 6,
+        grid = TileGrid.BRITISH_NATIONAL_GRID,
+        note = "OS's paper-map style, with public rights of way (footpaths, bridleways and byways) and open access " +
+            "land: 1:50,000 Landranger zoomed out, 1:25,000 Explorer zoomed in. Great Britain only. Needs your OS Data " +
+            "Hub key. Everything more detailed than 1:100,000 is Premium: it counts against your plan's allowance " +
+            "and is kept for 24 hours at most, so it can't be saved in offline packs.",
     )
 
     fun builtIns(): List<TileSource> = listOf(
@@ -68,6 +88,7 @@ object TileSources {
                 "downloading, so TrailMind never pre-fetches these tiles; viewed tiles are cached briefly.",
         ),
         osSource(OS_OUTDOOR, "Outdoor", "Outdoor"),
+        osLeisure(),
         osSource(OS_ROAD, "Road", "Road"),
         osSource(OS_LIGHT, "Light", "Light"),
     )

@@ -4,6 +4,7 @@ import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.MagneticCheck
+import com.trailmind.core.geo.NorthAnchor
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.PathJoin
 import com.trailmind.core.geo.Sun
@@ -123,6 +124,24 @@ class GeoTest {
     }
 
     @Test
+    fun osGridInverseMatchesOrdnanceSurveyWorkedExample() {
+        val p = OsGrid.unprojectOsgb36(651409.903, 313177.270)
+        assertEquals(52.0 + 39.0 / 60 + 27.2531 / 3600, p.lat, 1e-7)
+        assertEquals(1.0 + 43.0 / 60 + 4.5177 / 3600, p.lon, 1e-7)
+    }
+
+    @Test
+    fun osGridRoundTripsThroughWgs84() {
+        // Forest of Dean, Ben Nevis, Westminster, John o' Groats, Land's End.
+        for (p in listOf(LatLon(51.7834, -2.5392), LatLon(56.796891, -5.003675), LatLon(51.5007, -0.1246), LatLon(58.64, -3.07), LatLon(50.07, -5.71))) {
+            val g = OsGrid.project(p)
+            val back = OsGrid.toWgs84(g.easting, g.northing)
+            assertEquals(p.lat, back.lat, 1e-7, "lat of $p")
+            assertEquals(p.lon, back.lon, 1e-7, "lon of $p")
+        }
+    }
+
+    @Test
     fun gridLetters() {
         assertEquals("SV", OsGrid.letters(0.0, 0.0))
         assertEquals("NN", OsGrid.letters(216667.0, 771278.0))
@@ -177,5 +196,37 @@ class GeoTest {
         assertTrue(c.disturbed)
         repeat(30) { c.add(0.0, 19.8, -45.1, 0.0, 0.0, 1.0) }
         assertFalse(c.disturbed)
+    }
+
+    // Row-major rotation matrices for a device lying flat whose top points [azimuthDeg] in the rotation vector's frame.
+    private fun flat(azimuthDeg: Double): FloatArray {
+        val a = Math.toRadians(azimuthDeg)
+        val s = kotlin.math.sin(a).toFloat()
+        val c = kotlin.math.cos(a).toFloat()
+        return floatArrayOf(c, s, 0f, -s, c, 0f, 0f, 0f, 1f)
+    }
+
+    @Test
+    fun northAnchorLeavesACorrectRotationVectorAlone() {
+        val n = NorthAnchor()
+        assertEquals(0.0, n.offsetDeg)
+        // Flat, pointing magnetic north, and the rotation vector agrees: the field lies along the device's y.
+        n.add(flat(0.0), 0.0, 19.8, -45.1)
+        assertEquals(0.0, n.offsetDeg, 0.01)
+    }
+
+    @Test
+    fun northAnchorCorrectsARotationVectorWhoseNorthIsOff() {
+        // The watch points magnetic north, but a gyro-only rotation vector started 90 degrees off says east.
+        val r = flat(90.0)
+        val n = NorthAnchor()
+        n.add(r, 0.0, 19.8, -45.1)
+        val azimuth = Math.toDegrees(kotlin.math.atan2(r[1].toDouble(), r[4].toDouble()))
+        assertEquals(90.0, azimuth, 0.01)
+        assertEquals(0.0, Geo.normalizeDeg(azimuth - n.offsetDeg), 0.01)
+        // Smoothing works across 180: readings of 170 and 190 average to 180, not 0.
+        val w = NorthAnchor()
+        repeat(200) { i -> w.add(flat(if (i % 2 == 0) 170.0 else 190.0), 0.0, 19.8, -45.1) }
+        assertEquals(180.0, kotlin.math.abs(w.offsetDeg), 3.0)
     }
 }

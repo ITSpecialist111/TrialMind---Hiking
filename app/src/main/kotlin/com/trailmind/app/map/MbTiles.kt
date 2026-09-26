@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.TileKey
+import com.trailmind.core.map.TileFootprint
 import java.io.Closeable
 import java.io.File
 
@@ -40,6 +41,22 @@ class MbTiles private constructor(val file: File, private val db: SQLiteDatabase
 
     fun zoomRange(): IntRange? = db.rawQuery("SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles", null).use {
         if (it.moveToFirst() && !it.isNull(0)) it.getInt(0)..it.getInt(1) else null
+    }
+
+    /** The tiles of the most detailed zoom that has at most [maxTiles], or null when the file is empty. */
+    fun footprint(maxTiles: Int): TileFootprint? {
+        // Inlined, not bound: a bound string would compare as TEXT, which is greater than every count.
+        val z = db.rawQuery(
+            "SELECT zoom_level FROM tiles GROUP BY zoom_level HAVING COUNT(*) <= $maxTiles ORDER BY zoom_level DESC LIMIT 1", null,
+        ).use { if (it.moveToFirst()) it.getInt(0) else return null }
+        return db.rawQuery("SELECT tile_column, tile_row FROM tiles WHERE zoom_level=?", arrayOf(z.toString())).use { c ->
+            val xs = IntArray(c.count)
+            val ys = IntArray(c.count)
+            val lastRow = (1 shl z) - 1
+            var i = 0
+            while (c.moveToNext()) { xs[i] = c.getInt(0); ys[i] = lastRow - c.getInt(1); i++ }
+            TileFootprint.of(z, xs, ys)
+        }
     }
 
     override fun close() = db.close()

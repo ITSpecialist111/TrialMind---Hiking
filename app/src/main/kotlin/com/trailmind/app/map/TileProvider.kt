@@ -12,6 +12,7 @@ import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackMeta
 import com.trailmind.core.geo.TileKey
+import com.trailmind.core.map.TileFootprint
 import com.trailmind.core.map.TilePolicy
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -53,6 +54,7 @@ class TileProvider(private val app: TrailMindApp) {
     private val netPermits = Semaphore(2)
     private val listeners = CopyOnWriteArraySet<() -> Unit>()
     private val packHandles = ConcurrentHashMap<Long, MbTiles>()
+    private val footprints = ConcurrentHashMap<Long, Pair<String, TileFootprint?>>()
     private val cacheRoot = File(app.cacheDir, "tiles")
 
     @Volatile var packs: List<PackMeta> = emptyList()
@@ -243,6 +245,15 @@ class TileProvider(private val app: TrailMindApp) {
         else list.filter { it.kind == PackKind.DOWNLOAD && it.sourceId == source.id }
     }
 
+    /** [p]'s coverage for outlining on the map, cached until its tiles change. Reads the pack file, so not on the main thread. */
+    fun footprint(p: PackMeta): TileFootprint? {
+        val stamp = "${p.tileDone}:${p.status}"
+        footprints[p.id]?.takeIf { it.first == stamp }?.let { return it.second }
+        val f = runCatching { openPack(p)?.footprint(MAX_FOOTPRINT_TILES) }.getOrNull()
+        footprints[p.id] = stamp to f
+        return f
+    }
+
     fun openPack(p: PackMeta): MbTiles? {
         packHandles[p.id]?.let { return it }
         val file = packFile(app, p.fileName)
@@ -253,6 +264,7 @@ class TileProvider(private val app: TrailMindApp) {
     }
 
     fun closePack(id: Long) {
+        footprints.remove(id)
         synchronized(packHandles) { packHandles.remove(id)?.close() }
         mem.evictAll()
     }
@@ -370,6 +382,7 @@ class TileProvider(private val app: TrailMindApp) {
         private const val MAX_TILE_BYTES = 2 * 1024 * 1024
         // Up to 16x: zoom 16 stands in for zoom 20.
         private const val MAX_ENLARGE = 4
+        private const val MAX_FOOTPRINT_TILES = 100_000
 
         fun packDir(context: Context) = File(context.filesDir, "packs").apply { mkdirs() }
         fun packFile(context: Context, name: String) = File(packDir(context), name)

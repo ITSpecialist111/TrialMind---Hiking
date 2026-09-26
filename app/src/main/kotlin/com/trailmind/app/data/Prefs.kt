@@ -38,6 +38,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("offline_only", false)
         set(v) = sp.edit().putBoolean("offline_only", v).apply()
 
+    /** Tint and outline the map where the base map is on the phone. */
+    var showOfflineAreas: Boolean
+        get() = sp.getBoolean("show_offline_areas", true)
+        set(v) = sp.edit().putBoolean("show_offline_areas", v).apply()
+
     var flatSpeedKmh: Double
         get() = sp.getFloat("flat_speed", 4.5f).toDouble()
         set(v) = sp.edit().putFloat("flat_speed", v.toFloat()).apply()

@@ -146,6 +146,8 @@ class StatsAndNavTest {
         assertTrue(TilePolicy.isBulkDownloadForbidden("https://a.tile.opentopomap.org/{z}/{x}/{y}.png"))
         assertTrue(TilePolicy.isBulkDownloadForbidden("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"))
         assertFalse(TilePolicy.isBulkDownloadForbidden("https://api.os.uk/maps/raster/v1/zxy/Outdoor_3857/{z}/{x}/{y}.png?key={key}"))
+        assertEquals("api.os.uk", TilePolicy.hostOf("https://api.os.uk/maps/raster/v1/zxy/Outdoor_3857/{z}/{x}/{y}.png?key={key}"))
+        assertFalse(TilePolicy.isBulkDownloadForbidden("https://tiles.example.com/{z}/{x}/{-y}.png"))
         assertEquals(
             "https://api.os.uk/maps/raster/v1/zxy/Outdoor_3857/12/2010/1300.png?key=K",
             TilePolicy.fillTemplate("https://api.os.uk/maps/raster/v1/zxy/Outdoor_3857/{z}/{x}/{y}.png?key={key}", TileKey(12, 2010, 1300), "K"),

@@ -32,6 +32,7 @@ import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.MagneticCheck
+import com.trailmind.core.geo.NorthAnchor
 import com.trailmind.core.nav.TracBack
 import com.trailmind.core.watch.TileReply
 import com.trailmind.core.watch.WatchProtocol
@@ -80,6 +81,8 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
     // Sitting on the magnetic charger upsets both.
     private var compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
     private val field = MagneticCheck()
+    private val north = NorthAnchor()
+    private var northLogged = false
     private var hasRotation = false
     private var compassHinted = false
     private var finishArmedUntil = 0L
@@ -148,6 +151,8 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
         field.reset()
+        north.reset()
+        northLogged = false
         hasRotation = false
         // For its accuracy reports and the field check.
         sensors.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
@@ -424,12 +429,16 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
                 compassAccuracy = event.accuracy
                 if (hasRotation) field.add(v[0].toDouble(), v[1].toDouble(), v[2].toDouble(), rotation[6].toDouble(), rotation[7].toDouble(), rotation[8].toDouble())
             }
+            if (hasRotation) {
+                north.add(rotation, v[0].toDouble(), v[1].toDouble(), v[2].toDouble())
+                if (!northLogged) { northLogged = true; Log.i(TAG, "rotation vector north is %.0f° from magnetic north".format(north.offsetDeg)) }
+            }
             return
         }
         SensorManager.getRotationMatrixFromVector(rotation, event.values)
         hasRotation = true
         SensorManager.getOrientation(rotation, orientation)
-        val deg = ((Math.toDegrees(orientation[0].toDouble()) + declination + 360.0) % 360.0).toFloat()
+        val deg = Geo.normalizeDeg(Math.toDegrees(orientation[0].toDouble()) - north.offsetDeg + declination).toFloat()
         val prev = headingDeg
         if (prev != null && abs(Geo.angleDiffDeg(prev.toDouble(), deg.toDouble())) < 3) return
         headingDeg = deg

@@ -83,6 +83,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var builtStatus: TrackingState.Status? = null
     private var shownTrack: MercatorLine? = null
     private var premiumNoticeShown = false
+    private var offlineAreasKey: Any? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
 
     private val ticker = object : Runnable {
@@ -100,7 +101,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     }
     private val onNav: () -> Unit = { updateNav(); updateTarget() }
     private val onTracking: () -> Unit = { updateTracking() }
-    private val onTiles: () -> Unit = { updateHint() }
+    private val onTiles: () -> Unit = { updateHint(); updateOfflineAreas() }
     private val onHeading: () -> Unit = { mapView.headingDeg = host.headingDeg?.toFloat() }
 
     init {
@@ -234,13 +235,26 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.source = s
         layerChip.text = s.name
         updateHint()
+        updateOfflineAreas()
+    }
+
+    /** Outlines the base map's offline packs; the tile listener calls this often, so it only reloads when they change. */
+    private fun updateOfflineAreas() {
+        val packs = if (app.prefs.showOfflineAreas) app.tiles.packsFor(mapView.source) else emptyList()
+        val key = packs.map { Triple(it.id, it.tileDone, it.status) }
+        if (key == offlineAreasKey) return
+        offlineAreasKey = key
+        if (packs.isEmpty()) { mapView.offlineAreas = emptyList(); return }
+        Async.run({ packs.mapNotNull { app.tiles.footprint(it) } }) { r ->
+            if (key == offlineAreasKey) mapView.offlineAreas = r.getOrDefault(emptyList())
+        }
     }
 
     private fun updateHint() {
         val s = mapView.source
         if (!premiumNoticeShown && app.tiles.premiumDenied(s)) {
             premiumNoticeShown = true
-            host.toast("Zoom 17+ is OS Premium data. Your OS plan is the free OpenData plan, so the map shows zoom 16 enlarged.")
+            host.toast("${s.name}: the most detailed zooms are OS Premium data. Your OS plan is the free OpenData plan, so the map shows the last free zoom enlarged.")
         }
         mapView.hint = when {
             s.requiresKey && app.prefs.osApiKey.isBlank() ->
@@ -275,6 +289,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 ui.dialog().setTitle("Map sources")
                     .setMessage(TileSources.all(app.prefs, app.tiles.packs).joinToString("\n\n") { "${it.name}\n${it.note}" })
                     .setPositiveButton("OK", null).show()
+            }
+            .setPositiveButton(if (app.prefs.showOfflineAreas) "Hide offline areas" else "Show offline areas") { _, _ ->
+                app.prefs.showOfflineAreas = !app.prefs.showOfflineAreas
+                updateOfflineAreas()
             }
             .setNegativeButton("Close", null)
             .show()

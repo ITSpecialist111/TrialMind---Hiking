@@ -28,7 +28,8 @@ object TilePolicy {
     const val MAX_ZOOM = 20
 
     fun hostOf(template: String): String? = runCatching {
-        URI(template.replace(Regex("\\{[a-zA-Z]+}"), "0")).host?.lowercase()
+        // Both braces escaped: Android's ICU regex rejects a bare '}' (the JVM accepts it).
+        URI(template.replace(Regex("\\{-?[a-zA-Z]+\\}"), "0")).host?.lowercase()
     }.getOrNull()
 
     fun isBulkDownloadForbidden(template: String): Boolean {

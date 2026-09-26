@@ -2,9 +2,11 @@ package com.trailmind.app.map
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -17,8 +19,11 @@ import com.trailmind.app.TrailMindApp
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
+import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
+import com.trailmind.core.map.BngTiles
+import com.trailmind.core.map.TileFootprint
 import com.trailmind.core.nav.DistanceMarks
 import kotlin.math.floor
 import kotlin.math.ln
@@ -86,7 +91,11 @@ class TileMapView(context: Context) : View(context) {
     var centerLon = -3.09; private set
     var zoom = 11.0; private set
     val minZoom = 2.0
-    val maxZoom get() = (source.maxZoom + 2).toDouble().coerceAtMost(21.0)
+    // Two zooms of enlargement past the source's most detailed tiles.
+    val maxZoom: Double get() = when (source.grid) {
+        TileGrid.WEB_MERCATOR -> (source.maxZoom + 2).toDouble()
+        TileGrid.BRITISH_NATIONAL_GRID -> ln(WebMercator.metresPerPixel(centerLat, 0.0) * 4 / BngTiles.resolution(source.maxZoom)) / ln(2.0)
+    }.coerceAtMost(21.0)
 
     var route: MercatorLine? = null
         set(v) { field = v; invalidate() }
@@ -99,6 +108,9 @@ class TileMapView(context: Context) : View(context) {
     var waypoints: List<MapMarker> = emptyList()
         set(v) { field = v; invalidate() }
     var target: LatLon? = null
+        set(v) { field = v; invalidate() }
+    /** Where the base map is on the phone, tinted and outlined under the route. */
+    var offlineAreas: List<TileFootprint> = emptyList()
         set(v) { field = v; invalidate() }
 
     var position: LatLon? = null; private set
@@ -155,6 +167,11 @@ class TileMapView(context: Context) : View(context) {
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(60, 60, 60); textSize = 14 * density; textAlign = Paint.Align.CENTER
     }
+    // Not anti-aliased, so the row spans meet without seams.
+    private val offlineFill = Paint().apply { color = Color.argb(34, 0, 121, 107) }
+    private val offlineEdge = strokePaint(Color.argb(220, 0, 121, 107), 2f).apply {
+        strokeCap = Paint.Cap.SQUARE; strokeJoin = Paint.Join.MITER
+    }
 
     private fun strokePaint(c: Int, widthDp: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = c; style = Paint.Style.STROKE; strokeWidth = widthDp * density
@@ -164,6 +181,13 @@ class TileMapView(context: Context) : View(context) {
     private val dst = RectF()
     private val src = Rect()
     private val path = Path()
+    private val tileMatrix = Matrix()
+    private val quad = FloatArray(8)
+    private val tileCorners = floatArrayOf(0f, 0f, 256f, 0f, 256f, 256f, 0f, 256f)
+    // Half a pixel of overlap so neighbouring warped tiles leave no hairline seams.
+    private val tileRect = RectF(-0.5f, -0.5f, 256.5f, 256.5f)
+    private var cornerX = FloatArray(0)
+    private var cornerY = FloatArray(0)
     private val labelBoxes = ArrayList<RectF>()
     private val labelTry = RectF()
 
@@ -291,6 +315,7 @@ class TileMapView(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
         drawTiles(canvas, w, h)
+        drawOfflineAreas(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
         track?.let { drawLine(canvas, it, trackPaint, w, h) }
         drawDistanceMarks(canvas, w, h)
@@ -303,6 +328,7 @@ class TileMapView(context: Context) : View(context) {
 
     private fun drawTiles(canvas: Canvas, w: Float, h: Float) {
         val src0 = source
+        if (src0.grid == TileGrid.BRITISH_NATIONAL_GRID) return drawNationalGridTiles(canvas, w, h)
         val zf = floor(zoom).toInt()
         if (zf < src0.minZoom) {
             drawGrid(canvas, w, h)
@@ -333,7 +359,9 @@ class TileMapView(context: Context) : View(context) {
                 if (provider.isApproximate(src0, key)) provider.request(src0, key)
             } else {
                 provider.request(src0, key)
-                if (!drawFallback(canvas, src0, key)) {
+                val pb = fallbackFor(src0, key)
+                if (pb != null) canvas.drawBitmap(pb, src, dst, tilePaint)
+                else {
                     canvas.drawLine(dst.left, dst.top, dst.right, dst.top, gridPaint)
                     canvas.drawLine(dst.left, dst.top, dst.left, dst.bottom, gridPaint)
                 }
@@ -341,10 +369,93 @@ class TileMapView(context: Context) : View(context) {
         }
     }
 
-    private fun drawFallback(canvas: Canvas, s: TileSource, key: TileKey): Boolean {
+    /**
+     * British National Grid tiles (OS Leisure), each warped onto this Web Mercator view through its four
+     * corners, so routes and the GPS dot still line up.
+     */
+    private fun drawNationalGridTiles(canvas: Canvas, w: Float, h: Float) {
+        val s = source
+        val mpp = WebMercator.metresPerPixel(centerLat, zoom)
+        if (mpp > BngTiles.resolution(s.minZoom) * 2) {
+            drawGrid(canvas, w, h)
+            drawHint(canvas, "Zoom in to show ${s.name}", w, h)
+            return
+        }
+        var z = BngTiles.zoomFor(mpp, s.minZoom, s.maxZoom)
+        // Free OS plan: enlarge the last OpenData zoom rather than wait for Premium tiles that never come.
+        s.premiumFromZoom?.let { if (z >= it && provider.premiumDenied(s)) z = it - 1 }
+        var minE = Double.MAX_VALUE
+        var maxE = -Double.MAX_VALUE
+        var minN = Double.MAX_VALUE
+        var maxN = -Double.MAX_VALUE
+        // Corners and edge midpoints: the grid is turned slightly against north.
+        for (i in 0..2) for (j in 0..2) {
+            val g = OsGrid.project(screenToLatLon(w * i / 2, h * j / 2))
+            minE = minOf(minE, g.easting); maxE = maxOf(maxE, g.easting)
+            minN = minOf(minN, g.northing); maxN = maxOf(maxN, g.northing)
+        }
+        if (maxE < 0 || minE > BngTiles.GB_MAX_E || maxN < 0 || minN > BngTiles.GB_MAX_N) {
+            drawGrid(canvas, w, h)
+            drawHint(canvas, "${s.name} covers Great Britain only", w, h)
+            return
+        }
+        val x0 = BngTiles.column(minE.coerceAtLeast(0.0), z)
+        val x1 = BngTiles.column(maxE.coerceAtMost(BngTiles.GB_MAX_E), z)
+        val y0 = BngTiles.row(maxN.coerceAtMost(BngTiles.GB_MAX_N), z)
+        val y1 = BngTiles.row(minN.coerceAtLeast(0.0), z)
+        val cols = x1 - x0 + 2
+        val rows = y1 - y0 + 2
+        if (cornerX.size < cols * rows) {
+            cornerX = FloatArray(cols * rows)
+            cornerY = FloatArray(cols * rows)
+        }
+        for (r in 0 until rows) for (c in 0 until cols) {
+            val p = OsGrid.toWgs84(BngTiles.easting(x0 + c, z), BngTiles.northing(y0 + r, z))
+            cornerX[r * cols + c] = toScreenX(p.lon, w)
+            cornerY[r * cols + c] = toScreenY(p.lat, h)
+        }
+        for (ty in y0..y1) for (tx in x0..x1) {
+            val nw = (ty - y0) * cols + (tx - x0)
+            quad[0] = cornerX[nw]; quad[1] = cornerY[nw]
+            quad[2] = cornerX[nw + 1]; quad[3] = cornerY[nw + 1]
+            quad[4] = cornerX[nw + cols + 1]; quad[5] = cornerY[nw + cols + 1]
+            quad[6] = cornerX[nw + cols]; quad[7] = cornerY[nw + cols]
+            val left = minOf(minOf(quad[0], quad[2]), minOf(quad[4], quad[6]))
+            val right = maxOf(maxOf(quad[0], quad[2]), maxOf(quad[4], quad[6]))
+            val top = minOf(minOf(quad[1], quad[3]), minOf(quad[5], quad[7]))
+            val bottom = maxOf(maxOf(quad[1], quad[3]), maxOf(quad[5], quad[7]))
+            if (right < 0 || left > w || bottom < 0 || top > h) continue
+            val key = TileKey(z, tx, ty)
+            val bmp = provider.cached(s, key)
+            if (bmp != null) {
+                drawWarped(canvas, bmp, null)
+                if (provider.isApproximate(s, key)) provider.request(s, key)
+            } else {
+                provider.request(s, key)
+                val pb = fallbackFor(s, key)
+                if (pb != null) drawWarped(canvas, pb, src)
+                else {
+                    canvas.drawLine(quad[0], quad[1], quad[2], quad[3], gridPaint)
+                    canvas.drawLine(quad[0], quad[1], quad[6], quad[7], gridPaint)
+                }
+            }
+        }
+    }
+
+    /** Draws [part] of [bmp] (all of it when null) into the tile outline in [quad]. */
+    private fun drawWarped(canvas: Canvas, bmp: Bitmap, part: Rect?) {
+        if (!tileMatrix.setPolyToPoly(tileCorners, 0, quad, 0, 4)) return
+        canvas.save()
+        canvas.concat(tileMatrix)
+        canvas.drawBitmap(bmp, part, tileRect, tilePaint)
+        canvas.restore()
+    }
+
+    /** The nearest cached lower zoom covering [key], with [src] set to the part of it that does. */
+    private fun fallbackFor(s: TileSource, key: TileKey): Bitmap? {
         for (d in 1..4) {
             val pz = key.z - d
-            if (pz < s.minZoom || pz < 0) return false
+            if (pz < s.minZoom || pz < 0) return null
             val pk = TileKey(pz, key.x shr d, key.y shr d)
             val pb = provider.cached(s, pk) ?: continue
             val f = pb.width / WebMercator.TILE_SIZE.toFloat()
@@ -352,10 +463,39 @@ class TileMapView(context: Context) : View(context) {
             val sx = (key.x - (pk.x shl d)) * sub
             val sy = (key.y - (pk.y shl d)) * sub
             src.set((sx * f).toInt(), (sy * f).toInt(), ((sx + sub) * f).toInt(), ((sy + sub) * f).toInt())
-            canvas.drawBitmap(pb, src, dst, tilePaint)
-            return true
+            return pb
         }
-        return false
+        return null
+    }
+
+    private fun drawOfflineAreas(canvas: Canvas, w: Float, h: Float) {
+        if (offlineAreas.isEmpty()) return
+        val ox = w / 2 - WebMercator.lonToX(centerLon, zoom)
+        val oy = h / 2 - WebMercator.latToY(centerLat, zoom)
+        for (f in offlineAreas) {
+            val cell = WebMercator.TILE_SIZE * 2.0.pow(zoom - f.zoom)
+            if (f.maxX * cell + ox < 0 || f.minX * cell + ox > w || f.maxY * cell + oy < 0 || f.minY * cell + oy > h) continue
+            path.reset()
+            val s = f.spans
+            for (i in s.indices step 3) {
+                val top = s[i] * cell + oy
+                if (top > h || top + cell < 0) continue
+                path.addRect((s[i + 1] * cell + ox).toFloat(), top.toFloat(), (s[i + 2] * cell + ox).toFloat(), (top + cell).toFloat(), Path.Direction.CW)
+            }
+            canvas.drawPath(path, offlineFill)
+            path.reset()
+            val e = f.edges
+            for (i in e.indices step 4) {
+                val x0 = (e[i] * cell + ox).toFloat()
+                val y0 = (e[i + 1] * cell + oy).toFloat()
+                val x1 = (e[i + 2] * cell + ox).toFloat()
+                val y1 = (e[i + 3] * cell + oy).toFloat()
+                if (maxOf(x0, x1) < 0 || minOf(x0, x1) > w || maxOf(y0, y1) < 0 || minOf(y0, y1) > h) continue
+                path.moveTo(x0, y0)
+                path.lineTo(x1, y1)
+            }
+            canvas.drawPath(path, offlineEdge)
+        }
     }
 
     private fun drawGrid(canvas: Canvas, w: Float, h: Float) {

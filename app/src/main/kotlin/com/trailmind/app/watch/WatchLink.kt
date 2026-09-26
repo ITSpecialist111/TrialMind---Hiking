@@ -19,6 +19,7 @@ import com.trailmind.app.Async
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.map.TileGrid
 import com.trailmind.app.map.TileSource
 import com.trailmind.app.map.TileSources
 import com.trailmind.core.format.Units
@@ -193,7 +194,9 @@ class WatchLink(private val app: TrailMindApp) {
         }
     }
 
+    // The watch draws Web Mercator tiles only, so a British National Grid base map goes to it as OS Outdoor.
     private fun currentSource(): TileSource = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)
+        .let { if (it.grid == TileGrid.WEB_MERCATOR) it else TileSources.byId(TileSources.OS_OUTDOOR, app.prefs, app.tiles.packs) }
 
     // ---------------------------------------------------------------- phone -> watch (main thread)
 

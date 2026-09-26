@@ -14,6 +14,7 @@ abstract class Page(val host: MainActivity) {
     val app: TrailMindApp get() = host.app
     val root = FrameLayout(host)
     private var rendered = false
+    private var pendingScroll: Pair<ScrollView, Int>? = null
 
     protected abstract fun render(): View
 
@@ -21,10 +22,15 @@ abstract class Page(val host: MainActivity) {
 
     open fun refresh() {
         rendered = true
-        val scrollY = firstScroll(root)?.scrollY ?: 0
+        // A refresh before the previous one's scroll was applied must keep that target, not the new view's 0.
+        val scrollY = pendingScroll?.second ?: firstScroll(root)?.scrollY ?: 0
         root.removeAllViews()
         root.addView(render(), FrameLayout.LayoutParams(-1, -1))
-        if (scrollY > 0) firstScroll(root)?.let { s -> s.post { s.scrollTo(0, scrollY) } }
+        pendingScroll = null
+        if (scrollY > 0) firstScroll(root)?.let { s ->
+            pendingScroll = s to scrollY
+            s.post { if (pendingScroll?.first === s) { s.scrollTo(0, scrollY); pendingScroll = null } }
+        }
     }
 
     private fun firstScroll(v: View): ScrollView? = when (v) {

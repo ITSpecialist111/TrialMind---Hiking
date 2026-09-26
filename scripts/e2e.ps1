@@ -478,8 +478,9 @@ try {
     if ($saved) {
         Wait-Until {
             Adb $Phone pull $saved $gpxOut | Out-Null
-            $script:content = [string](Get-Content -Raw -Encoding UTF8 -Path $gpxOut -ErrorAction SilentlyContinue)
-            $script:content.TrimEnd().EndsWith('</gpx>')
+            # Interpolated, so an empty file gives '' ([string] of no output is $null here).
+            $script:content = "$(Get-Content -Raw -Encoding UTF8 -Path $gpxOut -ErrorAction SilentlyContinue)"
+            $script:content -match '</gpx>\s*$'
         } 10 | Out-Null
     }
     $pts = ([regex]::Matches($content, '<trkpt ')).Count
@@ -584,6 +585,16 @@ try {
         }
         Shot $Phone '09-os-zoom17'
 
+        # Rights of way: OS publishes its Leisure style only in British National Grid tiles, warped onto the map.
+        Tap $Phone '^Map layers$' | Out-Null
+        Tap $Phone '^OS Maps . Explorer & Landranger' -TextOnly | Out-Null
+        $leisure = { @(Adb $Phone shell run-as $Pkg find cache/tiles/os_leisure -name '*.tile') | ForEach-Object { if ($_ -match 'os_leisure/(\d+)/\d+/\d+\.tile$') { [int]$Matches[1] } } }
+        $loaded = Wait-Until { @(& $leisure).Count -gt 0 } 20
+        Check 'OS Explorer & Landranger (rights of way) tiles load' $loaded "zooms $((@(& $leisure) | Sort-Object -Unique) -join ', ')"
+        Shot $Phone '09c-os-leisure'
+        Tap $Phone '^Map layers$' | Out-Null
+        Tap $Phone '^OS Maps . Outdoor' -TextOnly | Out-Null
+
         # Plant a 2-day-old tile at a Premium zoom and at an OpenData zoom, then restart so the purge runs.
         $old = (Get-Date).AddDays(-2).ToString('yyyy-MM-ddTHH:mm:ss')
         $p17 = 'cache/tiles/os_outdoor/17/0/0.tile'; $p16 = 'cache/tiles/os_outdoor/16/0/0.tile'
@@ -610,6 +621,18 @@ try {
         OpenTab 'Settings' | Out-Null
         ScrollTo $Phone '^Offline only' | Out-Null
         Tap $Phone '^Offline only' | Out-Null
+
+        # A narrow corridor at low zoom keeps the download to a few dozen tiles.
+        OpenTab 'Offline' | Out-Null
+        Check 'Area downloads offer the OS maps' ((ScrollTo $Phone '^Outdoor$') -and @(Find-Nodes $Phone '^No source that permits').Count -eq 0)
+        $routeChip = @(Find-Nodes $Phone '^Helvellyn via Striding Edge$') | Where-Object { $_.GetAttribute('clickable') -eq 'true' } | Select-Object -First 1
+        if ($routeChip) { $c = @(Get-Center $routeChip); Adb $Phone shell input tap $c[0] $c[1] | Out-Null; Start-Sleep -Milliseconds 800 }
+        if (ScrollTo $Phone '^250 m$') { Tap $Phone '^250 m$' | Out-Null }
+        if (ScrollTo $Phone '^12$') { Tap $Phone '^12$' | Out-Null }
+        Wait-Ui $Phone '^\d+ tiles . about' 10 | Out-Null
+        if (ScrollTo $Phone '^Download$') { Tap $Phone '^Download$' | Out-Null }
+        if (Wait-Ui $Phone '^OK$' 5) { Tap $Phone '^OK$' | Out-Null }
+        Check 'Route corridor downloaded for offline use' (ScrollTo $Phone '^Complete$' 20)
     }
 
     Section 'Find routes online'
