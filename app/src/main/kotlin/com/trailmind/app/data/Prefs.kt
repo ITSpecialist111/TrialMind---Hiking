@@ -1,6 +1,7 @@
 package com.trailmind.app.data
 
 import android.content.Context
+import org.json.JSONArray
 import com.trailmind.core.stats.PaceSettings
 
 /** User settings. Stored in app-private SharedPreferences (app backup is disabled). */
@@ -15,6 +16,13 @@ class Prefs(context: Context) {
     var osApiKey: String
         get() = sp.getString("os_api_key", "") ?: ""
         set(v) = sp.edit().putString("os_api_key", v.trim()).apply()
+
+    var recentSearches: List<String>
+        get() = runCatching {
+            val list = JSONArray(sp.getString("recent_searches", "[]"))
+            (0 until list.length()).map { list.getString(it) }
+        }.getOrDefault(emptyList())
+        set(value) = sp.edit().putString("recent_searches", JSONArray(value.take(5)).toString()).apply()
 
     /** The OS key's project can load Premium zooms, as last seen by Save & test or the map. */
     var osPremium: Boolean

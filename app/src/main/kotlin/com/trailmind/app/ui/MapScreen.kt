@@ -39,7 +39,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             val gap = freeBottom() - freeTop()
-            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 5 else 4
+            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 6 else 5
             val showZoom = gap >= host.dp(fabs * 48 + (fabs - 1) * 10)
             if (zoomButtons.any { (it.visibility == View.VISIBLE) != showZoom }) {
                 zoomButtons.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
@@ -85,6 +85,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var premiumNoticeShown = false
     private var offlineAreasKey: Any? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
+    private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -120,11 +121,13 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         statusRow.addView(layerChip, ui.lp(-2))
         layerChip.maxWidth = host.dp(200)
         topColumn.addView(statusRow)
+        topColumn.addView(pinChip)
         topColumn.addView(recoverCard)
         topColumn.addView(navCard)
         topColumn.addView(targetCard)
         overlay.addView(topColumn, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
+        fabColumn.addView(ui.fab(R.drawable.ic_search, "Search") { host.push(SearchPage(host)) })
         fabColumn.addView(fullScreenFab)
         fabColumn.addView(ui.fab(R.drawable.ic_layers, "Map layers") { chooseLayer() })
         zoomButtons = listOf(
@@ -220,6 +223,17 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.follow = false
         host.showMap()
         mapView.setCenter(p.lat, p.lon, zoom)
+    }
+
+    fun showSearchPin(name: String, position: LatLon, zoom: Double) {
+        mapView.searchPin = MapMarker(position, name)
+        pinChip.visibility = View.VISIBLE
+        centerOn(position, zoom)
+    }
+
+    fun clearSearchPin() {
+        mapView.searchPin = null
+        pinChip.visibility = View.GONE
     }
 
     fun currentSource(): TileSource = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)

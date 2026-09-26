@@ -7,6 +7,7 @@ import com.trailmind.core.geo.MagneticCheck
 import com.trailmind.core.geo.NorthAnchor
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.PathJoin
+import com.trailmind.core.geo.PlaceQuery
 import com.trailmind.core.geo.Sun
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.TrackPoint
@@ -147,6 +148,47 @@ class GeoTest {
         assertEquals("NN", OsGrid.letters(216667.0, 771278.0))
         assertEquals("SD", OsGrid.letters(350000.0, 450000.0))
         assertNull(OsGrid.letters(-1.0, 0.0))
+    }
+
+    @Test
+    fun parseGridReferences() {
+        val reference = assertNotNull(OsGrid.parse("SO 628 094"))
+        assertEquals(362850.0, reference.easting)
+        assertEquals(209450.0, reference.northing)
+        assertEquals(100, reference.precisionM)
+        assertEquals(reference, OsGrid.parse("so628094"))
+        assertEquals(1, assertNotNull(OsGrid.parse("SO 62800 09400")).precisionM)
+        assertEquals(1000, assertNotNull(OsGrid.parse("SO6209")).precisionM)
+        assertEquals(100000, assertNotNull(OsGrid.parse("SO")).precisionM)
+        for (invalid in listOf("SI 628 094", "SO62809", "SO123456789012", "ZZ", "SO 12 X4")) assertNull(OsGrid.parse(invalid))
+        for (east in 0..6) for (north in 0..12) {
+            val letters = assertNotNull(OsGrid.letters(east * 100_000.0, north * 100_000.0))
+            val square = assertNotNull(OsGrid.parse(letters))
+            assertEquals(east * 100_000.0 + 50_000, square.easting)
+            assertEquals(north * 100_000.0 + 50_000, square.northing)
+            assertFalse('I' in letters)
+        }
+        for (digits in listOf(2, 4, 6, 8, 10)) {
+            val formatted = assertNotNull(com.trailmind.core.geo.OsGridRef(362800.0, 209400.0).format(digits))
+            val parsed = assertNotNull(OsGrid.parse(formatted))
+            assertEquals(formatted, com.trailmind.core.geo.OsGridRef(parsed.easting, parsed.northing).format(digits))
+        }
+    }
+
+    @Test
+    fun parseDecimalCoordinates() {
+        val point = LatLon(51.7834, -2.5392)
+        for (input in listOf("51.7834, -2.5392", "51.7834 -2.5392", "51.7834N 2.5392W")) {
+            assertEquals(point, PlaceQuery.coordinates(input))
+        }
+        for (input in listOf("91, 0", "0 -181", "51.5N -2W", "51.5 2.1 3", "hello", "NaN, 0")) {
+            assertNull(PlaceQuery.coordinates(input))
+        }
+        assertTrue(PlaceQuery.looksLikeCoordinates("91, 0"))
+        assertTrue(PlaceQuery.looksLikeGrid("SI 123 456"))
+        assertTrue(PlaceQuery.looksLikeGrid("SO 12345"))
+        assertFalse(PlaceQuery.looksLikeGrid("Speech House"))
+        assertFalse(PlaceQuery.looksLikeCoordinates("GL15 4HS"))
     }
 
     @Test

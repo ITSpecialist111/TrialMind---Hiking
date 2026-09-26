@@ -403,11 +403,13 @@ class MainActivity : Activity() {
     /** True if [page] is not the root of the current stack (so it gets a back arrow). */
     fun canGoBackWithin(page: Page): Boolean = stack.indexOf(page) > 0
 
-    fun canGoBack(): Boolean = mapFullScreen || (stack.size > 1 && stack.last() !is OnboardingPage) || (!wide && tab != Tab.MAP)
+    fun canGoBack(): Boolean = mapFullScreen || (stack.size > 1 && stack.last() !is OnboardingPage) ||
+        (!wide && (tab != Tab.MAP || stack.lastOrNull() is SearchPage))
 
     fun goBack() {
         when {
             mapFullScreen -> setMapFullScreen(false)
+            !wide && stack.lastOrNull() is SearchPage -> showTab(Tab.MAP)
             stack.size > 1 -> pop()
             !wide && tab != Tab.MAP -> showTab(Tab.MAP)
         }

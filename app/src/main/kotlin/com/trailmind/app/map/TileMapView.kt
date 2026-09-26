@@ -109,6 +109,8 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; invalidate() }
     var target: LatLon? = null
         set(v) { field = v; invalidate() }
+    var searchPin: MapMarker? = null
+        set(v) { field = v; invalidate() }
     /** Where the base map is on the phone, tinted and outlined under the route. */
     var offlineAreas: List<TileFootprint> = emptyList()
         set(v) { field = v; invalidate() }
@@ -155,6 +157,7 @@ class TileMapView(context: Context) : View(context) {
         color = Color.rgb(142, 36, 170); textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
     }
     private val targetFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(211, 47, 47) }
+    private val pinFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 121, 107) }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(30, 30, 30); textSize = 12 * density; isFakeBoldText = true
     }
@@ -321,6 +324,7 @@ class TileMapView(context: Context) : View(context) {
         drawDistanceMarks(canvas, w, h)
         drawWaypoints(canvas, w, h)
         drawTarget(canvas, w, h)
+        drawSearchPin(canvas, w, h)
         drawPosition(canvas, w, h)
         drawScaleAndAttribution(canvas, w, h)
         hint?.let { drawHint(canvas, it, w, h) }
@@ -600,6 +604,27 @@ class TileMapView(context: Context) : View(context) {
         canvas.drawPath(path, targetFill)
         canvas.drawCircle(x, y - r * 1.9f, r, targetFill)
         canvas.drawCircle(x, y - r * 1.9f, r * 0.4f, white)
+    }
+
+    private fun drawSearchPin(canvas: Canvas, w: Float, h: Float) {
+        val pin = searchPin ?: return
+        val x = toScreenX(pin.position.lon, w)
+        val y = toScreenY(pin.position.lat, h)
+        val r = 10 * density
+        path.reset()
+        path.moveTo(x, y)
+        path.lineTo(x - r * 0.8f, y - r * 1.6f)
+        path.lineTo(x + r * 0.8f, y - r * 1.6f)
+        path.close()
+        canvas.drawPath(path, white)
+        canvas.drawCircle(x, y - r * 1.6f, r + 2 * density, white)
+        canvas.drawPath(path, pinFill)
+        canvas.drawCircle(x, y - r * 1.6f, r, pinFill)
+        canvas.drawCircle(x, y - r * 1.6f, r * 0.35f, white)
+        val label = pin.label.take(28)
+        val left = (x + 14 * density).coerceAtMost(w - labelPaint.measureText(label) - 4 * density).coerceAtLeast(4 * density)
+        canvas.drawText(label, left, y - 12 * density, labelHalo)
+        canvas.drawText(label, left, y - 12 * density, labelPaint)
     }
 
     private fun drawPosition(canvas: Canvas, w: Float, h: Float) {

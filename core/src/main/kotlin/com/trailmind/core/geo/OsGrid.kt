@@ -21,6 +21,10 @@ data class OsGridRef(val easting: Double, val northing: Double) {
     }
 }
 
+data class ParsedGridRef(val easting: Double, val northing: Double, val precisionM: Int) {
+    val position: LatLon get() = OsGrid.toWgs84(easting, northing)
+}
+
 /**
  * WGS84 ↔ OSGB36 British National Grid. Uses the OS 7-parameter Helmert transform, which is
  * accurate to roughly ±5 m: good enough to read a grid reference to Mountain Rescue, not survey.
@@ -174,6 +178,23 @@ object OsGrid {
         if (l1 > 7) l1++
         if (l2 > 7) l2++
         return "${'A' + l1}${'A' + l2}"
+    }
+
+    fun parse(text: String): ParsedGridRef? {
+        val compact = text.uppercase().filterNot(Char::isWhitespace)
+        if (!Regex("[A-HJ-Z]{2}(?:[0-9]{2}){0,5}").matches(compact)) return null
+        fun index(letter: Char): Int = letter - 'A' - if (letter > 'I') 1 else 0
+        val first = index(compact[0])
+        val second = index(compact[1])
+        val e100k = ((first - 2).mod(5)) * 5 + second % 5
+        val n100k = 19 - first / 5 * 5 - second / 5
+        if (e100k !in 0..6 || n100k !in 0..12) return null
+        val half = (compact.length - 2) / 2
+        val precision = 10.0.pow(5 - half).toInt()
+        val east = if (half == 0) 0 else compact.substring(2, 2 + half).toInt() * precision
+        val north = if (half == 0) 0 else compact.substring(2 + half).toInt() * precision
+        // Search goes to the centre of the referenced square, including 100 km squares.
+        return ParsedGridRef(e100k * 100_000.0 + east + precision / 2.0, n100k * 100_000.0 + north + precision / 2.0, precision)
     }
 
     private fun toCartesian(p: LatLon, a: Double, b: Double): Triple<Double, Double, Double> {
