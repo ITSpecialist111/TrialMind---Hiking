@@ -7,6 +7,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -15,7 +16,9 @@ import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.PackStatus
+import com.trailmind.app.ui.MainActivity
 import com.trailmind.app.ui.Notifications
+import com.trailmind.app.ui.atTimeText
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.map.TilePolicy
 import com.trailmind.core.map.TileCoverage
@@ -41,26 +44,56 @@ object DownloadState {
 class DownloadService : Service() {
     @Volatile private var cancelled = false
     private var worker: Thread? = null
+    /** Packs waiting behind the current download, such as a renewal tapped in a notification. Guards [busy] too. */
+    private val queue = ArrayDeque<Long>()
+    private var busy = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CANCEL -> {
+                // Pauses only the map being downloaded: a queued renewal was the user's own choice, so it still runs.
                 cancelled = true
-                if (worker?.isAlive != true) stopSelf()
+                if (synchronized(queue) { !busy }) stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START -> {
                 val id = intent.getLongExtra(EXTRA_PACK, -1)
-                if (worker?.isAlive == true) return START_NOT_STICKY
+                PremiumRenewal.dismiss(this, id)
+                val wasBusy = synchronized(queue) {
+                    if (busy && id != DownloadState.packId && id !in queue) queue.addLast(id)
+                    busy.also { busy = true }
+                }
+                if (wasBusy) {
+                    // Every startForegroundService() call needs a startForeground(); this just refreshes the running one.
+                    startAsForeground(progressNotification("Downloading offline maps…", DownloadState.done, DownloadState.total))
+                    return START_NOT_STICKY
+                }
                 startAsForeground(progressNotification("Preparing download…", 0, 0))
                 cancelled = false
-                worker = Thread({ run(id) }, "pack-download").also { it.start() }
+                worker = Thread({ drain(id) }, "pack-download").also { it.start() }
             }
-            else -> stopSelf()
+            else -> if (synchronized(queue) { !busy }) stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private fun drain(first: Long) {
+        var id: Long? = first
+        while (id != null) {
+            run(id)
+            runCatching { PremiumRenewal.reschedule(this) }.onFailure { Log.e("DownloadService", "renewal reminder failed", it) }
+            id = synchronized(queue) {
+                cancelled = false
+                queue.removeFirstOrNull().also { if (it == null) busy = false }
+            }
+        }
+        Async.main.post {
+            if (synchronized(queue) { busy }) return@post
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     private fun startAsForeground(n: Notification) {
@@ -148,8 +181,9 @@ class DownloadService : Service() {
             var earliestPremiumMs = Long.MAX_VALUE
             if (!cancelled && message == null) for (k in premiumTiles) {
                 if (cancelled) break
-                if (app.tiles.hasFreshPremium(source, k)) {
-                    earliestPremiumMs = minOf(earliestPremiumMs, app.tiles.premiumCachedAt(source, k))
+                val cachedAt = app.tiles.premiumCachedAt(source, k)
+                if (TilePolicy.premiumReusable(cachedAt, System.currentTimeMillis())) {
+                    earliestPremiumMs = minOf(earliestPremiumMs, cachedAt)
                     done++; continue
                 }
                 when (val r = app.tiles.fetchNetwork(source, k)) {
@@ -159,11 +193,13 @@ class DownloadService : Service() {
                         done++; noNetwork = 0
                     }
                     is TileProvider.Fetch.Http -> {
-                        if (r.code == 401 || r.code == 403) { premiumNote = "Your OS plan doesn't include closer detail, so only the overview map was saved."; break }
+                        if (r.code == 401) { message = "OS rejected your API key. Check it in Settings."; break }
+                        if (r.code == 403) { premiumNote = "Your OS plan doesn't include closer detail, so only the overview map was saved."; break }
                         premiumFailed++
                         if (r.code == 429) Thread.sleep(5_000)
                     }
                     TileProvider.Fetch.NoNetwork -> { premiumFailed++; noNetwork++; Thread.sleep(2_000) }
+                    TileProvider.Fetch.NoKey -> { message = "OS Data Hub API key missing."; break }
                     else -> premiumFailed++
                 }
                 if (noNetwork >= 5) { message = "No internet connection (or offline-only mode is on)."; break }
@@ -178,17 +214,28 @@ class DownloadService : Service() {
             val status = when {
                 message != null && message != premiumNote && done == 0L -> PackStatus.FAILED
                 cancelled || (message != null && message != premiumNote) -> PackStatus.PAUSED
-                failed > 0 -> PackStatus.PARTIAL
+                premiumNote != null || failed > 0 -> PackStatus.PARTIAL
                 else -> PackStatus.COMPLETE
             }
             db.updatePackProgress(packId, done, failed, bytes, status,
                 message ?: if (failed > 0) "$failed tiles failed; tap Resume to retry." else null)
             meta = db.pack(packId)
+            val detailUntil = earliestPremiumMs.takeIf { status == PackStatus.COMPLETE && it != Long.MAX_VALUE }?.plus(TilePolicy.PREMIUM_CACHE_MS)
+            val summary = "${status.name.lowercase().replaceFirstChar { it.uppercase() }} – $done tiles" + when {
+                detailUntil != null && meta != null -> ". ${PremiumRenewal.label(meta)} until ${atTimeText(this, detailUntil)}."
+                status != PackStatus.COMPLETE && meta?.message != null -> ". ${meta.message}"
+                else -> ""
+            }
+            val open = PendingIntent.getActivity(this, 76, Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OFFLINE),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             Notifications.manager(this).notify(Notifications.ID_DOWNLOAD_DONE, Notification.Builder(this, Notifications.CH_DOWNLOADS)
                 .setSmallIcon(R.drawable.ic_stat_hike)
                 .setContentTitle("Offline map: ${meta?.name ?: ""}")
-                .setContentText("${status.name.lowercase().replaceFirstChar { it.uppercase() }} – $done tiles")
+                .setContentText(summary)
+                .setStyle(Notification.BigTextStyle().bigText(summary))
+                .setContentIntent(open)
                 .setAutoCancel(true)
+                .apply { if (status == PackStatus.PAUSED && !cancelled) addAction(Notification.Action.Builder(null, "Try again", startPending(this@DownloadService, packId)).build()) }
                 .build())
         } catch (t: Throwable) {
             Log.e("DownloadService", "download failed", t)
@@ -197,10 +244,6 @@ class DownloadService : Service() {
             DownloadState.packId = null
             DownloadState.changed()
             app.tiles.reloadPacks()
-            Async.main.post {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
         }
     }
 
@@ -209,19 +252,6 @@ class DownloadService : Service() {
         TrailMindApp.instance.db.updatePackProgress(packId, done, failed, bytes, PackStatus.DOWNLOADING)
         DownloadState.changed()
         Notifications.manager(this).notify(Notifications.ID_DOWNLOAD, progressNotification("Downloading $name", done, total))
-    }
-
-    private fun tilesFor(meta: PackMeta, source: TileSource, minZoom: Int, maxZoom: Int): Sequence<TileKey>? {
-        val routeId = meta.routeId
-        if (routeId != null) {
-            val route = TrailMindApp.instance.db.routeData(routeId) ?: return null
-            val points = route.points.map { it.latLon() }
-            return if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngCorridor(points, meta.bufferM, minZoom, maxZoom)
-                else TileCoverage.corridor(points, meta.bufferM, minZoom, maxZoom)
-        }
-        val b = meta.bounds ?: return emptySequence()
-        return if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngBox(b, minZoom, maxZoom)
-            else TileCoverage.box(b, minZoom, maxZoom)
     }
 
     private fun progressNotification(text: String, done: Long, total: Long): Notification {
@@ -244,10 +274,29 @@ class DownloadService : Service() {
         const val EXTRA_PACK = "pack"
         private const val POLITE_DELAY_MS = 60L
 
+        /** The tiles [meta] covers at these zooms, or null when its route was deleted. */
+        fun tilesFor(meta: PackMeta, source: TileSource, minZoom: Int, maxZoom: Int): Sequence<TileKey>? {
+            val routeId = meta.routeId
+            if (routeId != null) {
+                val route = TrailMindApp.instance.db.routeData(routeId) ?: return null
+                val points = route.points.map { it.latLon() }
+                return if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngCorridor(points, meta.bufferM, minZoom, maxZoom)
+                    else TileCoverage.corridor(points, meta.bufferM, minZoom, maxZoom)
+            }
+            val b = meta.bounds ?: return emptySequence()
+            return if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngBox(b, minZoom, maxZoom)
+                else TileCoverage.box(b, minZoom, maxZoom)
+        }
+
+        private fun startIntent(context: Context, packId: Long) = Intent(context, DownloadService::class.java).setAction(ACTION_START)
+            .setData(Uri.parse("trailmind://pack/$packId")).putExtra(EXTRA_PACK, packId)
+
+        /** Starts (or queues) [packId] when the user taps a notification action. */
+        fun startPending(context: Context, packId: Long): PendingIntent = PendingIntent.getForegroundService(context, 78,
+            startIntent(context, packId), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
         fun start(context: Context, packId: Long) {
-            context.startForegroundService(
-                Intent(context, DownloadService::class.java).setAction(ACTION_START).putExtra(EXTRA_PACK, packId),
-            )
+            context.startForegroundService(startIntent(context, packId))
         }
 
         fun pause(context: Context) {

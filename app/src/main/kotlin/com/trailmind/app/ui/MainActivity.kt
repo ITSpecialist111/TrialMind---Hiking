@@ -607,6 +607,11 @@ class MainActivity : Activity() {
             showTab(Tab.SAFETY)
             return
         }
+        if (intent.action == ACTION_OFFLINE) {
+            intent.action = null
+            showTab(Tab.OFFLINE)
+            return
+        }
         val uri: Uri? = when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -706,6 +711,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val ACTION_SAFETY = "com.trailmind.app.OPEN_SAFETY"
+        const val ACTION_OFFLINE = "com.trailmind.app.OPEN_OFFLINE"
         const val WIDE_DP = 600
         const val EDGE_GALLERY = "com.google.aiedge.gallery"
         private const val RC_PERMS = 10

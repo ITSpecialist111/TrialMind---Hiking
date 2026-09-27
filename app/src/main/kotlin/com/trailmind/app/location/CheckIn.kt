@@ -15,6 +15,7 @@ import android.os.BatteryManager
 import android.os.Build
 import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
+import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.ui.MainActivity
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.ui.clockTime
@@ -191,6 +192,7 @@ class CheckInBootReceiver : BroadcastReceiver() {
                     val tiles = (context.applicationContext as TrailMindApp).tiles
                     tiles.purgeExpiredPremium()
                     tiles.reschedulePremiumExpiry()
+                    PremiumRenewal.reschedule(context)
                 } finally { pending.finish() }
             }, "premium-boot-purge").start()
         }

@@ -2,6 +2,7 @@ package com.trailmind.app.data
 
 import android.content.Context
 import org.json.JSONArray
+import org.json.JSONObject
 import com.trailmind.core.stats.PaceSettings
 
 /** User settings. Stored in app-private SharedPreferences (app backup is disabled). */
@@ -136,6 +137,14 @@ class Prefs(context: Context) {
     var watchEnabled: Boolean
         get() = sp.getBoolean("watch_enabled", false)
         set(v) = sp.edit().putBoolean("watch_enabled", v).apply()
+
+    /** Pack id to the 24-hour detail expiry the user has already been asked to renew. */
+    var renewAsked: Map<Long, Long>
+        get() = runCatching {
+            val json = JSONObject(sp.getString("renew_asked", "{}") ?: "{}")
+            json.keys().asSequence().associate { it.toLong() to json.getLong(it) }
+        }.getOrDefault(emptyMap())
+        set(v) = sp.edit().putString("renew_asked", JSONObject(v.mapKeys { it.key.toString() }).toString()).apply()
 
     /** Bluetooth address of the watch the user picked; connections from any other device are refused. */
     var watchAddress: String

@@ -107,6 +107,7 @@
             android:exported="false" />
 
         <receiver android:name=".map.PremiumPurgeReceiver" android:exported="false" />
+        <receiver android:name=".map.PremiumRenewalReceiver" android:exported="false" />
 
         <service
             android:name=".watch.WatchLinkService"

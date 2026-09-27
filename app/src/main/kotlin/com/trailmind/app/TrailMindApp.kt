@@ -8,6 +8,7 @@ import com.trailmind.app.data.Prefs
 import com.trailmind.app.data.RoutePlanner
 import com.trailmind.app.location.LocationHub
 import com.trailmind.app.location.CheckIn
+import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.nav.NavigationController
 import com.trailmind.app.sensor.Barometer
@@ -48,7 +49,7 @@ class TrailMindApp : Application() {
         watch = WatchLink(this)
         Notifications.createChannels(this)
         CheckIn.arm(this)
-        Async.io { tiles.trimDiskCache(); tiles.reschedulePremiumExpiry() }
+        Async.io { tiles.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }
     }
 
     companion object {

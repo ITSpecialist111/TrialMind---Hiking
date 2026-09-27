@@ -10,6 +10,7 @@ object Notifications {
     const val CH_DOWNLOADS = "downloads"
     const val CH_WATCH = "watch"
     const val CH_CHECK_IN = "check_in"
+    const val CH_OFFLINE = "offline_renewal"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -20,6 +21,7 @@ object Notifications {
     const val ID_DAYLIGHT = 7
     const val ID_DUSK = 8
     const val ID_CHECK_IN = 9
+    const val ID_RENEW = 10
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -41,6 +43,9 @@ object Notifications {
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
+        })
+        m.createNotificationChannel(NotificationChannel(CH_OFFLINE, "Offline map renewal", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "Asks before 24-hour Explorer detail expires, so you can renew it"
         })
         m.createNotificationChannel(NotificationChannel(CH_WATCH, "Watch link", NotificationManager.IMPORTANCE_LOW).apply {
             description = "Shown while TrailMind keeps your watch connected in the background"

@@ -28,8 +28,14 @@ object TilePolicy {
     const val MAX_ZOOM = 20
     const val PREMIUM_CACHE_MS = 24L * 3_600_000
 
+    /** A download fetches a Premium tile again unless it has this long left, so renewing restarts the 24 hours. */
+    const val PREMIUM_REUSE_MIN_LEFT_MS = 20L * 3_600_000
+
     fun premiumCacheFresh(cachedAtMs: Long, nowMs: Long): Boolean =
         nowMs - cachedAtMs in 0 until PREMIUM_CACHE_MS
+
+    fun premiumReusable(cachedAtMs: Long, nowMs: Long): Boolean =
+        premiumCacheFresh(cachedAtMs, nowMs) && cachedAtMs + PREMIUM_CACHE_MS - nowMs >= PREMIUM_REUSE_MIN_LEFT_MS
 
     fun premiumPurgeDue(cachedAtMs: Long, nowMs: Long, aheadMs: Long = 0L): Boolean =
         !premiumCacheFresh(cachedAtMs, nowMs) || nowMs - cachedAtMs >= PREMIUM_CACHE_MS - aheadMs

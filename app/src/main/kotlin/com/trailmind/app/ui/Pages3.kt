@@ -9,6 +9,7 @@ import android.widget.TextView
 import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.OpenMeteo
+import com.trailmind.app.data.OsNames
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.PackStatus
@@ -20,6 +21,7 @@ import com.trailmind.app.location.CheckIn
 import com.trailmind.app.map.DownloadService
 import com.trailmind.app.map.DownloadState
 import com.trailmind.app.map.MbTiles
+import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.map.TileSource
 import com.trailmind.app.map.TileSources
@@ -59,10 +61,11 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
     private var premiumCount = 0L
     private var countJob = 0
     private var progressViews = HashMap<Long, Pair<android.widget.ProgressBar, TextView>>()
-    private var premiumExpiries = emptyMap<Long, Long?>()
+    private var premiumExpiries = emptyMap<Long, PremiumRenewal.Detail>()
+    private var naming = false
     private val onDownload: () -> Unit = { updateProgress() }
     private val onTiles: () -> Unit = {
-        if (packs != app.tiles.packs || premiumExpiries.values.any { it != null && it > 0 && it <= System.currentTimeMillis() }) reload()
+        if (packs != app.tiles.packs || premiumExpiries.values.any { it.expiresAtMs > 0 && it.expiresAtMs <= System.currentTimeMillis() }) reload()
     }
 
     override fun onShow() {
@@ -87,20 +90,7 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
 
     private fun reload() = Async.run({
         val currentPacks = app.db.packs()
-        val expiry = currentPacks.filter { it.premiumMaxZoom > 0 }.associate { pack ->
-            val source = TileSources.byId(pack.sourceId, app.prefs, currentPacks)
-            val first = source.premiumFromZoom ?: Int.MAX_VALUE
-            val tiles = if (pack.routeId != null) app.db.routeData(pack.routeId)?.points?.map { it.latLon() }?.let {
-                if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngCorridor(it, pack.bufferM, first, pack.premiumMaxZoom)
-                else TileCoverage.corridor(it, pack.bufferM, first, pack.premiumMaxZoom)
-            } else pack.bounds?.let {
-                if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngBox(it, first, pack.premiumMaxZoom)
-                else TileCoverage.box(it, first, pack.premiumMaxZoom)
-            }
-            pack.id to tiles?.map { tile ->
-                if (app.tiles.hasFreshPremium(source, tile)) app.tiles.premiumCachedAt(source, tile) + TilePolicy.PREMIUM_CACHE_MS else 0L
-            }?.minOrNull()
-        }
+        val expiry = currentPacks.mapNotNull { pack -> PremiumRenewal.detail(app, pack, currentPacks)?.let { pack.id to it } }.toMap()
         Triple(currentPacks, app.db.routes(), expiry)
     }) { r ->
         r.getOrNull()?.let { (currentPacks, currentRoutes, expiry) ->
@@ -161,10 +151,26 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
 
     override fun render(): View = scaffold("Offline maps") {
         val s = source()
+        val now = System.currentTimeMillis()
+        val stale = packs.filter { pk ->
+            val detail = premiumExpiries[pk.id]
+            pk.premiumMs > 0 && DownloadState.packId != pk.id && detail != null && (detail.expiresAtMs <= now || !detail.complete)
+        }
+        if (stale.isNotEmpty()) addView(ui.card(spacing = 8) {
+            addView(ui.text("Download detail again", Ui.T.TITLE))
+            addView(ui.text("24-hour detail is expired or incomplete on ${if (stale.size == 1) "this map" else "these maps"}. " +
+                "Download it again for the same area without choosing it again. The overview maps are still on the phone.", Ui.T.CAPTION))
+            stale.forEach { pk ->
+                val gone = (premiumExpiries[pk.id]?.expiresAtMs ?: 0L) <= now
+                addView(ui.text(pk.name, Ui.T.BODY))
+                addView(ui.text("${PremiumRenewal.label(pk)} ${if (gone) "expired" else "partly expired"}", Ui.T.CAPTION))
+                addView(ui.flow { addView(ui.button("Download again", R.drawable.ic_download, Ui.B.TONAL) { downloadAgain(pk, "Download again?") }) })
+            }
+        })
         addView(ui.card(spacing = 8) {
             addView(ui.text("What can be offline", Ui.T.LABEL))
             addView(ui.text("• OS Maps areas, downloaded with your own OS Data Hub key. Overview maps stay in your pack.\n" +
-                "• Explorer 1:25k detail can be added for 24 hours, the longest OS allows. Add it on the day of the hike.\n" +
+                "• Explorer 1:25k detail can be added for 24 hours, the longest OS allows. Add it on the day of the hike. TrailMind asks before it expires, and you choose whether to renew it.\n" +
                 "• Any raster MBTiles file you have the right to use (e.g. made with QGIS, MOBAC or bought).\n" +
                 "• OpenStreetMap's public tiles are never bulk-downloaded: their usage policy forbids it. Areas you browse are cached for a few days only.\n" +
                 "Zoomed in beyond what is on the phone, the map enlarges the closest zoom it has.", Ui.T.CAPTION))
@@ -214,7 +220,7 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                 if (premiumMaxZoom >= from && count != null) addView(ui.text(
                     "$premiumCount detail tiles, about ${"%.1f".format(premiumCount * AVG_TILE_KB / 1024.0)} MB. " +
                         "These requests use OS Premium transactions from your plan's allowance. " +
-                        "They expire 24 hours after download and are automatically cleaned up.", Ui.T.CAPTION))
+                        "They expire 24 hours after download and are automatically cleaned up. TrailMind asks before then whether to renew them.", Ui.T.CAPTION))
             }
             val c = count
             val tooMany = c != null && c > TilePolicy.MAX_TILES_PER_DOWNLOAD
@@ -227,15 +233,17 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             addView(ui.text(s.note, Ui.T.CAPTION))
             addView(ui.text(s.attribution, Ui.T.CAPTION))
             addView(ui.button("Download", R.drawable.ic_download) {
-                if (c == null || c == 0L || tooMany) return@button
+                if (c == null || c == 0L || tooMany || naming) return@button
                 if (DownloadState.packId != null) { host.toast("Another download is running."); return@button }
-                val defaultName = routeData?.meta?.name ?: "Area ${java.text.DateFormat.getDateInstance().format(java.util.Date())}"
-                ui.prompt("Name this offline map", defaultName) { name ->
-                    val chosenName = name.ifBlank { defaultName }
-                    if (premiumCount > 0) ui.confirm("Use OS Premium transactions?",
-                        "Downloading $premiumCount detail tiles uses transactions from your OS Data Hub plan. Detail expires within 24 hours; overview maps stay saved.",
-                        "Download") { startDownload(s, chosenName, c) }
-                    else startDownload(s, chosenName, c)
+                val rd = routeData
+                val box = countedArea
+                val fallback = rd?.meta?.name ?: "Area ${java.text.DateFormat.getDateInstance().format(java.util.Date())}"
+                val key = app.prefs.osApiKey
+                if (rd != null || box == null || key.isBlank() || !app.tiles.networkAllowed()) { askName(s, fallback, c); return@button }
+                naming = true
+                Async.run({ OsNames.areaName(box, key) }) { r ->
+                    naming = false
+                    if (root.isAttachedToWindow) askName(s, r.getOrNull() ?: fallback, c)
                 }
             }.apply { isEnabled = c != null && c > 0 && !tooMany; alpha = if (isEnabled) 1f else 0.5f })
         })
@@ -258,10 +266,30 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             Async.run({ app.tiles.diskCacheBytes() }) { r -> cacheText.text = "Browse and pre-loaded tiles: ${mb(r.getOrDefault(0))}. Premium expires within 24 hours. Other browse tiles refresh after 7 days; cache limit 300 MB." }
             addView(ui.button("Clear cache", R.drawable.ic_delete, Ui.B.TEXT) {
                 ui.confirm("Clear cached maps?", "This also removes pre-loaded 24-hour detail. Saved overview packs stay on the phone.", "Clear") {
-                    Async.run({ app.tiles.clearDiskCache() }) { reload() }
+                    Async.run({ app.tiles.clearDiskCache(); PremiumRenewal.reschedule(host) }) { reload() }
                 }
             })
         })
+    }
+
+    private fun askName(s: TileSource, defaultName: String, tiles: Long) {
+        ui.prompt("Name this offline map", defaultName) { name ->
+            val chosenName = name.ifBlank { defaultName }
+            if (premiumCount > 0) ui.confirm("Use OS Premium transactions?",
+                "Downloading $premiumCount detail tiles uses transactions from your OS Data Hub plan. Detail expires within 24 hours; overview maps stay saved.",
+                "Download") { startDownload(s, chosenName, tiles) }
+            else startDownload(s, chosenName, tiles)
+        }
+    }
+
+    /** Resumes, renews or downloads again the area [pk] already covers, so nothing has to be selected again. */
+    private fun downloadAgain(pk: PackMeta, title: String) {
+        if (DownloadState.packId != null) { host.toast("Another download is running."); return }
+        val start = { host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id) }
+        val tiles = premiumExpiries[pk.id]?.toFetch ?: 0
+        if (tiles == 0) { start(); return }
+        ui.confirm(title, "This downloads $tiles tiles of ${PremiumRenewal.label(pk)} using OS Premium transactions from your plan. " +
+            "They expire 24 hours after download, and TrailMind asks before then.", "Download") { start() }
     }
 
     private fun chipRow(items: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit): View =
@@ -282,24 +310,33 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             progressViews[pk.id] = bar to label
         }
         pk.message?.let { addView(ui.text(it, Ui.T.CAPTION, p.danger)) }
-        val premiumUntil = premiumExpiries[pk.id] ?: 0L
+        val detail = premiumExpiries[pk.id]
+        val premiumUntil = detail?.expiresAtMs ?: 0L
         val premiumExpired = pk.premiumMaxZoom > 0 && System.currentTimeMillis() >= premiumUntil
-        val detailLabel = if (pk.sourceId == TileSources.OS_LEISURE) {
-            if (pk.premiumMaxZoom == 6) "Landranger detail" else "Explorer detail"
-        } else "Closer detail to zoom ${pk.premiumMaxZoom}"
+        val premiumPartial = pk.premiumMaxZoom > 0 && !premiumExpired && detail?.complete != true
+        val premiumAgeing = pk.premiumMaxZoom > 0 && !premiumExpired && (detail?.toFetch ?: 0) > 0
+        val detailLabel = PremiumRenewal.label(pk)
         if (pk.sourceId == TileSources.OS_LEISURE) addView(ui.text("The map outline marks saved overview tiles, not 24-hour detail.", Ui.T.CAPTION))
-        if (pk.premiumMaxZoom > 0) addView(ui.text(
-            if (!premiumExpired) "$detailLabel until ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(premiumUntil))}"
-            else "$detailLabel: not loaded or past its 24 hours", Ui.T.CAPTION))
+        if (pk.premiumMaxZoom > 0) addView(ui.text(when {
+            !premiumExpired -> "$detailLabel${if (premiumPartial) " (partly loaded)" else ""} until ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(premiumUntil))}"
+            pk.premiumMs > 0 -> "$detailLabel has expired. Download it again for another 24 hours."
+            else -> "$detailLabel: not loaded"
+        }, Ui.T.CAPTION))
         addView(ui.flow(spacing = 4) {
             if (pk.kind == PackKind.DOWNLOAD) {
+                val again = when {
+                    pk.status != PackStatus.COMPLETE -> "Resume"
+                    premiumExpired || premiumPartial -> "Download again"
+                    premiumAgeing -> "Renew"
+                    else -> null
+                }
                 if (active) addView(ui.button("Pause", R.drawable.ic_pause, Ui.B.TEXT) { DownloadService.pause(host) })
-                else if (pk.status != PackStatus.COMPLETE || premiumExpired) addView(ui.button(if (premiumExpired && pk.status == PackStatus.COMPLETE) "Reload" else "Resume", R.drawable.ic_play, Ui.B.TEXT) {
-                    if (DownloadState.packId != null) host.toast("Another download is running.") else if (pk.premiumMaxZoom > 0) {
-                        ui.confirm("Use OS Premium transactions?",
-                            "Reloading detail may use transactions from your OS Data Hub plan. It expires within 24 hours of download.",
-                            "Continue") { host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id) }
-                    } else { host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id) }
+                else if (again != null) addView(ui.button(again, if (again == "Resume") R.drawable.ic_play else R.drawable.ic_download, Ui.B.TEXT) {
+                    downloadAgain(pk, when (again) {
+                        "Renew" -> "Renew for 24 hours?"
+                        "Download again" -> "Download again?"
+                        else -> "Use OS Premium transactions?"
+                    })
                 })
             } else {
                 addView(ui.button("Use as map", R.drawable.ic_map, Ui.B.TEXT) { host.map.setSource("pack:${pk.id}"); host.showMap() })
@@ -317,6 +354,8 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                         app.db.deletePack(pk.id)
                         if (app.prefs.baseSourceId == "pack:${pk.id}") app.prefs.baseSourceId = TileSources.OSM
                         app.tiles.reloadPacks()
+                        PremiumRenewal.dismiss(host, pk.id)
+                        PremiumRenewal.reschedule(host)
                     }) { reload() }
                 }
             })

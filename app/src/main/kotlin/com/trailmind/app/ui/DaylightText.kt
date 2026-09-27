@@ -24,6 +24,17 @@ internal fun finishTime(context: Context, ms: Long): String {
     return prefix + clockTime(context, ms)
 }
 
+/** "at 18:00", "tomorrow at 08:59" or "on 28/09/2026 at 10:01". */
+internal fun atTimeText(context: Context, ms: Long): String {
+    val zone = ZoneId.systemDefault()
+    val day = when (Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()) {
+        LocalDate.now(zone) -> ""
+        LocalDate.now(zone).plusDays(1) -> "tomorrow "
+        else -> "on " + DateFormat.getDateFormat(context).format(Date(ms)) + " "
+    }
+    return day + "at " + clockTime(context, ms)
+}
+
 internal fun startByText(context: Context, points: List<TrackPoint>, pace: PaceSettings,
     marginMinutes: Int, forMs: Long): String {
     if (points.size < 2) return "No route timing available."
