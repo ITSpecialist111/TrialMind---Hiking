@@ -20,6 +20,7 @@ import com.trailmind.app.map.MercatorLine
 import com.trailmind.app.map.TileMapView
 import com.trailmind.app.map.TileSource
 import com.trailmind.app.map.TileSources
+import com.trailmind.app.map.TerrainProvider
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
@@ -92,6 +93,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var offlineAreasKey: Any? = null
     private var facilitiesRouteId = -1L
     private var facilitiesJob = 0
+    private var searchPinHeightJob = 0
     private var startByKey: Any? = null
     private var startByLine: String? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
@@ -248,10 +250,19 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     fun showSearchPin(name: String, position: LatLon, zoom: Double) {
         mapView.searchPin = MapMarker(position, name)
         pinChip.visibility = View.VISIBLE
+        pinChip.text = "Clear search pin  ✕"
+        val job = ++searchPinHeightJob
         centerOn(position, zoom)
+        Async.run({ app.terrain.sample(position) }) { result ->
+            if (job != searchPinHeightJob || mapView.searchPin?.position != position) return@run
+            result.getOrNull()?.let {
+                pinChip.text = "$name · Height about ${Units.elevation(it, app.prefs.imperial)} · ${TerrainProvider.CREDIT} · Clear search pin  ✕"
+            }
+        }
     }
 
     fun clearSearchPin() {
+        searchPinHeightJob++
         mapView.searchPin = null
         pinChip.visibility = View.GONE
     }
@@ -268,6 +279,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private fun applySource() {
         val s = currentSource()
         mapView.source = s
+        mapView.showSteepGround = app.prefs.showSteepGround
         layerChip.text = s.name
         updateHint()
         updateOfflineAreas()
@@ -310,7 +322,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 if (s.packId == null && packs > 0) append("  · $packs offline pack${if (packs > 1) "s" else ""}")
             }
         }.toTypedArray()
-        ui.dialog().setTitle("Base map")
+        ui.dialog().setTitle("Map layers")
             .setSingleChoiceItems(labels, sources.indexOfFirst { it.id == current }) { d, which ->
                 val s = sources[which]
                 d.dismiss()
@@ -322,14 +334,18 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             }
             .setNeutralButton("About sources") { _, _ ->
                 ui.dialog().setTitle("Map sources")
-                    .setMessage(TileSources.all(app.prefs, app.tiles.packs).joinToString("\n\n") { "${it.name}\n${it.note}" })
+                    .setMessage(TileSources.all(app.prefs, app.tiles.packs).joinToString("\n\n") { "${it.name}\n${it.note}" } +
+                        "\n\n${TerrainProvider.CREDIT}\n${TerrainProvider.REQUIRED_ATTRIBUTION}")
                     .setPositiveButton("OK", null).show()
             }
-            .setPositiveButton(if (app.prefs.showOfflineAreas) "Hide offline areas" else "Show offline areas") { _, _ ->
+            .setPositiveButton("Offline areas: ${if (app.prefs.showOfflineAreas) "on" else "off"}") { _, _ ->
                 app.prefs.showOfflineAreas = !app.prefs.showOfflineAreas
                 updateOfflineAreas()
             }
-            .setNegativeButton("Close", null)
+            .setNegativeButton("Steep ground: ${if (app.prefs.showSteepGround) "on" else "off"}") { _, _ ->
+                app.prefs.showSteepGround = !app.prefs.showSteepGround
+                mapView.showSteepGround = app.prefs.showSteepGround
+            }
             .show()
     }
 
@@ -343,7 +359,13 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     override fun onLongPress(at: LatLon) {
         val grid = OsGrid.fromWgs84(at)?.format(8)
         val items = arrayOf("Plan a route from here", "Go to here (bearing & distance)", "Copy position", "Offline map of this area…")
-        ui.dialog().setTitle(grid ?: Units.latLon(at.lat, at.lon))
+        // A dialog with a list cannot also show a message, so the height goes in a custom title.
+        val heightText = ui.text("", Ui.T.CAPTION).apply { visibility = View.GONE }
+        val title = ui.column(padding = 20, spacing = 2) {
+            addView(ui.text(grid ?: Units.latLon(at.lat, at.lon), Ui.T.TITLE))
+            addView(heightText)
+        }
+        val dialog = ui.dialog().setCustomTitle(title)
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> startPlan(at)
@@ -351,7 +373,14 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                     2 -> host.copy("Position", listOfNotNull(grid, Units.latLon(at.lat, at.lon)).joinToString(" · "))
                     3 -> { mapView.setCenter(at.lat, at.lon, maxOf(mapView.zoom, 12.0)); host.showTab(MainActivity.Tab.OFFLINE) }
                 }
-            }.show()
+            }.create()
+        dialog.show()
+        Async.run({ app.terrain.sample(at) }) { result ->
+            result.getOrNull()?.let { height ->
+                heightText.text = "Height about ${Units.elevation(height, app.prefs.imperial)}\n${TerrainProvider.CREDIT}"
+                heightText.visibility = View.VISIBLE
+            }
+        }
     }
 
     override fun onSingleTap(at: LatLon) {

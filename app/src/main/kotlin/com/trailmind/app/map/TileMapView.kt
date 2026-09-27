@@ -79,6 +79,7 @@ class TileMapView(context: Context) : View(context) {
     }
 
     private val provider = TrailMindApp.instance.tiles
+    private val terrain = TrailMindApp.instance.terrain
     private val density = resources.displayMetrics.density
     var listener: Listener? = null
 
@@ -122,6 +123,8 @@ class TileMapView(context: Context) : View(context) {
     /** Where the base map is on the phone, tinted and outlined under the route. */
     var offlineAreas: List<TileFootprint> = emptyList()
         set(v) { field = v; bngFootprintVertices.keys.retainAll(v.toSet()); invalidate() }
+    var showSteepGround = false
+        set(v) { if (field != v) { field = v; invalidate() } }
     private val bngFootprintVertices = HashMap<TileFootprint, MutableMap<Long, LatLon>>()
 
     var position: LatLon? = null; private set
@@ -144,6 +147,7 @@ class TileMapView(context: Context) : View(context) {
         set(v) { if (field != v) { field = v; invalidate() } }
 
     private val tileListener: () -> Unit = { invalidate() }
+    private val terrainListener: () -> Unit = { invalidate() }
 
     // --- paints (allocated once)
     private val tilePaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -345,12 +349,14 @@ class TileMapView(context: Context) : View(context) {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         provider.addListener(tileListener)
+        terrain.addListener(terrainListener)
     }
 
     override fun onDetachedFromWindow() {
         pendingTaps.forEach { removeCallbacks(it.delivery) }
         pendingTaps.clear()
         provider.removeListener(tileListener)
+        terrain.removeListener(terrainListener)
         super.onDetachedFromWindow()
     }
 
@@ -362,6 +368,7 @@ class TileMapView(context: Context) : View(context) {
         val h = height.toFloat()
         drawTiles(canvas, w, h)
         drawOfflineAreas(canvas, w, h)
+        drawSteepGround(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
         track?.let { drawLine(canvas, it, trackPaint, w, h) }
         plannedLegs.forEach { (line, snapped) ->
@@ -557,6 +564,30 @@ class TileMapView(context: Context) : View(context) {
                 path.lineTo(x1, y1)
             }
             canvas.drawPath(path, offlineEdge)
+        }
+    }
+
+    private fun drawSteepGround(canvas: Canvas, w: Float, h: Float) {
+        if (!showSteepGround || zoom < STEEP_MIN_ZOOM) return
+        val z = com.trailmind.core.map.Terrain.ZOOM
+        val scale = 2.0.pow(zoom - z)
+        val size = (WebMercator.TILE_SIZE * scale).toFloat()
+        val cx = WebMercator.lonToX(centerLon, z.toDouble())
+        val cy = WebMercator.latToY(centerLat, z.toDouble())
+        val x0 = floor((cx - w / 2 / scale) / WebMercator.TILE_SIZE).toInt()
+        val x1 = floor((cx + w / 2 / scale) / WebMercator.TILE_SIZE).toInt()
+        val y0 = floor((cy - h / 2 / scale) / WebMercator.TILE_SIZE).toInt()
+        val y1 = floor((cy + h / 2 / scale) / WebMercator.TILE_SIZE).toInt()
+        terrain.keepSlopeTiles((x1 - x0 + 1) * (y1 - y0 + 1))
+        val count = 1 shl z
+        for (x in x0..x1) for (y in y0..y1) {
+            if (y !in 0 until count) continue
+            val key = TileKey(z, Math.floorMod(x, count), y)
+            val left = ((x * WebMercator.TILE_SIZE - cx) * scale + w / 2).toFloat()
+            val top = ((y * WebMercator.TILE_SIZE - cy) * scale + h / 2).toFloat()
+            dst.set(left, top, left + size + 0.5f, top + size + 0.5f)
+            val bitmap = terrain.slopeTile(key)
+            if (bitmap == null) terrain.requestSlopeTile(key) else canvas.drawBitmap(bitmap, null, dst, tilePaint)
         }
     }
 
@@ -792,17 +823,34 @@ class TileMapView(context: Context) : View(context) {
         var tw = attrPaint.measureText(attr)
         if (tw > w - 2 * pad) { attrPaint.textSize *= (w - 2 * pad) / tw; tw = attrPaint.measureText(attr) }
         val th = attrPaint.textSize
-        canvas.drawRect(0f, h - th - 2 * pad, tw + 2 * pad, h, attrBg)
-        canvas.drawText(attr, pad, h - pad - 1 * density, attrPaint)
-        attrPaint.textSize = 10.5f * density
-
         val mpp = WebMercator.metresPerPixel(centerLat, zoom)
         val maxPx = 110 * density
         val imperial = TrailMindApp.instance.prefs.imperial
         val nice = if (imperial) NICE_FEET.map { it * 0.3048 } else NICE_METRES
         val metres = nice.lastOrNull { it / mpp <= maxPx } ?: nice.first()
         val px = (metres / mpp).toFloat()
-        val by = h - th - 2 * pad - 10 * density
+        val credit = TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM }
+        var creditWidth = 0f
+        var creditHeight = 0f
+        if (credit != null) {
+            attrPaint.textSize = 10.5f * density
+            creditWidth = attrPaint.measureText(credit)
+            if (creditWidth > w - 2 * pad) {
+                attrPaint.textSize *= (w - 2 * pad) / creditWidth
+                creditWidth = attrPaint.measureText(credit)
+            }
+            creditHeight = attrPaint.textSize
+        }
+        val attrHeight = th + if (credit != null) creditHeight + pad else 0f
+        canvas.drawRect(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h, attrBg)
+        attrPaint.textSize = th
+        canvas.drawText(attr, pad, h - pad - 1 * density, attrPaint)
+        if (credit != null) {
+            attrPaint.textSize = creditHeight
+            canvas.drawText(credit, pad, h - th - 2 * pad - 1 * density, attrPaint)
+            attrPaint.textSize = 10.5f * density
+        }
+        val by = h - attrHeight - 2 * pad - 10 * density
         val bx = 12 * density
         canvas.drawRect(bx - 4 * density, by - 16 * density, bx + px + 4 * density, by + 5 * density, attrBg)
         canvas.drawLine(bx, by, bx + px, by, scalePaint)
@@ -836,6 +884,8 @@ class TileMapView(context: Context) : View(context) {
     }
 
     companion object {
+        /** Below this the whole screen needs too many terrain tiles to shade steep ground. */
+        const val STEEP_MIN_ZOOM = 13.0
         private val NICE_METRES = listOf(5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10_000.0, 20_000.0, 50_000.0, 100_000.0, 200_000.0, 500_000.0)
         private val NICE_FEET = listOf(20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2640.0, 5280.0, 10560.0, 26400.0, 52800.0, 105600.0, 264000.0, 528000.0)
     }

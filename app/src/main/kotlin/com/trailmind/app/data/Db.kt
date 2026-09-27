@@ -21,6 +21,7 @@ data class RouteMeta(
     val maxEleM: Double?,
     val pointCount: Int,
     val waypointCount: Int,
+    val terrainDerived: Boolean = false,
 )
 
 data class RouteData(val meta: RouteMeta, val points: List<TrackPoint>, val waypoints: List<Waypoint>)
@@ -74,7 +75,7 @@ data class PackMeta(
     val premiumMs: Long = 0,
 )
 
-class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) {
+class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 3) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -85,7 +86,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
         db.execSQL(
             """CREATE TABLE routes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL,
                distance_m REAL NOT NULL, ascent_m REAL NOT NULL, descent_m REAL NOT NULL, max_ele REAL,
-               point_count INTEGER NOT NULL, waypoint_count INTEGER NOT NULL)""",
+               point_count INTEGER NOT NULL, waypoint_count INTEGER NOT NULL, terrain_derived INTEGER NOT NULL DEFAULT 0)""",
         )
         db.execSQL(
             """CREATE TABLE route_points(route_id INTEGER NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
@@ -123,6 +124,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
             db.execSQL("ALTER TABLE packs ADD COLUMN premium_max_zoom INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE packs ADD COLUMN premium_ms INTEGER NOT NULL DEFAULT 0")
         }
+        if (oldVersion < 3) db.execSQL("ALTER TABLE routes ADD COLUMN terrain_derived INTEGER NOT NULL DEFAULT 0")
     }
 
     // ---------------------------------------------------------------- routes
@@ -189,6 +191,42 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
         writableDatabase.update("routes", ContentValues().apply { put("name", name) }, "id=?", arrayOf(id.toString()))
     }
 
+    /** Fills only missing route elevations and refreshes the stored terrain statistics. */
+    fun updateRouteHeights(id: Long, sampled: List<TrackPoint>): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val existing = db.rawQuery(
+                "SELECT lat, lon, ele FROM route_points WHERE route_id=? ORDER BY idx", arrayOf(id.toString()),
+            ).use { c -> c.map { TrackPoint(it.getDouble(0), it.getDouble(1), it.optDouble(2)) } }
+            if (existing.isEmpty() || existing.size != sampled.size) return false
+            val merged = existing.mapIndexed { index, point ->
+                if (point.ele != null) point else point.copy(ele = sampled[index].ele)
+            }
+            if (merged.indices.none { existing[it].ele == null && merged[it].ele != null }) return false
+            db.compileStatement("UPDATE route_points SET ele=? WHERE route_id=? AND idx=? AND ele IS NULL").use { statement ->
+                merged.forEachIndexed { index, point ->
+                    val elevation = point.ele ?: return@forEachIndexed
+                    statement.clearBindings()
+                    statement.bindDouble(1, elevation); statement.bindLong(2, id); statement.bindLong(3, index.toLong())
+                    statement.executeUpdateDelete()
+                }
+            }
+            val summary = TrackStats.summarize(merged)
+            db.update("routes", ContentValues().apply {
+                put("distance_m", summary.distanceM)
+                put("ascent_m", summary.ascentM)
+                put("descent_m", summary.descentM)
+                summary.maxEleM?.let { put("max_ele", it) } ?: putNull("max_ele")
+                put("terrain_derived", 1)
+            }, "id=?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun deleteRoute(id: Long) {
         writableDatabase.delete("routes", "id=?", arrayOf(id.toString()))
     }
@@ -197,7 +235,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
         id = c.long("id"), name = c.str("name"), createdMs = c.long("created_ms"),
         distanceM = c.dbl("distance_m"), ascentM = c.dbl("ascent_m"), descentM = c.dbl("descent_m"),
         maxEleM = c.optDouble(c.getColumnIndexOrThrow("max_ele")), pointCount = c.int("point_count"),
-        waypointCount = c.int("waypoint_count"),
+        waypointCount = c.int("waypoint_count"), terrainDerived = c.getInt(c.getColumnIndexOrThrow("terrain_derived")) != 0,
     )
 
     // ---------------------------------------------------------------- hikes

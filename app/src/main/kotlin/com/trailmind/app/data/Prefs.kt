@@ -52,6 +52,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("show_offline_areas", true)
         set(v) = sp.edit().putBoolean("show_offline_areas", v).apply()
 
+    var showSteepGround: Boolean
+        get() = sp.getBoolean("show_steep_ground", false)
+        set(v) = sp.edit().putBoolean("show_steep_ground", v).apply()
+
     var showFacilities: Boolean
         get() = sp.getBoolean("show_facilities", true)
         set(v) = sp.edit().putBoolean("show_facilities", v).apply()

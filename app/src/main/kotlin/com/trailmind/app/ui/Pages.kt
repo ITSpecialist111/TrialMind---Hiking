@@ -29,6 +29,7 @@ import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.LocationHub
 import com.trailmind.app.map.TileSources
 import com.trailmind.app.map.TileGrid
+import com.trailmind.app.map.TerrainProvider
 import com.trailmind.core.geo.WebMercator
 import com.trailmind.core.stats.TripReadiness
 import com.trailmind.core.weather.MountainWeather
@@ -248,6 +249,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     private var forecast: com.trailmind.core.weather.PointForecast? = null
     private var checking = false
     private var fetchingWeather = false
+    private var addingTerrain = false
     private val facilityListener: (Result<SavedFacilities>) -> Unit = { result ->
         result.onSuccess { facilities = it; facilityCacheUnreadable = false; showAllFacilities = false; host.map.updateFacilities() }
             .onFailure { host.toast("Could not find facilities: ${it.message ?: "connection failed"}") }
@@ -287,6 +289,11 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     fun onBaseMapChanged() {
         refresh()
         updateReadiness()
+    }
+
+    fun applyTerrainData(updated: RouteData?) {
+        if (updated != null) data = updated
+        refresh()
     }
 
     private fun updateReadiness() {
@@ -454,6 +461,28 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     if (following) it.cursorM = app.nav.fix?.alongM
                     profile = it
                 })
+                if (d.meta.terrainDerived) addView(ui.text(TerrainProvider.CREDIT, Ui.T.CAPTION))
+                if (d.points.isNotEmpty() && d.points.any { it.ele == null }) {
+                    addView(ui.button(if (addingTerrain) "Adding heights…" else "Add heights", R.drawable.ic_add, Ui.B.TONAL) {
+                        if (addingTerrain) return@button
+                        addingTerrain = true
+                        refresh()
+                        Async.run({
+                            val filled = app.terrain.fill(d.points)
+                            val changed = app.db.updateRouteHeights(routeId, filled)
+                            changed to app.db.routeData(routeId)
+                        }) { result ->
+                            addingTerrain = false
+                            result.onSuccess { (changed, updated) ->
+                                if (changed) {
+                                    data = updated
+                                    host.toast("Terrain heights added")
+                                } else host.toast("Terrain heights unavailable")
+                            }.onFailure { host.toast("Terrain heights unavailable") }
+                            refresh()
+                        }
+                    }.apply { isEnabled = !addingTerrain })
+                }
             })
             addView(ui.row {
                 if (following) addView(ui.button("Stop following", R.drawable.ic_close, Ui.B.TONAL) { app.nav.stopFollowing() }, ui.lp(0, weight = 1f))

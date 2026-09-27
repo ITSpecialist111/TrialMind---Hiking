@@ -209,6 +209,11 @@ class DownloadService : Service() {
             if (meta.premiumMaxZoom >= premiumFrom && !cancelled && message == null && premiumNote == null && premiumFailed == 0L) {
                 db.updatePack(packId, ContentValues().apply { put("premium_ms", earliestPremiumMs.takeIf { it != Long.MAX_VALUE } ?: 0L) })
             }
+            if (!cancelled && message == null) {
+                val routePoints = meta.routeId?.let { db.routeData(it)?.points?.map { point -> point.latLon() } }
+                val terrainResult = app.terrain.download(TerrainProvider.packTiles(routePoints, meta.bounds, meta.bufferM)) { cancelled }
+                Log.i("DownloadService", "saved ${terrainResult.first} terrain tiles; ${terrainResult.second} unavailable")
+            }
             failed += premiumFailed
             if (message == null) message = premiumNote
             val status = when {

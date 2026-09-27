@@ -638,12 +638,26 @@ class MainActivity : Activity() {
             val line = doc.primaryLine()
             require(line.size >= 2) { "No track or route with at least two points was found in this file." }
             val name = doc.bestName() ?: fileName ?: "Imported route"
-            app.db.insertRoute(name, line, doc.waypoints)
+            app.db.insertRoute(name, line, doc.waypoints) to line.none { it.ele != null }
         }) { r ->
-            r.onSuccess { id ->
-                toast("Route imported")
+            r.onSuccess { (id, needsTerrain) ->
+                val detail = RouteDetailPage(this, id)
+                val fetchTerrain = needsTerrain && app.tiles.networkAllowed()
+                toast(if (fetchTerrain) "Route imported. Adding heights…" else "Route imported")
                 showTab(Tab.ROUTES)
-                push(RouteDetailPage(this, id))
+                push(detail)
+                if (fetchTerrain) Async.run({
+                    val route = app.db.routeData(id) ?: return@run false to null
+                    val changed = app.db.updateRouteHeights(id, app.terrain.fill(route.points))
+                    changed to app.db.routeData(id)
+                }) { terrainResult ->
+                    terrainResult.getOrNull()?.let { (changed, updated) ->
+                        if (changed) {
+                            detail.applyTerrainData(updated)
+                            toast("Terrain heights added")
+                        }
+                    }
+                }
             }.onFailure { e -> ui.dialog().setTitle("Import failed").setMessage(e.message ?: e.toString()).setPositiveButton("OK", null).show() }
         }
     }
