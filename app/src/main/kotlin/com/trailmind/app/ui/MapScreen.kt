@@ -46,7 +46,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             val gap = freeBottom() - freeTop()
-            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 6 else 5
+            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 7 else 6
             val showZoom = gap >= host.dp(fabs * 48 + (fabs - 1) * 10)
             if (zoomButtons.any { (it.visibility == View.VISIBLE) != showZoom }) {
                 zoomButtons.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
@@ -74,6 +74,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val recoverCard = ui.card(color = p.warnContainer, padding = 14, spacing = 8)
     private val fabColumn = ui.column(spacing = 10)
     private var followFab: ImageButton
+    private val orientationFab = ui.fab(R.drawable.ic_north, "North up") { toggleHeadingUp() }
+    /** Direction of travel from GPS while walking, for heading up when the compass is disturbed. */
+    private var courseDeg: Float? = null
     private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map") { host.setMapFullScreen(!host.mapFullScreen) }
     private val zoomButtons: List<View>
     // Caps the recording card at 420 dp in the wide layout without overflowing a narrower map pane.
@@ -108,6 +111,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     private val onFix: (Fix) -> Unit = { f ->
         mapView.setPosition(LatLon(f.lat, f.lon), f.accuracyM)
+        courseDeg = f.location.takeIf { it.hasBearing() && it.hasSpeed() && it.speed >= 1f }?.bearing
+        if (app.prefs.mapHeadingUp) updateHeading()
         host.compass.updateLocation(f.lat, f.lon, f.altitudeM ?: 0.0)
         updateGps(f)
         updateTarget()
@@ -115,7 +120,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val onNav: () -> Unit = { updateNav(); updateTarget() }
     private val onTracking: () -> Unit = { updateTracking() }
     private val onTiles: () -> Unit = { updateHint(); updateOfflineAreas() }
-    private val onHeading: () -> Unit = { mapView.headingDeg = host.headingDeg?.toFloat() }
+    private val onHeading: () -> Unit = { updateHeading() }
     private val onPlan: (String?) -> Unit = { message ->
         if (message != null) host.toast(message)
         updatePlanner()
@@ -155,6 +160,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             ui.fab(R.drawable.ic_remove, "Zoom out") { mapView.zoomBy(-1.0) },
         )
         zoomButtons.forEach { fabColumn.addView(it) }
+        fabColumn.addView(orientationFab)
         followFab = ui.fab(R.drawable.ic_my_location, "My location") { locate() }
         fabColumn.addView(followFab)
         overlay.addView(fabColumn, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
@@ -163,6 +169,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
         mapView.setCenter(app.prefs.mapLat, app.prefs.mapLon, app.prefs.mapZoom)
         applySource()
+        applyOrientation()
+        // Heading up turns the map about you, so it opens on your position once there is a fix.
+        if (app.prefs.mapHeadingUp) mapView.follow = true
         mapView.track = TrackingState.line
     }
 
@@ -239,6 +248,44 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.follow = false
         host.showMap()
         mapView.post { mapView.fitBounds(b) }
+    }
+
+    private fun toggleHeadingUp() {
+        val on = !app.prefs.mapHeadingUp
+        app.prefs.mapHeadingUp = on
+        applyOrientation()
+        // The map turns about its centre, so centre it on you.
+        if (on) locate()
+        host.toast(when {
+            !on -> "North up"
+            host.compassDisturbed -> "Heading up. Nearby metal is upsetting the compass, so the map follows your walking direction."
+            host.compassUnreliable -> "Heading up. Move the phone in a figure of eight to calibrate the compass."
+            else -> "Heading up: the map turns as you turn"
+        })
+    }
+
+    private fun applyOrientation() {
+        val on = app.prefs.mapHeadingUp
+        orientationFab.setImageDrawable(host.getDrawable(R.drawable.ic_north)?.mutate()?.apply { setTint(if (on) p.primary else p.onSurface) })
+        orientationFab.contentDescription = if (on) "Heading up. Tap for north up." else "North up. Tap for heading up."
+        updateHeading()
+    }
+
+    /**
+     * North up shows the compass on the position cone. Heading up turns the map to the compass while it is calibrated and
+     * undisturbed, else to the direction of walking, else holds still; the cone shows that same heading.
+     */
+    private fun updateHeading() {
+        if (!app.prefs.mapHeadingUp) {
+            mapView.headingDeg = host.headingDeg?.toFloat()
+            mapView.bearing = 0f
+        } else {
+            val heading = host.headingDeg?.toFloat()?.takeIf { !host.compassDisturbed && !host.compassUnreliable } ?: courseDeg
+            mapView.headingDeg = heading
+            heading?.let { mapView.bearing = it }
+        }
+        // The arrow points to north on the screen.
+        orientationFab.rotation = -mapView.bearing
     }
 
     fun centerOn(p: LatLon, zoom: Double = 15.0) {

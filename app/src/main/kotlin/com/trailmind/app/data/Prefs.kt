@@ -40,6 +40,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("map_full_screen", false)
         set(v) = sp.edit().putBoolean("map_full_screen", v).apply()
 
+    /** The map turns so the way you face is at the top, instead of north. */
+    var mapHeadingUp: Boolean
+        get() = sp.getBoolean("map_heading_up", false)
+        set(v) = sp.edit().putBoolean("map_heading_up", v).apply()
+
     var imperial: Boolean
         get() = sp.getBoolean("imperial", false)
         set(v) = sp.edit().putBoolean("imperial", v).apply()
