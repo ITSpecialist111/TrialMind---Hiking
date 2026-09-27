@@ -75,6 +75,10 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
     private var connected = false
     private var trackPoints = 0
     private var headingDeg: Float? = null
+    private val headingGate = com.trailmind.core.geo.HeadingGate()
+    private val flushHeading = Runnable {
+        headingGate.flush(SystemClock.elapsedRealtime())?.let { showHeading(it.toFloat()) }
+    }
     private var declination = 0f
     private var declinationAt = 0L
     // The magnetometer's accuracy is its calibration state; the field check catches what that misses.
@@ -93,7 +97,7 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
     private val orientation = FloatArray(3)
     private val tick = object : Runnable {
         override fun run() {
-            renderHike()
+            if (state.recording == WatchState.RECORDING) renderHike()
             main.postDelayed(this, 1000)
         }
     }
@@ -148,6 +152,7 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
         // The link runs as a connected-device service, which needs the Bluetooth permission first.
         if (PhoneLink.hasPermission(this)) attachLink() else onLinkStatus(PhoneLink.Status.NO_PERMISSION)
+        headingGate.reset()
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
         field.reset()
@@ -173,6 +178,8 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         started = false
         LinkService.detach(this)
         sensors.unregisterListener(this)
+        main.removeCallbacks(flushHeading)
+        headingGate.reset()
         main.removeCallbacks(tick)
         super.onStop()
     }
@@ -311,14 +318,14 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         connected = status == PhoneLink.Status.CONNECTED
         if (was != connected) map.linkChanged()
         linkOverlay.visibility = if (connected) View.GONE else View.VISIBLE
-        linkOverlay.text = when (status) {
+        linkOverlay.show(when (status) {
             PhoneLink.Status.NO_BLUETOOTH -> "This watch has no Bluetooth."
             PhoneLink.Status.NO_PERMISSION -> "Allow \u201cNearby devices\u201d so TrailMind can reach your phone."
             PhoneLink.Status.BLUETOOTH_OFF -> "Turn on Bluetooth."
             PhoneLink.Status.CONNECTING -> "Connecting to your phone\u2026"
             PhoneLink.Status.NO_PHONE -> "Can't reach TrailMind on your phone.\n\nOpen it and turn on Settings \u2192 Watch companion."
             PhoneLink.Status.CONNECTED -> ""
-        }
+        })
     }
 
     override fun onFrame(frame: WatchProtocol.Frame) {
@@ -439,8 +446,14 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         hasRotation = true
         SensorManager.getOrientation(rotation, orientation)
         val deg = Geo.normalizeDeg(Math.toDegrees(orientation[0].toDouble()) - north.offsetDeg + declination).toFloat()
-        val prev = headingDeg
-        if (prev != null && abs(Geo.angleDiffDeg(prev.toDouble(), deg.toDouble())) < 3) return
+        val now = SystemClock.elapsedRealtime()
+        val headingChanged = headingGate.accept(deg.toDouble(), now)
+        main.removeCallbacks(flushHeading)
+        headingGate.pendingDelayMs(now)?.let { main.postDelayed(flushHeading, it) }
+        if (headingChanged) showHeading(deg)
+    }
+
+    private fun showHeading(deg: Float) {
         headingDeg = deg
         map.headingDeg = deg
         renderNav()
@@ -514,7 +527,8 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
         val s = state
         val ms = activeMs()
         hikeTitle.show(when (s.recording) { WatchState.RECORDING -> "Recording"; WatchState.PAUSED -> "Paused"; else -> "Hike" })
-        hikeTitle.setTextColor(when (s.recording) { WatchState.RECORDING -> GREEN; WatchState.PAUSED -> ORANGE; else -> MUTED })
+        val titleColor = when (s.recording) { WatchState.RECORDING -> GREEN; WatchState.PAUSED -> ORANGE; else -> MUTED }
+        if (hikeTitle.currentTextColor != titleColor) hikeTitle.setTextColor(titleColor)
         hikeTime.show(String.format(java.util.Locale.ROOT, "%d:%02d:%02d", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60))
         hikeStats.show(if (s.recording == WatchState.IDLE) "Start here or on your phone" else "${dist(s.distanceM)} \u00b7 \u2191${ele(s.ascentM)}")
         primaryButton.show(when (s.recording) { WatchState.RECORDING -> "Pause"; WatchState.PAUSED -> "Resume"; else -> "Start hike" })
@@ -568,13 +582,17 @@ class WatchActivity : Activity(), PhoneLink.Listener, SensorEventListener {
             else -> { title = "No route"; detail = "Follow one on your phone" }
         }
         dial.setPointer(bearing, color)
-        navTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (title.length > 14) 12f else 14f)
+        val titleSize = if (title.length > 14) 12f else 14f
+        if (navTitle.textSize != TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, titleSize, resources.displayMetrics)) {
+            navTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, titleSize)
+        }
         navTitle.show(title)
         navDetail.show(detail)
         navDetail.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
         val scale = dist(dial.radiusM)
         val problem = if (heading != null) compassProblem() else null
-        navHeading.setTextColor(if (problem != null) ORANGE else Color.WHITE)
+        val headingColor = if (problem != null) ORANGE else Color.WHITE
+        if (navHeading.currentTextColor != headingColor) navHeading.setTextColor(headingColor)
         navHeading.show(
             when {
                 problem != null -> problem

@@ -100,7 +100,7 @@ class TileMapView(context: Context) : View(context) {
     }.coerceAtMost(21.0)
 
     var route: MercatorLine? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var plannedLegs: List<Pair<MercatorLine, Boolean>> = emptyList()
         set(v) { field = v; invalidate() }
     var planControls: List<LatLon> = emptyList()
@@ -116,7 +116,7 @@ class TileMapView(context: Context) : View(context) {
     var facilities: List<Facility> = emptyList()
         set(v) { field = v; invalidate() }
     var target: LatLon? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var searchPin: MapMarker? = null
         set(v) { field = v; invalidate() }
     /** Where the base map is on the phone, tinted and outlined under the route. */
@@ -127,7 +127,7 @@ class TileMapView(context: Context) : View(context) {
     var position: LatLon? = null; private set
     private var accuracyM = 0f
     var headingDeg: Float? = null
-        set(v) { field = v; if (position != null) invalidate() }
+        set(v) { if (field != v) { field = v; if (position != null) invalidate() } }
 
     var follow = false
         set(v) {
@@ -141,7 +141,7 @@ class TileMapView(context: Context) : View(context) {
 
     /** Hint drawn in the middle of the map (e.g. missing API key). */
     var hint: String? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
 
     private val tileListener: () -> Unit = { invalidate() }
 
@@ -250,6 +250,7 @@ class TileMapView(context: Context) : View(context) {
     }
 
     fun setPosition(p: LatLon?, accuracy: Float) {
+        if (position == p && accuracyM == accuracy) return
         position = p
         accuracyM = accuracy
         if (follow && p != null) setCenter(p.lat, p.lon) else invalidate()

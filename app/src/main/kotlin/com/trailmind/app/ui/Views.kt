@@ -113,11 +113,11 @@ class CompassView(context: Context) : View(context) {
     private val p = Palette.of(context)
     private val d = resources.displayMetrics.density
     var headingDeg: Double? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var targetBearingDeg: Double? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var unreliable = false
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
 
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = p.outline; strokeWidth = 2 * d }
     private val face = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.surface }

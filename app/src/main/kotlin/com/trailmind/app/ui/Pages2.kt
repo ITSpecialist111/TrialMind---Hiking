@@ -29,7 +29,7 @@ class CompassPage(host: MainActivity) : Page(host) {
     private var calibrate: View? = null
     private var interference: View? = null
 
-    private val onHeading: () -> Unit = { update() }
+    private val onHeading: () -> Unit = { updateHeading() }
     private val onFix: (Fix) -> Unit = { update() }
     private val onNav: () -> Unit = { update() }
 
@@ -78,26 +78,34 @@ class CompassPage(host: MainActivity) : Page(host) {
         addView(ui.text("Hold the phone flat, or upright with its back facing the way you look. Headings are true north (magnetic declination from your GPS position is applied). Grid references are OSGB36 (±5 m conversion) and only valid in Great Britain.", Ui.T.CAPTION))
     }
 
-    private fun update() {
+    private fun TextView.show(value: CharSequence) {
+        if (!android.text.TextUtils.equals(text, value)) text = value
+    }
+
+    private fun updateHeading() {
         val d = dial ?: return
         val heading = host.headingDeg
         d.headingDeg = heading
         d.unreliable = host.compassUnreliable || host.compassDisturbed
         calibrate?.visibility = if (host.compassUnreliable && heading != null) View.VISIBLE else View.GONE
         interference?.visibility = if (host.compassDisturbed && !host.compassUnreliable && heading != null) View.VISIBLE else View.GONE
-        headingText?.text = heading?.let {
+        headingText?.show(heading?.let {
             "True ${Units.bearing(it)} · magnetic ${Units.bearing(Geo.normalizeDeg(it - host.compass.declinationDeg))} · declination ${"%.1f".format(host.compass.declinationDeg)}°"
-        } ?: "Waiting for compass…"
+        } ?: "Waiting for compass…")
+    }
 
+    private fun update() {
+        val d = dial ?: return
+        updateHeading()
         val f = app.location.latest
         val imperial = app.prefs.imperial
         if (f == null) {
-            gridText?.text = "No GPS fix"
-            posText?.text = if (host.hasLocationPermission()) "Go outside with a clear view of the sky." else "Location permission is off."
+            gridText?.show("No GPS fix")
+            posText?.show(if (host.hasLocationPermission()) "Go outside with a clear view of the sky." else "Location permission is off.")
         } else {
             val here = LatLon(f.lat, f.lon)
-            gridText?.text = OsGrid.fromWgs84(here)?.format(10) ?: Units.latLon(f.lat, f.lon)
-            posText?.text = buildString {
+            gridText?.show(OsGrid.fromWgs84(here)?.format(10) ?: Units.latLon(f.lat, f.lon))
+            posText?.show(buildString {
                 append(Units.latLon(f.lat, f.lon)).append(" · ±").append(Units.distance(f.accuracyM.toDouble(), imperial))
                 f.altitudeM?.let {
                     append(" · alt ${Units.elevation(it, imperial)}")
@@ -105,9 +113,9 @@ class CompassPage(host: MainActivity) : Page(host) {
                     if (!f.altitudeIsMsl) append(" (GPS ellipsoid, ~50 m high)")
                 }
                 append(" · fix ${timeOf(f.location.time)}")
-            }
+            })
             val sun = Sun.today(here)
-            sunText?.text = when {
+            sunText?.show(when {
                 sun.polarDay -> "Sun up all day"
                 sun.polarNight -> "Sun down all day"
                 else -> {
@@ -115,13 +123,13 @@ class CompassPage(host: MainActivity) : Page(host) {
                     "Sunrise ${timeOf(sun.sunriseMs)} · sunset ${timeOf(sun.sunsetMs)}" +
                         (left?.let { if (it > 0) " · ${Units.duration(it)} of daylight left" else " · after sunset" } ?: "")
                 }
-            }
+            })
         }
 
         val target = app.nav.target
         val next = app.nav.fix?.nextWaypoint
         val route = app.nav.active
-        targetText?.text = when {
+        targetText?.show(when {
             f == null -> "Needs a GPS fix."
             target != null -> {
                 val b = Geo.bearingDeg(LatLon(f.lat, f.lon), target)
@@ -139,7 +147,7 @@ class CompassPage(host: MainActivity) : Page(host) {
                     if (app.nav.offRoute) " · you are ${Units.distance(fx.offRouteM, imperial)} off route" else ""
             }
             else -> { d.targetBearingDeg = null; "Long-press the map to set a target, or follow a route." }
-        }
+        })
         if (target == null && next == null && (route == null || app.nav.fix == null)) d.targetBearingDeg = null
     }
 }

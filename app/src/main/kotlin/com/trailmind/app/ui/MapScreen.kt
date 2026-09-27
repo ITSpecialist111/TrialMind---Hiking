@@ -481,7 +481,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             mapView.distanceStepM = DistanceMarks.stepM(app.prefs.imperial)
             mapView.distanceMarks = route?.let { DistanceMarks.along(it.guide, mapView.distanceStepM) } ?: emptyList()
         }
-        if (route == null) { navShown = null; navCard.removeAllViews(); navCard.visibility = View.GONE; return }
+        if (route == null) {
+            navShown = null
+            if (navCard.childCount > 0) navCard.removeAllViews()
+            navCard.visibility = View.GONE
+            return
+        }
         val imperial = app.prefs.imperial
         val fix = app.nav.fix
         val offRoute = app.nav.offRoute
@@ -578,7 +583,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private fun updateTarget() {
         val t = app.nav.target
         mapView.target = t
-        if (t == null) { targetShown = null; targetCard.removeAllViews(); targetCard.visibility = View.GONE; return }
+        if (t == null) {
+            targetShown = null
+            if (targetCard.childCount > 0) targetCard.removeAllViews()
+            targetCard.visibility = View.GONE
+            return
+        }
         val f = app.nav.lastFix
         val grid = OsGrid.fromWgs84(t)?.format(8) ?: Units.latLon(t.lat, t.lon)
         val detail = if (f != null) {

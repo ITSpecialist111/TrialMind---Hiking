@@ -50,7 +50,7 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
     private var position: LatLon? = null
     private var accuracyM = 0f
     var headingDeg: Float? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; if (position != null) invalidate() } }
     private var route = Line(emptyList())
     private var routeBounds: List<LatLon> = emptyList()
     private var waypoints: List<LatLon> = emptyList()
@@ -100,6 +100,9 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
     override fun onTouchEvent(event: MotionEvent) = gestures.onTouchEvent(event)
 
     fun setSource(key: String, attribution: String, minZoom: Int, maxZoom: Int) {
+        val minimum = minZoom.coerceAtLeast(MIN_ZOOM)
+        val maximum = maxZoom.coerceAtLeast(minimum)
+        if (mapKey == key && this.attribution == attribution && this.minZoom == minimum && this.maxZoom == maximum) return
         if (key != mapKey) {
             mapKey = key
             cache.evictAll()
@@ -107,14 +110,15 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
             retryAt.clear()
         }
         this.attribution = attribution
-        this.minZoom = minZoom.coerceAtLeast(MIN_ZOOM)
-        this.maxZoom = maxZoom.coerceAtLeast(this.minZoom)
+        this.minZoom = minimum
+        this.maxZoom = maximum
         zoom = zoom.coerceIn(this.minZoom, this.maxZoom)
         layoutAttribution()
         invalidate()
     }
 
     fun setPosition(p: LatLon?, accuracy: Float) {
+        if (position == p && accuracyM == accuracy) return
         position = p
         accuracyM = accuracy
         invalidate()
@@ -135,6 +139,7 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
     }
 
     fun setMarkers(next: LatLon?, target: LatLon?) {
+        if (this.next == next && this.target == target) return
         this.next = next
         this.target = target
         invalidate()

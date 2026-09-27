@@ -84,6 +84,13 @@ class MainActivity : Activity() {
     /** The magnetometer sees more than the Earth's field (steel, magnets, electronics), whatever its calibration says. */
     var compassDisturbed = false; private set
     private val headingListeners = LinkedHashSet<() -> Unit>()
+    private val headingGate = com.trailmind.core.geo.HeadingGate()
+    private val flushHeading = Runnable {
+        headingGate.flush(android.os.SystemClock.elapsedRealtime())?.let {
+            headingDeg = it
+            headingListeners.forEach { listener -> listener() }
+        }
+    }
 
     private var pendingPermission: (() -> Unit)? = null
     private var pendingBluetooth: (() -> Unit)? = null
@@ -96,10 +103,16 @@ class MainActivity : Activity() {
         map = MapScreen(this)
         fgLocation = ForegroundLocation(this, app.location)
         compass = Compass(this) { trueDeg, _, acc, disturbed ->
-            headingDeg = trueDeg
-            compassUnreliable = acc <= android.hardware.SensorManager.SENSOR_STATUS_ACCURACY_LOW
+            val now = android.os.SystemClock.elapsedRealtime()
+            val headingChanged = headingGate.accept(trueDeg, now)
+            Async.main.removeCallbacks(flushHeading)
+            headingGate.pendingDelayMs(now)?.let { Async.main.postDelayed(flushHeading, it) }
+            val unreliable = acc <= android.hardware.SensorManager.SENSOR_STATUS_ACCURACY_LOW
+            val statusChanged = compassUnreliable != unreliable || compassDisturbed != disturbed
+            if (headingChanged) headingDeg = trueDeg
+            compassUnreliable = unreliable
             compassDisturbed = disturbed
-            headingListeners.forEach { it() }
+            if (headingChanged || statusChanged) headingListeners.forEach { it() }
         }
         // Edge-to-edge is enforced from API 35; opt in explicitly on older releases.
         @Suppress("DEPRECATION")
@@ -143,6 +156,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        headingGate.reset()
         compass.start()
         CheckIn.arm(this)
         stack.lastOrNull()?.onShow()
@@ -150,6 +164,8 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         compass.stop()
+        Async.main.removeCallbacks(flushHeading)
+        headingGate.reset()
         stack.lastOrNull()?.onHide()
         map.saveCamera()
         super.onPause()

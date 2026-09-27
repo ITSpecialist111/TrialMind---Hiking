@@ -26,11 +26,11 @@ import kotlin.math.sin
 class NavDialView(ctx: Context) : View(ctx) {
     /** True heading of the watch's 12 o'clock; null without a compass (then the dial is north-up). */
     var headingDeg: Float? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var headingUp = true
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var position: LatLon? = null
-        set(v) { field = v; invalidate() }
+        set(v) { if (field != v) { field = v; invalidate() } }
     var route: List<LatLon> = emptyList()
         set(v) { field = v; updateMarks(); invalidate() }
     /** Distance marks go every mile rather than every kilometre. */
@@ -47,6 +47,7 @@ class NavDialView(ctx: Context) : View(ctx) {
     val radiusM: Double get() = SCALES[scaleIndex]
 
     fun setPointer(bearingDeg: Double?, color: Int) {
+        if (pointerDeg == bearingDeg && pointerFill.color == color) return
         pointerDeg = bearingDeg
         pointerFill.color = color
         pointerLine.color = color
