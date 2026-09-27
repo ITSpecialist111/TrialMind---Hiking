@@ -113,6 +113,26 @@ class Prefs(context: Context) {
         get() = sp.getString("emergency_contact", "") ?: ""
         set(v) = sp.edit().putString("emergency_contact", v.trim()).apply()
 
+    var emergencyContactName: String
+        get() = sp.getString("emergency_contact_name", "") ?: ""
+        set(v) = sp.edit().putString("emergency_contact_name", v.trim()).apply()
+
+    var checkInDueMs: Long
+        get() = sp.getLong("check_in_due", 0L)
+        set(v) = sp.edit().putLong("check_in_due", v).apply()
+
+    var checkInRoute: String
+        get() = sp.getString("check_in_route", "") ?: ""
+        set(v) = sp.edit().putString("check_in_route", v).apply()
+
+    var checkInRouteId: Long
+        get() = sp.getLong("check_in_route_id", 0L)
+        set(v) = sp.edit().putLong("check_in_route_id", v).apply()
+
+    var checkInStage: Int
+        get() = sp.getInt("check_in_stage", 0)
+        set(v) = sp.edit().putInt("check_in_stage", v).apply()
+
     var watchEnabled: Boolean
         get() = sp.getBoolean("watch_enabled", false)
         set(v) = sp.edit().putBoolean("watch_enabled", v).apply()

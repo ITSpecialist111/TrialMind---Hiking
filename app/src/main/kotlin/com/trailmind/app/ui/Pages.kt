@@ -1,6 +1,14 @@
 package com.trailmind.app.ui
 
 import android.text.InputType
+import android.Manifest
+import android.app.NotificationManager
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.os.BatteryManager
+import android.os.Build
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -17,6 +25,13 @@ import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.data.SavedFacilities
 import com.trailmind.app.data.WaymarkedTrails
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.location.CheckIn
+import com.trailmind.app.location.LocationHub
+import com.trailmind.app.map.TileSources
+import com.trailmind.app.map.TileGrid
+import com.trailmind.core.geo.WebMercator
+import com.trailmind.core.stats.TripReadiness
+import com.trailmind.core.weather.MountainWeather
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.FacilityCategory
 import com.trailmind.core.geo.BoundingBox
@@ -225,9 +240,15 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     private var loaded = false
     private var loading = false
     private var profile: ElevationProfileView? = null
+    private var mapCoverage: Int? = null
+    private var coverageSourceId: String? = null
+    private var forecast: com.trailmind.core.weather.PointForecast? = null
+    private var checking = false
+    private var fetchingWeather = false
     private val facilityListener: (Result<SavedFacilities>) -> Unit = { result ->
         result.onSuccess { facilities = it; facilityCacheUnreadable = false; showAllFacilities = false; host.map.updateFacilities() }
             .onFailure { host.toast("Could not find facilities: ${it.message ?: "connection failed"}") }
+        updateReadiness()
         refresh()
     }
     private val navListener: () -> Unit = {
@@ -247,15 +268,134 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
             facilityCacheUnreadable = r.getOrNull()?.third == true && facilities == null
             loaded = true
             loading = false
+            updateReadiness()
             refresh()
             }
         }
+        if (loaded) updateReadiness()
         if (loaded) refresh()
     }
 
     override fun onHide() {
         app.nav.removeListener(navListener)
         OverpassFacilities.removeListener(routeId, facilityListener)
+    }
+
+    fun onBaseMapChanged() {
+        refresh()
+        updateReadiness()
+    }
+
+    private fun updateReadiness() {
+        val route = data ?: return
+        if (checking) return
+        checking = true
+        val source = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)
+        Async.run({
+            val saved = OpenMeteo.saved(host, routeId)
+            val coverage = if (source.grid != TileGrid.WEB_MERCATOR || source.id == TileSources.OSM ||
+                source.isOnline && !source.offlineDownloadAllowed) null else {
+                val points = TripReadiness.sampleRoute(route.points.map { it.latLon() })
+                val packs = app.tiles.packsFor(source)
+                val footprints = packs.associate { it.id to app.tiles.footprint(it) }
+                val hits = points.count { point -> packs.any { pack ->
+                    val tile = WebMercator.tileFor(point, pack.maxZoom)
+                    val footprint = footprints[pack.id]
+                    val spans = footprint?.spans
+                    val inside = spans == null || footprint.zoom != pack.maxZoom ||
+                        spans.indices.step(3).any { spans[it] == tile.y && tile.x in spans[it + 1] until spans[it + 2] }
+                    inside && runCatching { app.tiles.openPack(pack)?.hasTile(tile) == true }.getOrDefault(false)
+                } }
+                TripReadiness.coverage(hits, points.size)
+            }
+            saved to coverage
+        }) { result ->
+            result.getOrNull()?.let { (weather, coverage) -> forecast = weather; mapCoverage = coverage; coverageSourceId = source.id }
+            checking = false
+            if (app.prefs.baseSourceId != source.id) { updateReadiness(); return@run }
+            refresh()
+        }
+    }
+
+    private fun readinessCard(route: RouteData, planningMinutes: Double): View = ui.card(spacing = 6) {
+        data class Check(val title: String, val detail: String, val ready: Boolean, val fix: String? = null, val action: (() -> Unit)? = null)
+        val now = System.currentTimeMillis()
+        val source = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)
+        val mapNeedsSignal = source.grid != TileGrid.WEB_MERCATOR || source.id == TileSources.OSM ||
+            source.isOnline && !source.offlineDownloadAllowed
+        val coverage = mapCoverage.takeIf { coverageSourceId == source.id }
+        val canDownload = source.offlineDownloadAllowed && source.grid == TileGrid.WEB_MERCATOR
+        val daylight = startByText(host, route.points, app.prefs.pace, app.prefs.daylightMarginMinutes, now)
+        val daylightSafe = daylight.startsWith("Start by") && !daylight.contains("has passed")
+        val high = HikeEstimator.highPoint(route.points, app.prefs.pace)
+        val weather = forecast
+        val fresh = weather != null && now - weather.fetchedMs in 0 until 6 * 3_600_000L
+        val hour = if (high != null) weather?.at(now + (high.minutesFromStart * 1.2 * 60_000).toLong()) else null
+        val warnings = if (hour != null && high != null) MountainWeather.warnings(hour, high.eleM, app.prefs.imperial) else emptyList()
+        val battery = host.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val rawLevel = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val level = if (rawLevel >= 0 && scale > 0) rawLevel * 100 / scale else -1
+        val charging = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, 0) in listOf(BatteryManager.BATTERY_STATUS_CHARGING, BatteryManager.BATTERY_STATUS_FULL)
+        val threshold = maxOf(30, (20 + planningMinutes / 6).toInt())
+        val location = LocationHub.hasPermission(host) && host.isGpsEnabled()
+        val checkInAlerts = (Build.VERSION.SDK_INT < 33 || host.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
+            Notifications.manager(host).areNotificationsEnabled() &&
+            Notifications.manager(host).getNotificationChannel(Notifications.CH_CHECK_IN)?.importance != NotificationManager.IMPORTANCE_NONE
+        val alerts = checkInAlerts && Notifications.manager(host).getNotificationChannel(Notifications.CH_ALERTS)?.importance != NotificationManager.IMPORTANCE_NONE
+        val due = app.prefs.checkInDueMs
+        val contact = app.prefs.emergencyContact.isNotBlank()
+        val checks = mutableListOf(
+            Check("Offline map", if (mapNeedsSignal) "${source.name} needs signal" else when (coverage) {
+                null -> "Checking saved tiles…"; 100 -> "Covered at pack detail"; 0 -> "Not covered"; else -> "Partly covered ($coverage%)"
+            }, !mapNeedsSignal && coverage == 100, if (canDownload && coverage != 100) "Download route corridor" else null,
+                if (canDownload && coverage != 100) ({ host.push(OfflinePage(host, routeId)) }) else null),
+            Check("Daylight", daylight, daylightSafe),
+            Check("Weather", when {
+                high == null -> "No high point forecast; check conditions yourself"
+                weather == null -> "No forecast saved"
+                !fresh -> "Saved forecast is over 6 hours old"
+                hour == null -> "Forecast does not cover the planned high point time"
+                warnings.isNotEmpty() -> warnings.joinToString("; ")
+                else -> "Saved forecast is fresh"
+            }, fresh && hour != null && warnings.isEmpty(), if (high != null && !fetchingWeather) "Fetch forecast" else null,
+                if (high != null && !fetchingWeather) ({
+                    fetchingWeather = true; refresh()
+                    Async.run({ OpenMeteo.fetch(host, routeId, high.position, high.eleM) }) { r ->
+                        fetchingWeather = false
+                        r.onSuccess { forecast = it }.onFailure { host.toast("Forecast unavailable: ${it.message}") }
+                        refresh()
+                    }
+                }) else null),
+            Check("Facilities", if (facilities != null) "Saved for offline use" else "Not saved for offline use", facilities != null,
+                if (facilities == null) "Find facilities" else null, if (facilities == null) ({
+                    OverpassFacilities.start(host, routeId, route.points.map { it.latLon() }); refresh()
+                }) else null),
+            Check("Battery", if (level < 0) "Battery level unavailable" else "$level%${if (charging) ", charging" else ""}; aim for at least $threshold% for this walk",
+                level >= threshold),
+            Check("Location & alerts", if (location && alerts) "Location and notifications ready" else
+                "${if (!location) "Location permission or services off" else "Location ready"}; ${if (alerts) "alerts allowed" else "allow notifications"}", location && alerts,
+                if (location && alerts) null else "Fix settings", {
+                    when { !LocationHub.hasPermission(host) -> host.withLocationPermission { refresh() }
+                        !host.isGpsEnabled() -> host.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                        host.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED -> host.requestNotificationPermissionIfNeeded()
+                        else -> host.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, host.packageName)) }
+                }),
+            Check("Check-in & contact", "${when { due > now -> "Check-in ${clockTime(host, due)}"; due > 0 -> "Check-in overdue"; else -> "No check-in set" }} · ${if (contact) "contact saved" else "contact missing"}${if (!checkInAlerts) " · notifications off" else ""}${if (due > 0 && CheckIn.delayedAlarm(host)) " · alarm may be late" else ""}",
+                due > now && contact && checkInAlerts && !CheckIn.delayedAlarm(host),
+                if (due > 0 && CheckIn.delayedAlarm(host)) "Allow exact alarms" else if (due > 0) "Edit check-in" else "Set check-in",
+                { if (due > 0 && CheckIn.delayedAlarm(host)) requestExactCheckInAlarm(host) else pickCheckIn(host, route.meta.name, planningMinutes, routeId) { refresh() } }),
+        )
+        if (app.prefs.watchEnabled) checks += Check("Watch", app.watch.statusText(), app.watch.status == com.trailmind.app.watch.WatchLink.Status.CONNECTED,
+            "Watch settings", { host.push(SettingsPage(host)) })
+        addView(ui.text("Ready to go?", Ui.T.TITLE))
+        addView(ui.text(TripReadiness.summary(checks.count { it.ready }, checks.size), Ui.T.BODY))
+        checks.forEach { check ->
+            addView(ui.text("${if (check.ready) "Ready" else "Check"} · ${check.title}: ${check.detail}", Ui.T.CAPTION))
+            if (check.fix != null && check.action != null) addView(ui.button(check.fix, null, Ui.B.TEXT) { check.action.invoke() })
+        }
+        if (!contact) addView(ui.button("Save emergency contact", R.drawable.ic_tune, Ui.B.TEXT) { host.push(SettingsPage(host)) })
+        addView(ui.text(OpenMeteo.ATTRIBUTION, Ui.T.CAPTION))
     }
 
     override fun render(): View {
@@ -278,6 +418,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.text("Planning time ${Units.minutes(est.planningMinutes)} (slower of Naismith+Langmuir and Tobler at ${Units.speedKmh(app.prefs.flatSpeedKmh / 3.6, imperial)}, ×${app.prefs.conditionsFactor} for conditions). Excludes breaks.", Ui.T.CAPTION))
                 addView(ui.text(startByText(host, d.points, app.prefs.pace, app.prefs.daylightMarginMinutes, System.currentTimeMillis()), Ui.T.BODY))
             })
+            addView(readinessCard(d, est.planningMinutes))
             addView(ui.card(padding = 12) {
                 addView(ui.text("Elevation profile", Ui.T.LABEL))
                 addView(ElevationProfileView(host, imperial).also {
@@ -375,13 +516,20 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
             addView(ui.row {
                 addView(ui.button("Rename", null, Ui.B.TEXT) {
                     ui.prompt("Rename route", d.meta.name) { n ->
-                        if (n.isNotBlank()) Async.run({ app.db.renameRoute(routeId, n); app.db.routeData(routeId) }) { r -> data = r.getOrNull(); refresh() }
+                        if (n.isNotBlank()) Async.run({ app.db.renameRoute(routeId, n); app.db.routeData(routeId) }) { r ->
+                            data = r.getOrNull()
+                            if (data != null && app.prefs.checkInRouteId == routeId) app.prefs.checkInRoute = n
+                            refresh()
+                        }
                     }
                 }, ui.lp(0, weight = 1f))
                 addView(ui.button("Delete", R.drawable.ic_delete, Ui.B.TEXT) {
                     ui.confirm("Delete route?", "\"${d.meta.name}\" will be removed. Recorded hikes are kept.", "Delete") {
                         if (following) app.nav.stopFollowing()
-                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId); OverpassFacilities.delete(host, routeId) }) { host.goBack() }
+                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId); OverpassFacilities.delete(host, routeId) }) { result ->
+                            if (result.isSuccess && app.prefs.checkInRouteId == routeId) CheckIn.clear(host)
+                            host.goBack()
+                        }
                     }
                 }, ui.lp(0, weight = 1f))
             })

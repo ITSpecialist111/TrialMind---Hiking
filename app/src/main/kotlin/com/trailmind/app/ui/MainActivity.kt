@@ -30,6 +30,7 @@ import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackStatus
+import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.ForegroundLocation
 import com.trailmind.app.map.MbTiles
 import com.trailmind.app.map.TileProvider
@@ -143,6 +144,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         compass.start()
+        CheckIn.arm(this)
         stack.lastOrNull()?.onShow()
     }
 
@@ -369,6 +371,10 @@ class MainActivity : Activity() {
         page.onShow()
     }
 
+    fun refreshRouteReadiness() {
+        (stack.lastOrNull() as? RouteDetailPage)?.onBaseMapChanged()
+    }
+
     fun pop() {
         if (stack.isEmpty()) return
         val top = stack.removeAt(stack.lastIndex)
@@ -580,6 +586,11 @@ class MainActivity : Activity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        if (intent.action == ACTION_SAFETY) {
+            intent.action = null
+            showTab(Tab.SAFETY)
+            return
+        }
         val uri: Uri? = when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -673,6 +684,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        const val ACTION_SAFETY = "com.trailmind.app.OPEN_SAFETY"
         const val WIDE_DP = 600
         const val EDGE_GALLERY = "com.google.aiedge.gallery"
         private const val RC_PERMS = 10

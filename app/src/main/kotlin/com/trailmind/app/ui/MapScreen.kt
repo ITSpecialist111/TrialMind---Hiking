@@ -28,6 +28,7 @@ import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.nav.DistanceMarks
 import com.trailmind.core.stats.TrackStats
+import com.trailmind.app.location.CheckIn
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -261,6 +262,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         app.prefs.baseSourceId = id
         app.tiles.clearErrors()
         applySource()
+        host.refreshRouteReadiness()
     }
 
     private fun applySource() {
@@ -678,6 +680,15 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                     addView(ui.fab(R.drawable.ic_stop, "Finish", bg = p.danger, fg = Color.WHITE) { confirmFinish() })
                 }
                 card.addView(row)
+                val due = app.prefs.checkInDueMs
+                card.addView(ui.button(if (due > 0) "Check-in ${clockTime(host, due)} · Edit" else "Set check-in", null, Ui.B.TEXT) {
+                    val route = app.nav.active?.data
+                    val minutes = route?.let { com.trailmind.core.stats.HikeEstimator.estimate(it.points, app.prefs.pace).planningMinutes } ?: 60.0
+                    pickCheckIn(host, route?.meta?.name ?: TrackingState.hikeName, minutes, route?.meta?.id ?: 0L) { updateTracking(force = true) }
+                })
+                if (due > 0) card.addView(ui.button("Cancel check-in", R.drawable.ic_close, Ui.B.TEXT) {
+                    CheckIn.clear(host); updateTracking(force = true)
+                })
                 recordBar.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
                 updateRecordStats()
             }
@@ -704,6 +715,11 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             host.ensureGpsEnabled {
                 host.requestNotificationPermissionIfNeeded()
                 TrackingService.start(host)
+                if (app.prefs.checkInDueMs <= 0) {
+                    val route = app.nav.active?.data
+                    val minutes = route?.let { com.trailmind.core.stats.HikeEstimator.estimate(it.points, app.prefs.pace).planningMinutes } ?: 60.0
+                    pickCheckIn(host, route?.meta?.name ?: "my walk", minutes, route?.meta?.id ?: 0L) { updateTracking(force = true) }
+                }
                 if (app.location.latest != null) mapView.follow = true
                 host.toast("Recording. Tracking continues with the screen off; keep TrailMind exempt from battery optimisation for long hikes.")
             }

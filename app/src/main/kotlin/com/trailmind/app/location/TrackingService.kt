@@ -161,6 +161,7 @@ class TrackingService : Service(), LocationListener {
 
     private fun finish() {
         stopUpdates()
+        CheckIn.clear(this)
         if (hikeId > 0) {
             val id = hikeId
             val active = TrackingState.activeMs()
@@ -203,6 +204,7 @@ class TrackingService : Service(), LocationListener {
     override fun onLocationChanged(location: Location) {
         val fix = LocationHub.toFix(this, location)
         app.location.publish(fix)
+        CheckIn.check(this)
         if (hikeId < 0 || paused) return
         val p = TrackPoint(location.latitude, location.longitude, fix.altitudeM, location.time, fix.accuracyM)
         if (filter.accept(p)) {

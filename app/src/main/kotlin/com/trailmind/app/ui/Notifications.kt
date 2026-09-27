@@ -9,6 +9,7 @@ object Notifications {
     const val CH_ALERTS = "alerts"
     const val CH_DOWNLOADS = "downloads"
     const val CH_WATCH = "watch"
+    const val CH_CHECK_IN = "check_in"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -18,6 +19,7 @@ object Notifications {
     const val ID_WATCH_LINK = 6
     const val ID_DAYLIGHT = 7
     const val ID_DUSK = 8
+    const val ID_CHECK_IN = 9
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -29,6 +31,11 @@ object Notifications {
         })
         m.createNotificationChannel(NotificationChannel(CH_ALERTS, "Navigation alerts", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Off-route, weather and daylight warnings"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 400, 200, 400)
+        })
+        m.createNotificationChannel(NotificationChannel(CH_CHECK_IN, "Check-in reminders", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Return-time reminders and overdue follow-ups"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 400, 200, 400)
         })

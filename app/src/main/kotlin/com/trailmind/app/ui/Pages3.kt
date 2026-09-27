@@ -16,6 +16,7 @@ import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.location.CheckIn
 import com.trailmind.app.map.DownloadService
 import com.trailmind.app.map.DownloadState
 import com.trailmind.app.map.MbTiles
@@ -456,7 +457,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
     private var grid: TextView? = null
     private var detail: TextView? = null
 
-    override fun onShow() { app.location.addListener(onFix); update() }
+    override fun onShow() { app.location.addListener(onFix); update(); refresh() }
     override fun onHide() { app.location.removeListener(onFix) }
 
     private fun locationText(f: Fix?): String? {
@@ -483,6 +484,19 @@ class SafetyPage(host: MainActivity) : Page(host) {
             addView(ui.button("Share", R.drawable.ic_share, Ui.B.TONAL) {
                 locationText(app.location.latest)?.let { host.shareText("My location", it) } ?: host.toast("No GPS fix yet")
             }, ui.lp(0, weight = 1f))
+        })
+        val due = app.prefs.checkInDueMs
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("Check-in", Ui.T.TITLE))
+            addView(ui.text(if (due > 0) "Check-in ${clockTime(host, due)} · ${app.prefs.checkInRoute}" else "No check-in set", Ui.T.BODY))
+            addView(ui.text("TrailMind reminds you on this phone. It does not send an SMS for you; Text opens your SMS app for you to send it.", Ui.T.CAPTION))
+            addView(ui.row {
+                addView(ui.button(if (due > 0) "Edit" else "Set check-in", null, Ui.B.TONAL) {
+                    pickCheckIn(host, app.prefs.checkInRoute.ifBlank { app.nav.active?.data?.meta?.name ?: "my walk" }, 60.0,
+                        app.prefs.checkInRouteId.takeIf { due > 0 } ?: app.nav.active?.data?.meta?.id ?: 0L) { refresh() }
+                }, ui.lp(0, weight = 1f))
+                if (due > 0) addView(ui.button("Cancel", R.drawable.ic_close, Ui.B.TEXT) { CheckIn.clear(host); refresh() }, ui.lp(0, weight = 1f))
+            })
         })
         val contact = app.prefs.emergencyContact
         addView(ui.button(if (contact.isBlank()) "Text my location…" else "Text location to $contact", R.drawable.ic_sos, Ui.B.OUTLINED) {
@@ -612,9 +626,15 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
         addView(ui.card(spacing = 8) {
             addView(ui.text("Emergency contact", Ui.T.TITLE))
+            val name = ui.input("Contact name", prefs.emergencyContactName)
             val phone = ui.input("Phone number for location SMS", prefs.emergencyContact, InputType.TYPE_CLASS_PHONE)
+            addView(name, ui.lp())
             addView(phone, ui.lp())
-            addView(ui.button("Save contact", null, Ui.B.TONAL) { prefs.emergencyContact = phone.text.toString().trim(); host.toast("Saved") })
+            addView(ui.button("Save contact", null, Ui.B.TONAL) {
+                prefs.emergencyContactName = name.text.toString().trim()
+                prefs.emergencyContact = phone.text.toString().trim()
+                host.toast("Saved")
+            })
         })
 
         addView(ui.card(spacing = 8) {
