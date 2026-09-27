@@ -79,6 +79,7 @@ class TrackingService : Service(), LocationListener {
             ACTION_RESUME_HIKE -> handler.post { resumeExisting(intent.getLongExtra(EXTRA_HIKE, -1)) }
             ACTION_PAUSE -> handler.post { pause() }
             ACTION_RESUME -> handler.post { resume() }
+            ACTION_REFRESH_FRONTIER -> handler.post { refreshFallMonitoring() }
             ACTION_STOP -> handler.post { finish() }
             null -> {
                 // Restarted by the system after the process was killed: continue the unfinished hike.
@@ -188,6 +189,7 @@ class TrackingService : Service(), LocationListener {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2_000L, 0f, this, thread.looper)
             updatesActive = true
             app.baro.acquire()
+            refreshFallMonitoring()
         } catch (e: Exception) {
             Log.w(TAG, "requestLocationUpdates failed", e)
         }
@@ -199,6 +201,13 @@ class TrackingService : Service(), LocationListener {
         runCatching { lm.removeUpdates(this) }
         updatesActive = false
         app.baro.release()
+        app.fallMonitor.setActive(false)
+    }
+
+    private fun refreshFallMonitoring() {
+        app.fallMonitor.setActive(
+            updatesActive && app.prefs.frontierEnabled && app.prefs.frontierFallDetectionEnabled,
+        )
     }
 
     override fun onLocationChanged(location: Location) {
@@ -302,6 +311,7 @@ class TrackingService : Service(), LocationListener {
         const val ACTION_RESUME_HIKE = "com.trailmind.app.track.RESUME_HIKE"
         const val ACTION_PAUSE = "com.trailmind.app.track.PAUSE"
         const val ACTION_RESUME = "com.trailmind.app.track.RESUME"
+        const val ACTION_REFRESH_FRONTIER = "com.trailmind.app.track.REFRESH_FRONTIER"
         const val ACTION_STOP = "com.trailmind.app.track.STOP"
         const val EXTRA_NAME = "name"
         const val EXTRA_HIKE = "hike"

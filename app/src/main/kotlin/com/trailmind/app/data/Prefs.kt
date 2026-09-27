@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import com.trailmind.core.stats.PaceSettings
+import com.trailmind.core.frontier.FallVector
 
 /** User settings. Stored in app-private SharedPreferences (app backup is disabled). */
 class Prefs(context: Context) {
@@ -154,4 +155,56 @@ class Prefs(context: Context) {
     var watchAddress: String
         get() = sp.getString("watch_address", "") ?: ""
         set(v) = sp.edit().putString("watch_address", v).apply()
+
+    var frontierDeviceId: String
+        get() = sp.getString("frontier_device_id", "") ?: ""
+        set(v) = sp.edit().putString("frontier_device_id", v).apply()
+
+    var frontierSequence: Long
+        get() = sp.getLong("frontier_sequence", 0L)
+        set(v) = sp.edit().putLong("frontier_sequence", v).apply()
+
+    var frontierEnabled: Boolean
+        get() = sp.getBoolean("frontier_enabled", true)
+        set(v) = sp.edit().putBoolean("frontier_enabled", v).apply()
+
+    var frontierHeartbeatsEnabled: Boolean
+        get() = sp.getBoolean("frontier_heartbeats_enabled", true)
+        set(v) = sp.edit().putBoolean("frontier_heartbeats_enabled", v).apply()
+
+    var frontierFallDetectionEnabled: Boolean
+        get() = sp.getBoolean("frontier_fall_detection_enabled", true)
+        set(v) = sp.edit().putBoolean("frontier_fall_detection_enabled", v).apply()
+
+    var frontierSatelliteDataEnabled: Boolean
+        get() = sp.getBoolean("frontier_satellite_data_enabled", true)
+        set(v) = sp.edit().putBoolean("frontier_satellite_data_enabled", v).apply()
+
+    var frontierEmergencyStatus: Int
+        get() = sp.getInt("frontier_emergency_status", 0)
+        set(v) = sp.edit().putInt("frontier_emergency_status", v).apply()
+
+    var frontierFallVector: FallVector?
+        get() = if (sp.contains("frontier_fall_impact")) {
+            FallVector(
+                impactGForce = sp.getFloat("frontier_fall_impact", 0f),
+                freefallDurationSeconds = sp.getFloat("frontier_fall_duration", 0f),
+                deltaAltitudeMeters = sp.getFloat("frontier_fall_altitude", 0f),
+            )
+        } else {
+            null
+        }
+        set(v) {
+            sp.edit().apply {
+                if (v == null) {
+                    remove("frontier_fall_impact")
+                    remove("frontier_fall_duration")
+                    remove("frontier_fall_altitude")
+                } else {
+                    putFloat("frontier_fall_impact", v.impactGForce)
+                    putFloat("frontier_fall_duration", v.freefallDurationSeconds)
+                    putFloat("frontier_fall_altitude", v.deltaAltitudeMeters)
+                }
+            }.apply()
+        }
 }

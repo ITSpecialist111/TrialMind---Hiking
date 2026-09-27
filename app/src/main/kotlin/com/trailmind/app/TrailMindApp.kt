@@ -1,6 +1,7 @@
 package com.trailmind.app
 
 import android.app.Application
+import android.os.Build
 import android.os.UserManager
 import com.trailmind.app.data.Db
 import com.trailmind.app.data.PackStatus
@@ -13,6 +14,8 @@ import com.trailmind.app.map.TileProvider
 import com.trailmind.app.map.TerrainProvider
 import com.trailmind.app.nav.NavigationController
 import com.trailmind.app.sensor.Barometer
+import com.trailmind.app.sensor.FallMonitor
+import com.trailmind.app.frontier.FrontierCoordinator
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.watch.WatchLink
 
@@ -34,10 +37,16 @@ class TrailMindApp : Application() {
         private set
     lateinit var baro: Barometer
         private set
+    lateinit var frontier: FrontierCoordinator
+        private set
+    lateinit var fallMonitor: FallMonitor
+        private set
 
     override fun onCreate() {
         super.onCreate()
         if (!getSystemService(UserManager::class.java).isUserUnlocked) return
+        // The ":boot" process only re-arms the check-in alarm; it must not start a second copy of the app.
+        if (Build.VERSION.SDK_INT >= 28 && Application.getProcessName() != packageName) return
         instance = this
         prefs = Prefs(this)
         db = Db(this)
@@ -50,7 +59,10 @@ class TrailMindApp : Application() {
         terrain = TerrainProvider(this)
         nav = NavigationController(this)
         location = LocationHub(nav)
+        frontier = FrontierCoordinator(this)
+        fallMonitor = FallMonitor(this, frontier::recordFall)
         watch = WatchLink(this)
+        frontier.start()
         Notifications.createChannels(this)
         CheckIn.arm(this)
         Async.io { tiles.trimDiskCache(); terrain.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }
