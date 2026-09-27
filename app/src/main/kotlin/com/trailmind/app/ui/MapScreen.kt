@@ -289,7 +289,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val s = mapView.source
         if (!premiumNoticeShown && app.tiles.premiumDenied(s)) {
             premiumNoticeShown = true
-            host.toast("${s.name}: the most detailed zooms are OS Premium data. Your OS plan is the free OpenData plan, so the map shows the last free zoom enlarged.")
+            host.toast("${s.name}: your OS plan does not include closer detail, so the map enlarges the last available overview tile.")
         }
         mapView.hint = when {
             s.requiresKey && app.prefs.osApiKey.isBlank() ->

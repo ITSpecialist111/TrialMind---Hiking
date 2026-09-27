@@ -26,6 +26,21 @@ object TilePolicy {
 
     const val MAX_TILES_PER_DOWNLOAD = 25_000
     const val MAX_ZOOM = 20
+    const val PREMIUM_CACHE_MS = 24L * 3_600_000
+
+    fun premiumCacheFresh(cachedAtMs: Long, nowMs: Long): Boolean =
+        nowMs - cachedAtMs in 0 until PREMIUM_CACHE_MS
+
+    fun premiumPurgeDue(cachedAtMs: Long, nowMs: Long, aheadMs: Long = 0L): Boolean =
+        !premiumCacheFresh(cachedAtMs, nowMs) || nowMs - cachedAtMs >= PREMIUM_CACHE_MS - aheadMs
+
+    fun openDataTile(tile: TileKey, premiumFromZoom: Int?): TileKey {
+        require(tile.z in 0..MAX_ZOOM)
+        val zoom = minOf(tile.z, premiumFromZoom?.minus(1) ?: tile.z)
+        require(zoom >= 0)
+        val difference = tile.z - zoom
+        return TileKey(zoom, tile.x shr difference, tile.y shr difference)
+    }
 
     fun hostOf(template: String): String? = runCatching {
         // Both braces escaped: Android's ICU regex rejects a bare '}' (the JVM accepts it).

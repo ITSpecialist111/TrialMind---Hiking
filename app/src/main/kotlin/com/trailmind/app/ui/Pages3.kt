@@ -23,6 +23,7 @@ import com.trailmind.app.map.MbTiles
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.map.TileSource
 import com.trailmind.app.map.TileSources
+import com.trailmind.app.map.TileGrid
 import com.trailmind.core.ai.Briefing
 import com.trailmind.core.ai.BriefingInput
 import com.trailmind.core.format.Units
@@ -54,11 +55,15 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
     private var premiumMaxZoom = 0
     private var bufferM = 500.0
     private var count: Long? = null
+    private var countedArea: BoundingBox? = null
     private var premiumCount = 0L
     private var countJob = 0
     private var progressViews = HashMap<Long, Pair<android.widget.ProgressBar, TextView>>()
+    private var premiumExpiries = emptyMap<Long, Long?>()
     private val onDownload: () -> Unit = { updateProgress() }
-    private val onTiles: () -> Unit = { reload() }
+    private val onTiles: () -> Unit = {
+        if (packs != app.tiles.packs || premiumExpiries.values.any { it != null && it > 0 && it <= System.currentTimeMillis() }) reload()
+    }
 
     override fun onShow() {
         DownloadState.addListener(onDownload)
@@ -80,15 +85,36 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
         app.tiles.removeListener(onTiles)
     }
 
-    private fun reload() = Async.run({ app.db.packs() to app.db.routes() }) { r ->
-        r.getOrNull()?.let { packs = it.first; routes = it.second }
+    private fun reload() = Async.run({
+        val currentPacks = app.db.packs()
+        val expiry = currentPacks.filter { it.premiumMaxZoom > 0 }.associate { pack ->
+            val source = TileSources.byId(pack.sourceId, app.prefs, currentPacks)
+            val first = source.premiumFromZoom ?: Int.MAX_VALUE
+            val tiles = if (pack.routeId != null) app.db.routeData(pack.routeId)?.points?.map { it.latLon() }?.let {
+                if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngCorridor(it, pack.bufferM, first, pack.premiumMaxZoom)
+                else TileCoverage.corridor(it, pack.bufferM, first, pack.premiumMaxZoom)
+            } else pack.bounds?.let {
+                if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngBox(it, first, pack.premiumMaxZoom)
+                else TileCoverage.box(it, first, pack.premiumMaxZoom)
+            }
+            pack.id to tiles?.map { tile ->
+                if (app.tiles.hasFreshPremium(source, tile)) app.tiles.premiumCachedAt(source, tile) + TilePolicy.PREMIUM_CACHE_MS else 0L
+            }?.minOrNull()
+        }
+        Triple(currentPacks, app.db.routes(), expiry)
+    }) { r ->
+        r.getOrNull()?.let { (currentPacks, currentRoutes, expiry) ->
+            packs = currentPacks; routes = currentRoutes; premiumExpiries = expiry
+        }
         loadRoute()
     }
 
     private fun loadRoute() {
         val id = routeId
         if (id == null || routeData?.meta?.id == id) { recount(); refresh(); return }
-        Async.run({ app.db.routeData(id) }) { r -> routeData = r.getOrNull(); recount(); refresh() }
+        Async.run({ app.db.routeData(id) }) { r ->
+            if (routeId == id) { routeData = r.getOrNull(); recount(); refresh() }
+        }
     }
 
     private fun downloadable(): List<TileSource> = TileSources.all(app.prefs, packs).filter {
@@ -103,7 +129,7 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
     private fun area(): BoundingBox = routeData?.let { BoundingBox.of(it.points.map { p -> p.latLon() })?.expandedByMetres(bufferM) }
         ?: host.map.mapView.visibleBounds()
 
-    private fun minZoom(s: TileSource) = maxOf(s.minZoom, 7)
+    private fun minZoom(s: TileSource) = if (s.grid == TileGrid.BRITISH_NATIONAL_GRID) s.minZoom else maxOf(s.minZoom, 7)
 
     /** Premium zooms to pre-load for 24 hours, or an empty range when the key has no Premium or it is off. */
     private fun premiumZooms(s: TileSource): IntRange {
@@ -116,24 +142,29 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
         val job = ++countJob
         val rd = routeData
         val box = area()
+        val corridorBuffer = bufferM
         val minZ = minZoom(s)
         val maxZ = maxZoom.coerceAtMost(s.downloadMaxZoom)
         val pz = premiumZooms(s)
         count = null
         Async.run({
             fun tiles(from: Int, to: Int) = if (from > to) 0L
-                else if (rd != null) TileCoverage.corridorCount(rd.points.map { it.latLon() }, bufferM, from, to)
+                else if (s.grid == TileGrid.BRITISH_NATIONAL_GRID && rd != null)
+                    TileCoverage.bngCorridorCount(rd.points.map { it.latLon() }, corridorBuffer, from, to)
+                else if (s.grid == TileGrid.BRITISH_NATIONAL_GRID) TileCoverage.bngBox(box, from, to)
+                    .take(TilePolicy.MAX_TILES_PER_DOWNLOAD + 1).count().toLong()
+                else if (rd != null) TileCoverage.corridorCount(rd.points.map { it.latLon() }, corridorBuffer, from, to)
                 else WebMercator.countTiles(box, from, to)
             tiles(minZ, maxZ) to (if (pz.isEmpty()) 0L else tiles(pz.first, pz.last))
-        }) { r -> if (job == countJob) { r.getOrNull()?.let { (open, premium) -> count = open + premium; premiumCount = premium }; refresh() } }
+        }) { r -> if (job == countJob) { r.getOrNull()?.let { (open, premium) -> count = open + premium; premiumCount = premium; countedArea = box }; refresh() } }
     }
 
     override fun render(): View = scaffold("Offline maps") {
         val s = source()
         addView(ui.card(spacing = 8) {
             addView(ui.text("What can be offline", Ui.T.LABEL))
-            addView(ui.text("• OS Maps (Outdoor/Road/Light) areas, downloaded with your own OS Data Hub key. OpenData zooms (up to 16) are kept for as long as you like.\n" +
-                "• With OS Premium on your key, closer zooms (17+) can be added for 24 hours, the longest OS allows Premium tiles to be kept. Add them on the day of the hike.\n" +
+            addView(ui.text("• OS Maps areas, downloaded with your own OS Data Hub key. Overview maps stay in your pack.\n" +
+                "• Explorer 1:25k detail can be added for 24 hours, the longest OS allows. Add it on the day of the hike.\n" +
                 "• Any raster MBTiles file you have the right to use (e.g. made with QGIS, MOBAC or bought).\n" +
                 "• OpenStreetMap's public tiles are never bulk-downloaded: their usage policy forbids it. Areas you browse are cached for a few days only.\n" +
                 "Zoomed in beyond what is on the phone, the map enlarges the closest zoom it has.", Ui.T.CAPTION))
@@ -149,11 +180,17 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             }
             if (s.requiresKey && app.prefs.osApiKey.isBlank()) addView(ui.banner("${s.name} needs your OS Data Hub API key (Settings)."))
             addView(ui.text("Source", Ui.T.LABEL))
-            addView(chipRow(downloadable().map { it.name.removePrefix("OS Maps – ") to it.id }, s.id) { sourceId = it; recount(); refresh() })
+            addView(chipRow(downloadable().map { it.name.removePrefix("OS Maps – ") to it.id }, s.id) {
+                sourceId = it
+                val selected = source()
+                maxZoom = selected?.downloadMaxZoom ?: maxZoom
+                premiumMaxZoom = if (selected?.id == TileSources.OS_LEISURE && app.prefs.osPremium) 9 else 0
+                recount(); refresh()
+            })
             addView(ui.text("Area", Ui.T.LABEL))
             val options = listOf<Pair<String, Long?>>("Visible map area" to null) + routes.take(8).map { it.name to it.id }
             addView(chipRow(options.map { it.first to (it.second?.toString() ?: "") }, routeId?.toString() ?: "") { v ->
-                routeId = v.toLongOrNull(); routeData = null; loadRoute()
+                routeId = v.toLongOrNull(); routeData = null; count = null; countJob++; refresh(); loadRoute()
             })
             if (routeId != null) {
                 addView(ui.text("Corridor either side of the route", Ui.T.LABEL))
@@ -162,32 +199,44 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                 })
             }
             addView(ui.text("Most detailed zoom", Ui.T.LABEL))
-            val zs = (12..s.downloadMaxZoom).map { z -> "$z" to "$z" }
+            val zs = ((if (s.grid == TileGrid.BRITISH_NATIONAL_GRID) 5 else 12)..s.downloadMaxZoom).map { z -> "$z" to "$z" }
             if (maxZoom > s.downloadMaxZoom) maxZoom = s.downloadMaxZoom
             addView(chipRow(zs, maxZoom.toString()) { maxZoom = it.toInt(); recount(); refresh() })
-            addView(ui.text("Zoom 15 ≈ 1:18k detail, 16 ≈ 1:9k. Lower zooms (${minZoom(s)}+) are included for overview.", Ui.T.CAPTION))
+            addView(ui.text(if (s.grid == TileGrid.BRITISH_NATIONAL_GRID) "Overview maps (kept): zooms 0–5."
+                else "Zoom 15 ≈ 1:18k detail, 16 ≈ 1:9k. Lower zooms (${minZoom(s)}+) are included for overview.", Ui.T.CAPTION))
             val from = s.premiumFromZoom
             if (from != null && app.prefs.osPremium) {
-                addView(ui.text("Premium detail (kept 24 hours)", Ui.T.LABEL))
-                val options = listOf("Off" to "0") + (from..minOf(from + 2, s.maxZoom)).map { z -> "to $z" to "$z" }
+                addView(ui.text(if (s.id == TileSources.OS_LEISURE) "Explorer 1:25k detail — OS lets you keep this for 24 hours" else "Closer detail (kept 24 hours)", Ui.T.LABEL))
+                val options = if (s.id == TileSources.OS_LEISURE)
+                    listOf("Off" to "0", "Landranger (zoom 6)" to "6", "Explorer 1:25k (zooms 7–9)" to "9")
+                else listOf("Off" to "0") + (from..minOf(from + 2, s.maxZoom)).map { z -> "to $z" to "$z" }
                 addView(chipRow(options, premiumMaxZoom.toString()) { premiumMaxZoom = it.toInt(); recount(); refresh() })
                 if (premiumMaxZoom >= from && count != null) addView(ui.text(
-                    "$premiumCount Premium tiles, about ${(premiumCount + 14) / 15} OS transactions from your plan's monthly allowance. " +
-                        "They are deleted 24 hours after download.", Ui.T.CAPTION))
+                    "$premiumCount detail tiles, about ${"%.1f".format(premiumCount * AVG_TILE_KB / 1024.0)} MB. " +
+                        "These requests use OS Premium transactions from your plan's allowance. " +
+                        "They expire 24 hours after download and are automatically cleaned up.", Ui.T.CAPTION))
             }
             val c = count
             val tooMany = c != null && c > TilePolicy.MAX_TILES_PER_DOWNLOAD
             addView(ui.text(when {
                 c == null -> "Counting tiles…"
-                else -> "$c tiles · about ${"%.0f".format(c * AVG_TILE_KB / 1024.0)} MB" +
-                    if (tooMany) "\nToo large: the limit is ${TilePolicy.MAX_TILES_PER_DOWNLOAD} tiles per pack. Choose a smaller area, a narrower corridor or a lower zoom." else ""
+                tooMany -> "Too large: more than ${TilePolicy.MAX_TILES_PER_DOWNLOAD} tiles. Choose a smaller area, a narrower corridor or a lower zoom."
+                c == 0L && s.grid == TileGrid.BRITISH_NATIONAL_GRID -> "Explorer and Landranger maps only cover Great Britain. Choose an area there."
+                else -> "$c tiles · about ${"%.0f".format(c * AVG_TILE_KB / 1024.0)} MB"
             }, Ui.T.BODY, if (tooMany) p.danger else p.onSurface))
             addView(ui.text(s.note, Ui.T.CAPTION))
+            addView(ui.text(s.attribution, Ui.T.CAPTION))
             addView(ui.button("Download", R.drawable.ic_download) {
                 if (c == null || c == 0L || tooMany) return@button
                 if (DownloadState.packId != null) { host.toast("Another download is running."); return@button }
                 val defaultName = routeData?.meta?.name ?: "Area ${java.text.DateFormat.getDateInstance().format(java.util.Date())}"
-                ui.prompt("Name this offline map", defaultName) { name -> startDownload(s, name.ifBlank { defaultName }, c) }
+                ui.prompt("Name this offline map", defaultName) { name ->
+                    val chosenName = name.ifBlank { defaultName }
+                    if (premiumCount > 0) ui.confirm("Use OS Premium transactions?",
+                        "Downloading $premiumCount detail tiles uses transactions from your OS Data Hub plan. Detail expires within 24 hours; overview maps stay saved.",
+                        "Download") { startDownload(s, chosenName, c) }
+                    else startDownload(s, chosenName, c)
+                }
             }.apply { isEnabled = c != null && c > 0 && !tooMany; alpha = if (isEnabled) 1f else 0.5f })
         })
 
@@ -206,9 +255,11 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             addView(ui.text("Browse cache", Ui.T.LABEL))
             val cacheText = ui.text("Calculating…", Ui.T.CAPTION)
             addView(cacheText)
-            Async.run({ app.tiles.diskCacheBytes() }) { r -> cacheText.text = "Recently viewed tiles: ${mb(r.getOrDefault(0))} (auto-trimmed to 300 MB, refreshed after 7 days)" }
+            Async.run({ app.tiles.diskCacheBytes() }) { r -> cacheText.text = "Browse and pre-loaded tiles: ${mb(r.getOrDefault(0))}. Premium expires within 24 hours. Other browse tiles refresh after 7 days; cache limit 300 MB." }
             addView(ui.button("Clear cache", R.drawable.ic_delete, Ui.B.TEXT) {
-                Async.run({ app.tiles.clearDiskCache() }) { refresh() }
+                ui.confirm("Clear cached maps?", "This also removes pre-loaded 24-hour detail. Saved overview packs stay on the phone.", "Clear") {
+                    Async.run({ app.tiles.clearDiskCache() }) { reload() }
+                }
             })
         })
     }
@@ -231,23 +282,32 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             progressViews[pk.id] = bar to label
         }
         pk.message?.let { addView(ui.text(it, Ui.T.CAPTION, p.danger)) }
-        val premiumUntil = pk.premiumMs + 24 * 3_600_000L
+        val premiumUntil = premiumExpiries[pk.id] ?: 0L
         val premiumExpired = pk.premiumMaxZoom > 0 && System.currentTimeMillis() >= premiumUntil
+        val detailLabel = if (pk.sourceId == TileSources.OS_LEISURE) {
+            if (pk.premiumMaxZoom == 6) "Landranger detail" else "Explorer detail"
+        } else "Closer detail to zoom ${pk.premiumMaxZoom}"
+        if (pk.sourceId == TileSources.OS_LEISURE) addView(ui.text("The map outline marks saved overview tiles, not 24-hour detail.", Ui.T.CAPTION))
         if (pk.premiumMaxZoom > 0) addView(ui.text(
-            if (!premiumExpired) "Premium detail to zoom ${pk.premiumMaxZoom} until ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(premiumUntil))}"
-            else "Premium detail to zoom ${pk.premiumMaxZoom}: not loaded or past its 24 hours", Ui.T.CAPTION))
+            if (!premiumExpired) "$detailLabel until ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(premiumUntil))}"
+            else "$detailLabel: not loaded or past its 24 hours", Ui.T.CAPTION))
         addView(ui.flow(spacing = 4) {
             if (pk.kind == PackKind.DOWNLOAD) {
                 if (active) addView(ui.button("Pause", R.drawable.ic_pause, Ui.B.TEXT) { DownloadService.pause(host) })
-                else if (pk.status != PackStatus.COMPLETE || premiumExpired) addView(ui.button(if (pk.status == PackStatus.COMPLETE) "Reload Premium" else "Resume", R.drawable.ic_play, Ui.B.TEXT) {
-                    if (DownloadState.packId != null) host.toast("Another download is running.") else {
-                        host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id)
-                    }
+                else if (pk.status != PackStatus.COMPLETE || premiumExpired) addView(ui.button(if (premiumExpired && pk.status == PackStatus.COMPLETE) "Reload" else "Resume", R.drawable.ic_play, Ui.B.TEXT) {
+                    if (DownloadState.packId != null) host.toast("Another download is running.") else if (pk.premiumMaxZoom > 0) {
+                        ui.confirm("Use OS Premium transactions?",
+                            "Reloading detail may use transactions from your OS Data Hub plan. It expires within 24 hours of download.",
+                            "Continue") { host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id) }
+                    } else { host.requestNotificationPermissionIfNeeded(); DownloadService.start(host, pk.id) }
                 })
             } else {
                 addView(ui.button("Use as map", R.drawable.ic_map, Ui.B.TEXT) { host.map.setSource("pack:${pk.id}"); host.showMap() })
             }
-            pk.bounds?.let { b -> addView(ui.button("Show", null, Ui.B.TEXT) { host.map.fit(b) }) }
+            pk.bounds?.let { b -> addView(ui.button("Show", null, Ui.B.TEXT) {
+                host.map.setSource(if (pk.kind == PackKind.IMPORT) "pack:${pk.id}" else pk.sourceId)
+                host.map.fit(b)
+            }) }
             addView(ui.button("Delete", R.drawable.ic_delete, Ui.B.TEXT) {
                 if (active) { host.toast("Pause the download first."); return@button }
                 ui.confirm("Delete offline map?", "\"${pk.name}\" (${mb(pk.bytes)}) will be removed from this phone.", "Delete") {
@@ -274,15 +334,16 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
 
     private fun startDownload(s: TileSource, name: String, tiles: Long) {
         val rd = routeData
-        val box = area()
+        val box = countedArea ?: return
         val minZ = minZoom(s)
         val maxZ = maxZoom.coerceAtMost(s.downloadMaxZoom)
+        val detailZoom = premiumZooms(s).let { if (it.isEmpty()) 0 else it.last }
+        val corridorBuffer = if (rd != null) bufferM else 0.0
         Async.run({
             val fileName = "dl_${System.currentTimeMillis()}.mbtiles"
-            MbTiles.create(TileProvider.packFile(host, fileName), name, box, minZ, maxZ, s.attribution).close()
+            MbTiles.create(TileProvider.packFile(host, fileName), name, box, minZ, maxZ, s.attribution, s.grid).close()
             val id = app.db.insertPack(name, PackKind.DOWNLOAD, s.id, fileName, minZ, maxZ, box, rd?.meta?.id,
-                if (rd != null) bufferM else 0.0, tiles, PackStatus.QUEUED, "png", s.attribution,
-                premiumZooms(s).let { if (it.isEmpty()) 0 else it.last })
+                corridorBuffer, tiles, PackStatus.QUEUED, "png", s.attribution, detailZoom)
             app.tiles.reloadPacks()
             id
         }) { r ->
@@ -558,7 +619,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
         addView(ui.card(spacing = 10) {
             addView(ui.text("Ordnance Survey maps", Ui.T.TITLE))
             addView(ui.text("Create a free account and API project on the OS Data Hub, add the OS Maps API, and paste the project API key here. The key is stored only on this phone. " +
-                "Zoom 7–16 uses OS OpenData (free); closer zooms are OS Premium data and use your plan's allowance.", Ui.T.CAPTION))
+                "Overview maps (zooms 7–16) stay saved; closer detail uses your plan's allowance and is kept for 24 hours.", Ui.T.CAPTION))
             val key = ui.input("OS Data Hub API key", prefs.osApiKey, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
             addView(key, ui.lp())
             val status = ui.text("", Ui.T.CAPTION)
@@ -697,7 +758,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 is TileProvider.Fetch.Ok -> when {
                     premium is TileProvider.Fetch.Ok -> "✓ Key works, with OS Premium: every zoom. Choose an OS map from the layers button."
                     premium is TileProvider.Fetch.Http && premium.code == 403 ->
-                        "✓ Key works on the free OS OpenData plan: zoom 7–16. Closer zooms show zoom 16 enlarged. Choose an OS map from the layers button."
+                        "✓ Key works for overview maps: zooms 7–16. Closer zooms show zoom 16 enlarged. Choose an OS map from the layers button."
                     else -> "✓ Key works. Choose an OS map from the layers button."
                 }
                 is TileProvider.Fetch.Http -> when (open.code) {

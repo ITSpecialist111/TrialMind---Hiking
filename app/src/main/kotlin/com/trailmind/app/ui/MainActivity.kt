@@ -635,7 +635,12 @@ class MainActivity : Activity() {
             val file = TileProvider.packFile(this, fileName)
             try {
                 contentResolver.openInputStream(uri)!!.use { input -> file.outputStream().use { input.copyTo(it, 256 * 1024) } }
-                val info = MbTiles.openReadOnly(file).use { it.info() }
+                val info = MbTiles.openReadOnly(file).use { mb ->
+                    require(mb.metadata()["crs"]?.equals("EPSG:27700", ignoreCase = true) != true) {
+                        "This British National Grid map cannot be imported because TrailMind places imported maps using Web Mercator."
+                    }
+                    mb.info()
+                }
                 require(info.tileCount > 0) { "This file contains no tiles." }
                 require(info.format in MbTiles.RASTER_FORMATS) {
                     "This is a '${info.format}' MBTiles file. TrailMind renders raster (PNG/JPEG/WebP) tiles only; vector (pbf) packs are not supported yet."

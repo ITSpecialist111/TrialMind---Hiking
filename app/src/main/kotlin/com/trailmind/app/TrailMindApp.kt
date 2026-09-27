@@ -3,6 +3,7 @@ package com.trailmind.app
 import android.app.Application
 import android.os.UserManager
 import com.trailmind.app.data.Db
+import com.trailmind.app.data.PackStatus
 import com.trailmind.app.data.Prefs
 import com.trailmind.app.data.RoutePlanner
 import com.trailmind.app.location.LocationHub
@@ -36,6 +37,10 @@ class TrailMindApp : Application() {
         instance = this
         prefs = Prefs(this)
         db = Db(this)
+        db.packs().filter { it.status == PackStatus.DOWNLOADING }.forEach {
+            db.updatePackProgress(it.id, it.tileDone, it.tileFailed, it.bytes, PackStatus.PAUSED,
+                "Download interrupted. Tap Resume to continue.")
+        }
         baro = Barometer(this)
         tiles = TileProvider(this)
         nav = NavigationController(this)
@@ -43,7 +48,7 @@ class TrailMindApp : Application() {
         watch = WatchLink(this)
         Notifications.createChannels(this)
         CheckIn.arm(this)
-        Async.io { tiles.trimDiskCache() }
+        Async.io { tiles.trimDiskCache(); tiles.reschedulePremiumExpiry() }
     }
 
     companion object {

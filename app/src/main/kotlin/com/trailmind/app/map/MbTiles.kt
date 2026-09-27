@@ -11,6 +11,7 @@ import java.io.File
 /** Minimal MBTiles 1.3 (raster) reader/writer on the framework SQLite. */
 class MbTiles private constructor(val file: File, private val db: SQLiteDatabase) : Closeable {
 
+    // BNG uses the same flipped row as XYZ/TMS: (2^z - 1) - north-origin row, even when negative.
     fun getTile(k: TileKey): ByteArray? =
         db.rawQuery(
             "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
@@ -24,9 +25,9 @@ class MbTiles private constructor(val file: File, private val db: SQLiteDatabase
         ).use { it.moveToFirst() }
 
     fun putTile(k: TileKey, data: ByteArray) {
-        db.insertWithOnConflict("tiles", null, ContentValues().apply {
+        check(db.insertWithOnConflict("tiles", null, ContentValues().apply {
             put("zoom_level", k.z); put("tile_column", k.x); put("tile_row", k.tmsY); put("tile_data", data)
-        }, SQLiteDatabase.CONFLICT_REPLACE)
+        }, SQLiteDatabase.CONFLICT_REPLACE) != -1L) { "Could not save map tile. Check available storage." }
     }
 
     fun metadata(): Map<String, String> = runCatching {
@@ -112,7 +113,8 @@ class MbTiles private constructor(val file: File, private val db: SQLiteDatabase
             return MbTiles(file, db)
         }
 
-        fun create(file: File, name: String, bounds: BoundingBox?, minZoom: Int, maxZoom: Int, attribution: String): MbTiles {
+        fun create(file: File, name: String, bounds: BoundingBox?, minZoom: Int, maxZoom: Int, attribution: String,
+               grid: TileGrid = TileGrid.WEB_MERCATOR): MbTiles {
             file.parentFile?.mkdirs()
             val db = SQLiteDatabase.openOrCreateDatabase(file, null)
             db.execSQL("CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT)")
@@ -122,6 +124,8 @@ class MbTiles private constructor(val file: File, private val db: SQLiteDatabase
             fun md(k: String, v: String) = db.insert("metadata", null, ContentValues().apply { put("name", k); put("value", v) })
             md("name", name)
             md("format", "png")
+            md("scheme", "tms")
+            if (grid == TileGrid.BRITISH_NATIONAL_GRID) md("crs", "EPSG:27700")
             md("type", "baselayer")
             md("version", "1")
             md("minzoom", minZoom.toString())

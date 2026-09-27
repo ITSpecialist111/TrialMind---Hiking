@@ -31,7 +31,7 @@ import java.util.concurrent.Semaphore
 class TileProvider(private val app: TrailMindApp) {
 
     sealed class Fetch {
-        class Ok(val bytes: ByteArray) : Fetch()
+        class Ok(val bytes: ByteArray, val fetchedAtMs: Long = System.currentTimeMillis()) : Fetch()
         class Http(val code: Int) : Fetch()
         class Error(val message: String) : Fetch()
         object NoNetwork : Fetch()
@@ -42,8 +42,11 @@ class TileProvider(private val app: TrailMindApp) {
         val id = "${source.id}/${key.z}/${key.x}/${key.y}"
     }
 
-    private val mem = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 6).toInt()) {
-        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    private data class LoadedTile(val bytes: ByteArray, val premiumTime: Long? = null)
+    private data class MemoryTile(val bitmap: Bitmap, val premiumTime: Long? = null)
+
+    private val mem = object : LruCache<String, MemoryTile>((Runtime.getRuntime().maxMemory() / 6).toInt()) {
+        override fun sizeOf(key: String, value: MemoryTile) = value.bitmap.byteCount
     }
     private val retryAfter = ConcurrentHashMap<String, Long>()
     private val premiumDenied: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -56,6 +59,9 @@ class TileProvider(private val app: TrailMindApp) {
     private val packHandles = ConcurrentHashMap<Long, MbTiles>()
     private val footprints = ConcurrentHashMap<Long, Pair<String, TileFootprint?>>()
     private val cacheRoot = File(app.cacheDir, "tiles")
+    private var nextPremiumExpiry = Long.MAX_VALUE
+    private var premiumPurgedThrough = 0L
+    private val memoryExpiry = Runnable { expireMemory() }
 
     @Volatile var packs: List<PackMeta> = emptyList()
         private set
@@ -80,7 +86,43 @@ class TileProvider(private val app: TrailMindApp) {
         notifyListeners()
     }
 
-    fun cached(source: TileSource, key: TileKey): Bitmap? = mem.get(Req(source, key).id)
+    @Synchronized fun cached(source: TileSource, key: TileKey): Bitmap? {
+        val id = Req(source, key).id
+        val entry = mem.get(id) ?: return null
+        val parentTime = entry.premiumTime
+        if ((parentTime != null && !TilePolicy.premiumCacheFresh(parentTime, System.currentTimeMillis())) ||
+            (source.isPremium(key.z) && id !in approximate && !hasFreshPremium(source, key))) {
+            mem.remove(id)
+            approximate.remove(id)
+            retryAfter.remove(id)
+            return null
+        }
+        return entry.bitmap
+    }
+
+    @Synchronized private fun remember(r: Req, bitmap: Bitmap, premiumTime: Long?, enlarged: Boolean = false) {
+        if (premiumTime != null && !TilePolicy.premiumCacheFresh(premiumTime, System.currentTimeMillis())) return
+        if (premiumTime != null && premiumTime + TilePolicy.PREMIUM_CACHE_MS <= premiumPurgedThrough) return
+        mem.put(r.id, MemoryTile(bitmap, premiumTime))
+        if (enlarged) approximate.add(r.id) else approximate.remove(r.id)
+        if (premiumTime != null) schedulePremiumExpiry(premiumTime)
+        armMemoryExpiry()
+        notifyListeners()
+    }
+
+    private fun armMemoryExpiry() {
+        Async.main.removeCallbacks(memoryExpiry)
+        val oldest = mem.snapshot().values.mapNotNull { it.premiumTime }.minOrNull() ?: return
+        Async.main.postDelayed(memoryExpiry, (oldest + TilePolicy.PREMIUM_CACHE_MS - System.currentTimeMillis()).coerceAtLeast(0))
+    }
+
+    @Synchronized private fun expireMemory(aheadMs: Long = 0L) {
+        val now = System.currentTimeMillis()
+        mem.snapshot().filterValues { it.premiumTime?.let { time -> TilePolicy.premiumPurgeDue(time, now, aheadMs) } == true }
+            .keys.forEach { mem.remove(it); approximate.remove(it); retryAfter.remove(it) }
+        armMemoryExpiry()
+        notifyListeners()
+    }
 
     /** True if the cached bitmap is an enlarged lower zoom standing in for this tile. */
     fun isApproximate(source: TileSource, key: TileKey) = Req(source, key).id in approximate
@@ -117,17 +159,14 @@ class TileProvider(private val app: TrailMindApp) {
             val r = try { queue.takeLast() } catch (_: InterruptedException) { return }
             purgeExpiredPremiumIfDue()
             try {
-                val bytes = loadBytes(r.source, r.key, allowNetwork = true)
-                val bmp = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                val tile = loadTile(r.source, r.key, allowNetwork = true)
+                val bmp = tile?.bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
                 if (bmp != null) {
-                    mem.put(r.id, bmp)
-                    approximate.remove(r.id)
-                    notifyListeners()
+                    remember(r, bmp, tile.premiumTime)
                 } else {
                     retryAfter[r.id] = System.currentTimeMillis() + 30_000
                     if (mem.get(r.id) == null) enlarge(r.source, r.key)?.let {
-                        mem.put(r.id, it)
-                        approximate.add(r.id)
+                        remember(r, it.first, it.second, enlarged = true)
                         Log.d(TAG, "tile ${r.id} is not on the phone; showing a lower zoom enlarged")
                         notifyListeners()
                     }
@@ -141,79 +180,133 @@ class TileProvider(private val app: TrailMindApp) {
         }
     }
 
-    fun loadBytes(source: TileSource, key: TileKey, allowNetwork: Boolean): ByteArray? {
+    fun loadBytes(source: TileSource, key: TileKey, allowNetwork: Boolean): ByteArray? =
+        loadTile(source, key, allowNetwork)?.bytes
+
+    private fun loadTile(source: TileSource, key: TileKey, allowNetwork: Boolean): LoadedTile? {
         // 1. Offline packs.
-        for (p in packsFor(source)) {
-            if (key.z < p.minZoom || key.z > p.maxZoom) continue
-            val b = runCatching { openPack(p)?.getTile(key) }.getOrNull()
-            if (b != null) return b
+        if (source.canReadFromPack(key.z)) {
+            for (p in packsFor(source)) {
+                if (key.z < p.minZoom || key.z > p.maxZoom) continue
+                val b = runCatching { openPack(p)?.getTile(key) }.getOrNull()
+                if (b != null) return LoadedTile(b)
+            }
         }
         if (!source.isOnline) return null
         // 2. Disk cache of browsed tiles. Premium tiles may be kept for 24 h at most, and are never served stale.
         val f = diskFile(source, key)
         val premium = source.isPremium(key.z)
         val age = if (f.exists()) System.currentTimeMillis() - f.lastModified() else Long.MAX_VALUE
-        if (age < (if (premium) PREMIUM_CACHE_MS else CACHE_FRESH_MS)) return runCatching { f.readBytes() }.getOrNull()
+        if (if (premium) hasFreshPremium(source, key) else age < CACHE_FRESH_MS) return readDisk(source, key)
         if (premium && f.exists()) f.delete()
         // 3. Network.
         if (allowNetwork && !(premium && source.id in premiumDenied)) {
             when (val r = fetchNetwork(source, key)) {
                 is Fetch.Ok -> {
-                    writeDisk(f, r.bytes)
-                    return r.bytes
+                    if (premium) storePremium(source, key, r.bytes, r.fetchedAtMs) else writeDisk(f, r.bytes)
+                    return LoadedTile(r.bytes, r.fetchedAtMs.takeIf { premium })
                 }
                 is Fetch.Http -> if (r.code == 404) retryAfter["${source.id}/${key.z}/${key.x}/${key.y}"] = System.currentTimeMillis() + 3_600_000
                 else -> Unit
             }
         }
-        return if (f.exists() && !premium) runCatching { f.readBytes() }.getOrNull() else null
+        return if (f.exists() && !premium) readDisk(source, key) else null
     }
 
-    /** [loadBytes], or else the nearest lower zoom enlarged (for the watch, which has no tiles of its own). */
-    fun loadOrEnlargeBytes(source: TileSource, key: TileKey, allowNetwork: Boolean): ByteArray? =
-        loadBytes(source, key, allowNetwork) ?: enlarge(source, key)?.let { bmp ->
+    /** Watch tiles contain OpenData only, even when the phone has cached Premium detail. */
+    fun loadOrEnlargeBytes(source: TileSource, key: TileKey, allowNetwork: Boolean): ByteArray? {
+        if (key.z !in source.minZoom..source.maxZoom) return null
+        val native = TilePolicy.openDataTile(key, source.premiumFromZoom)
+        val bytes = loadBytes(source, native, allowNetwork)
+        if (native == key && bytes != null) return bytes
+        return enlarge(source, key, source.premiumFromZoom?.minus(1) ?: source.maxZoom)?.let { (bmp, _) ->
             ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
         }
+    }
 
     /**
      * Beyond an offline pack's zooms, or with no signal, shows the nearest lower zoom that is on the phone
      * enlarged, instead of an empty grid.
      */
-    private fun enlarge(source: TileSource, key: TileKey): Bitmap? {
-        for (d in 1..MAX_ENLARGE) {
+    private fun enlarge(source: TileSource, key: TileKey, maxNativeZoom: Int = source.maxZoom): Pair<Bitmap, Long?>? {
+        for (d in maxOf(1, key.z - maxNativeZoom)..MAX_ENLARGE) {
             val pz = key.z - d
             if (pz < source.minZoom) return null
             val pk = TileKey(pz, key.x shr d, key.y shr d)
-            val parent = mem.get(Req(source, pk).id)?.takeIf { Req(source, pk).id !in approximate }
-                ?: localBytes(source, pk)?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } ?: continue
+            val tile = localTile(source, pk) ?: continue
+            val parent = BitmapFactory.decodeByteArray(tile.bytes, 0, tile.bytes.size) ?: continue
             val sub = parent.width shr d
             if (sub <= 0) return null
             val crop = Bitmap.createBitmap(parent, (key.x - (pk.x shl d)) * sub, (key.y - (pk.y shl d)) * sub, sub, sub)
-            return Bitmap.createScaledBitmap(crop, parent.width, parent.height, true)
+            return Bitmap.createScaledBitmap(crop, parent.width, parent.height, true) to
+                tile.premiumTime
         }
         return null
     }
 
     /** A tile already on the phone: an offline pack, or the browse cache (Premium only within 24 hours). */
-    private fun localBytes(source: TileSource, key: TileKey): ByteArray? {
-        for (p in packsFor(source)) {
-            if (key.z < p.minZoom || key.z > p.maxZoom) continue
-            runCatching { openPack(p)?.getTile(key) }.getOrNull()?.let { return it }
+    private fun localTile(source: TileSource, key: TileKey): LoadedTile? {
+        if (source.canReadFromPack(key.z)) {
+            for (p in packsFor(source)) {
+                if (key.z < p.minZoom || key.z > p.maxZoom) continue
+                runCatching { openPack(p)?.getTile(key) }.getOrNull()?.let { return LoadedTile(it) }
+            }
         }
         if (!source.isOnline) return null
-        val f = diskFile(source, key)
-        if (!f.exists() || (source.isPremium(key.z) && System.currentTimeMillis() - f.lastModified() >= PREMIUM_CACHE_MS)) return null
-        return runCatching { f.readBytes() }.getOrNull()
+        return readDisk(source, key)
+    }
+
+    @Synchronized private fun readDisk(source: TileSource, key: TileKey): LoadedTile? {
+        val file = diskFile(source, key)
+        val time = file.lastModified().takeIf { source.isPremium(key.z) }
+        if (time != null && !TilePolicy.premiumCacheFresh(time, System.currentTimeMillis())) return null
+        return runCatching { LoadedTile(file.readBytes(), time) }.getOrNull()
     }
 
     /** A Premium tile pre-loaded for offline use that is still inside its 24 hours. */
     fun hasFreshPremium(source: TileSource, key: TileKey): Boolean {
         val f = diskFile(source, key)
-        return f.exists() && System.currentTimeMillis() - f.lastModified() < PREMIUM_CACHE_MS
+        return f.exists() && TilePolicy.premiumCacheFresh(f.lastModified(), System.currentTimeMillis())
     }
 
+    fun premiumCachedAt(source: TileSource, key: TileKey): Long = diskFile(source, key).lastModified()
+
     /** Keeps a pre-loaded Premium tile in the browse cache, which deletes it after 24 hours. */
-    fun storePremium(source: TileSource, key: TileKey, bytes: ByteArray) = writeDisk(diskFile(source, key), bytes)
+    @Synchronized fun storePremium(source: TileSource, key: TileKey, bytes: ByteArray, fetchedAtMs: Long = System.currentTimeMillis()) {
+        require(source.isPremium(key.z))
+        if (!TilePolicy.premiumCacheFresh(fetchedAtMs, System.currentTimeMillis())) throw IOException("Premium tile has expired")
+        val file = diskFile(source, key)
+        schedulePremiumExpiry(fetchedAtMs)
+        if (!writeDisk(file, bytes) || !file.setLastModified(fetchedAtMs)) {
+            file.delete()
+            throw IOException("Could not save Premium tile. Check available storage.")
+        }
+        schedulePremiumExpiry(file.lastModified())
+    }
+
+    @Synchronized private fun schedulePremiumExpiry(storedAt: Long) {
+        val expiry = storedAt + TilePolicy.PREMIUM_CACHE_MS
+        if (expiry >= nextPremiumExpiry) return
+        nextPremiumExpiry = expiry
+        PremiumPurgeReceiver.schedule(app, expiry)
+        PremiumPurgeJob.schedule(app, expiry)
+    }
+
+    @Synchronized fun reschedulePremiumExpiry() {
+        nextPremiumExpiry = Long.MAX_VALUE
+        val diskOldest = TileSources.builtIns().asSequence().mapNotNull { source ->
+            source.premiumFromZoom?.let { from ->
+                (from..source.maxZoom).asSequence().flatMap { zoom ->
+                    File(cacheRoot, "${source.id}/$zoom").walkTopDown().filter { it.isFile }
+                }.minOfOrNull { it.lastModified() }
+            }
+        }.minOrNull()
+        val oldest = listOfNotNull(diskOldest, mem.snapshot().values.mapNotNull { it.premiumTime }.minOrNull()).minOrNull()
+        if (oldest == null) {
+            PremiumPurgeReceiver.cancel(app)
+            PremiumPurgeJob.cancel(app)
+        } else schedulePremiumExpiry(oldest)
+    }
 
     @Volatile private var lastPremiumPurgeMs = 0L
 
@@ -225,18 +318,21 @@ class TileProvider(private val app: TrailMindApp) {
     }
 
     /** Deletes Premium tiles older than 24 h from disk and drops Premium bitmaps from memory. */
-    fun purgeExpiredPremium() {
+    @Synchronized fun purgeExpiredPremium(aheadMs: Long = 0L) {
         val now = System.currentTimeMillis()
+        premiumPurgedThrough = now + aheadMs
         for (s in TileSources.builtIns()) {
             val from = s.premiumFromZoom ?: continue
             for (z in from..s.maxZoom) {
                 File(cacheRoot, "${s.id}/$z").walkBottomUp()
-                    .filter { it.isFile && now - it.lastModified() >= PREMIUM_CACHE_MS }
+                    .filter {
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        it.isFile && TilePolicy.premiumPurgeDue(it.lastModified(), now, aheadMs)
+                    }
                     .forEach { it.delete() }
             }
-            mem.snapshot().keys.filter { k -> k.startsWith("${s.id}/") && (k.split('/').getOrNull(1)?.toIntOrNull() ?: 0) >= from }
-                .forEach { mem.remove(it) }
         }
+        expireMemory(aheadMs)
     }
 
     fun packsFor(source: TileSource): List<PackMeta> {
@@ -343,20 +439,22 @@ class TileProvider(private val app: TrailMindApp) {
     private fun diskFile(source: TileSource, key: TileKey) =
         File(cacheRoot, "${source.id}/${key.z}/${key.x}/${key.y}.tile")
 
-    private fun writeDisk(f: File, bytes: ByteArray) {
+    private fun writeDisk(f: File, bytes: ByteArray): Boolean =
         runCatching {
             f.parentFile?.mkdirs()
-            val tmp = File(f.parentFile, f.name + ".tmp")
-            tmp.writeBytes(bytes)
-            if (!tmp.renameTo(f)) tmp.delete()
-        }
-    }
+            val tmp = File.createTempFile(f.name, ".tmp", f.parentFile)
+            try {
+                tmp.writeBytes(bytes)
+                tmp.renameTo(f)
+            } finally { tmp.delete() }
+        }.getOrDefault(false)
 
     fun diskCacheBytes(): Long = cacheRoot.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
 
     fun clearDiskCache() {
         cacheRoot.deleteRecursively()
         mem.evictAll()
+        reschedulePremiumExpiry()
     }
 
     /** Keeps the browse cache under [MAX_DISK_CACHE] by deleting least-recently-fetched tiles. */
@@ -377,7 +475,6 @@ class TileProvider(private val app: TrailMindApp) {
         // OSM's tile policy requires an identifying UA with contact details; it blocks UAs mentioning "offline".
         const val USER_AGENT = "TrailMind/0.1.0 (Android; +https://github.com/ITSpecialist111/HikingApp101)"
         private const val CACHE_FRESH_MS = 7L * 24 * 3600 * 1000
-        private const val PREMIUM_CACHE_MS = 24L * 3600 * 1000
         private const val MAX_DISK_CACHE = 300L * 1024 * 1024
         private const val MAX_TILE_BYTES = 2 * 1024 * 1024
         // Up to 16x: zoom 16 stands in for zoom 20.

@@ -39,6 +39,8 @@ import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
+import com.trailmind.core.geo.TileKey
+import com.trailmind.core.map.BngTiles
 import com.trailmind.core.gpx.GpxWriter
 import com.trailmind.core.stats.HikeEstimator
 import com.trailmind.core.stats.TrackStats
@@ -241,6 +243,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     private var loading = false
     private var profile: ElevationProfileView? = null
     private var mapCoverage: Int? = null
+    private var mapCoverageUntilMs: Long? = null
     private var coverageSourceId: String? = null
     private var forecast: com.trailmind.core.weather.PointForecast? = null
     private var checking = false
@@ -293,24 +296,41 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
         val source = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)
         Async.run({
             val saved = OpenMeteo.saved(host, routeId)
-            val coverage = if (source.grid != TileGrid.WEB_MERCATOR || source.id == TileSources.OSM ||
+            val points = TripReadiness.sampleRoute(route.points.map { it.latLon() })
+            val packs = app.tiles.packsFor(source)
+            val leisure = source.grid == TileGrid.BRITISH_NATIONAL_GRID
+            val detailZoom = if (leisure) packs.maxOfOrNull { it.premiumMaxZoom }?.takeIf { it >= 6 } else null
+            val coverage = if (source.id == TileSources.OSM ||
                 source.isOnline && !source.offlineDownloadAllowed) null else {
-                val points = TripReadiness.sampleRoute(route.points.map { it.latLon() })
-                val packs = app.tiles.packsFor(source)
                 val footprints = packs.associate { it.id to app.tiles.footprint(it) }
                 val hits = points.count { point -> packs.any { pack ->
-                    val tile = WebMercator.tileFor(point, pack.maxZoom)
+                    val grid = if (leisure) OsGrid.fromWgs84(point) else null
+                    val tile = if (leisure) grid?.let {
+                        TileKey(pack.maxZoom, BngTiles.column(it.easting, pack.maxZoom), BngTiles.row(it.northing, pack.maxZoom))
+                    } else WebMercator.tileFor(point, pack.maxZoom)
                     val footprint = footprints[pack.id]
                     val spans = footprint?.spans
-                    val inside = spans == null || footprint.zoom != pack.maxZoom ||
-                        spans.indices.step(3).any { spans[it] == tile.y && tile.x in spans[it + 1] until spans[it + 2] }
-                    inside && runCatching { app.tiles.openPack(pack)?.hasTile(tile) == true }.getOrDefault(false)
-                } }
+                    val inside = tile != null && (spans == null || footprint.zoom != pack.maxZoom ||
+                        spans.indices.step(3).any { spans[it] == tile.y && tile.x in spans[it + 1] until spans[it + 2] })
+                    inside && tile != null && runCatching { app.tiles.openPack(pack)?.hasTile(tile) == true }.getOrDefault(false)
+                } && (detailZoom == null || run {
+                    val grid = OsGrid.fromWgs84(point)
+                    grid != null && app.tiles.hasFreshPremium(source, TileKey(detailZoom,
+                        BngTiles.column(grid.easting, detailZoom), BngTiles.row(grid.northing, detailZoom)))
+                }) }
                 TripReadiness.coverage(hits, points.size)
             }
-            saved to coverage
+            val expiry = detailZoom?.let { zoom -> points.mapNotNull { point ->
+                val grid = OsGrid.fromWgs84(point) ?: return@mapNotNull null
+                val tile = TileKey(zoom, BngTiles.column(grid.easting, zoom), BngTiles.row(grid.northing, zoom))
+                app.tiles.premiumCachedAt(source, tile).takeIf { it > 0 }?.plus(24 * 3_600_000L)
+            }.minOrNull() } ?: if (leisure) packs.filter { it.premiumMaxZoom >= 6 && it.premiumMs > 0 }
+                .maxOfOrNull { it.premiumMs + 24 * 3_600_000L } else null
+            Triple(saved, coverage, expiry)
         }) { result ->
-            result.getOrNull()?.let { (weather, coverage) -> forecast = weather; mapCoverage = coverage; coverageSourceId = source.id }
+            result.getOrNull()?.let { (weather, coverage, until) ->
+                forecast = weather; mapCoverage = coverage; coverageSourceId = source.id; mapCoverageUntilMs = until
+            }
             checking = false
             if (app.prefs.baseSourceId != source.id) { updateReadiness(); return@run }
             refresh()
@@ -321,10 +341,12 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
         data class Check(val title: String, val detail: String, val ready: Boolean, val fix: String? = null, val action: (() -> Unit)? = null)
         val now = System.currentTimeMillis()
         val source = TileSources.byId(app.prefs.baseSourceId, app.prefs, app.tiles.packs)
-        val mapNeedsSignal = source.grid != TileGrid.WEB_MERCATOR || source.id == TileSources.OSM ||
+        val mapNeedsSignal = source.id == TileSources.OSM ||
             source.isOnline && !source.offlineDownloadAllowed
         val coverage = mapCoverage.takeIf { coverageSourceId == source.id }
-        val canDownload = source.offlineDownloadAllowed && source.grid == TileGrid.WEB_MERCATOR
+        val explorerExpired = source.id == TileSources.OS_LEISURE && mapCoverageUntilMs?.let { it <= now } == true
+        val currentCoverage = if (explorerExpired) 0 else coverage
+        val canDownload = source.offlineDownloadAllowed
         val daylight = startByText(host, route.points, app.prefs.pace, app.prefs.daylightMarginMinutes, now)
         val daylightSafe = daylight.startsWith("Start by") && !daylight.contains("has passed")
         val high = HikeEstimator.highPoint(route.points, app.prefs.pace)
@@ -346,10 +368,16 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
         val due = app.prefs.checkInDueMs
         val contact = app.prefs.emergencyContact.isNotBlank()
         val checks = mutableListOf(
-            Check("Offline map", if (mapNeedsSignal) "${source.name} needs signal" else when (coverage) {
-                null -> "Checking saved tiles…"; 100 -> "Covered at pack detail"; 0 -> "Not covered"; else -> "Partly covered ($coverage%)"
-            }, !mapNeedsSignal && coverage == 100, if (canDownload && coverage != 100) "Download route corridor" else null,
-                if (canDownload && coverage != 100) ({ host.push(OfflinePage(host, routeId)) }) else null),
+            Check("Offline map", if (mapNeedsSignal) "${source.name} needs signal" else when (currentCoverage) {
+                null -> "Checking saved tiles…"
+                100 -> if (source.id == TileSources.OS_LEISURE && mapCoverageUntilMs?.let { it > now } == true)
+                    "OS detail covered until ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(mapCoverageUntilMs!!))}"
+                    else "Covered at pack detail"
+                0 -> if (explorerExpired)
+                    "OS detail expired; reload for today's walk" else "Not covered"
+                else -> "Partly covered ($currentCoverage%)"
+            }, !mapNeedsSignal && currentCoverage == 100, if (canDownload && currentCoverage != 100) "Download route corridor" else null,
+                if (canDownload && currentCoverage != 100) ({ host.push(OfflinePage(host, routeId)) }) else null),
             Check("Daylight", daylight, daylightSafe),
             Check("Weather", when {
                 high == null -> "No high point forecast; check conditions yourself"

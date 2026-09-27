@@ -121,7 +121,8 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; invalidate() }
     /** Where the base map is on the phone, tinted and outlined under the route. */
     var offlineAreas: List<TileFootprint> = emptyList()
-        set(v) { field = v; invalidate() }
+        set(v) { field = v; bngFootprintVertices.keys.retainAll(v.toSet()); invalidate() }
+    private val bngFootprintVertices = HashMap<TileFootprint, MutableMap<Long, LatLon>>()
 
     var position: LatLon? = null; private set
     private var accuracyM = 0f
@@ -526,6 +527,10 @@ class TileMapView(context: Context) : View(context) {
 
     private fun drawOfflineAreas(canvas: Canvas, w: Float, h: Float) {
         if (offlineAreas.isEmpty()) return
+        if (source.grid == TileGrid.BRITISH_NATIONAL_GRID) {
+            for (footprint in offlineAreas) drawBngOfflineArea(canvas, w, h, footprint)
+            return
+        }
         val ox = w / 2 - WebMercator.lonToX(centerLon, zoom)
         val oy = h / 2 - WebMercator.latToY(centerLat, zoom)
         for (f in offlineAreas) {
@@ -552,6 +557,44 @@ class TileMapView(context: Context) : View(context) {
             }
             canvas.drawPath(path, offlineEdge)
         }
+    }
+
+    private fun drawBngOfflineArea(canvas: Canvas, w: Float, h: Float, footprint: TileFootprint) {
+        val vertices = bngFootprintVertices.getOrPut(footprint) { HashMap() }
+        fun corner(x: Int, y: Int): Pair<Float, Float> {
+            val key = (y.toLong() shl 32) or (x.toLong() and 0xFFFF_FFFFL)
+            val point = vertices.getOrPut(key) {
+                OsGrid.toWgs84(BngTiles.easting(x, footprint.zoom), BngTiles.northing(y, footprint.zoom))
+            }
+            return toScreenX(point.lon, w) to toScreenY(point.lat, h)
+        }
+        val spans = footprint.spans
+        path.reset()
+        for (i in spans.indices step 3) for (x in spans[i + 1] until spans[i + 2]) {
+            val y = spans[i]
+            val a = corner(x, y)
+            val b = corner(x + 1, y)
+            val c = corner(x + 1, y + 1)
+            val d = corner(x, y + 1)
+            path.moveTo(a.first, a.second)
+            path.lineTo(b.first, b.second)
+            path.lineTo(c.first, c.second)
+            path.lineTo(d.first, d.second)
+            path.close()
+        }
+        canvas.drawPath(path, offlineFill)
+        path.reset()
+        val edges = footprint.edges
+        for (i in edges.indices step 4) {
+            val dx = (edges[i + 2] - edges[i]).coerceIn(-1, 1)
+            val dy = (edges[i + 3] - edges[i + 1]).coerceIn(-1, 1)
+            val steps = maxOf(kotlin.math.abs(edges[i + 2] - edges[i]), kotlin.math.abs(edges[i + 3] - edges[i + 1]))
+            for (step in 0..steps) {
+                val point = corner(edges[i] + step * dx, edges[i + 1] + step * dy)
+                if (step == 0) path.moveTo(point.first, point.second) else path.lineTo(point.first, point.second)
+            }
+        }
+        canvas.drawPath(path, offlineEdge)
     }
 
     private fun drawGrid(canvas: Canvas, w: Float, h: Float) {

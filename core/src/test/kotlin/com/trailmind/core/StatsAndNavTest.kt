@@ -31,6 +31,19 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class StatsAndNavTest {
+    @Test
+    fun premiumExpiryIncludesBoundaryClockRollbackAndIdleBatch() {
+        val stored = 1_000_000L
+        val expiry = stored + TilePolicy.PREMIUM_CACHE_MS
+        assertFalse(TilePolicy.premiumPurgeDue(stored, expiry - 1))
+        assertTrue(TilePolicy.premiumPurgeDue(stored, expiry))
+        assertTrue(TilePolicy.premiumPurgeDue(stored, expiry + 1))
+        assertTrue(TilePolicy.premiumPurgeDue(stored, stored - 1))
+        assertTrue(TilePolicy.premiumPurgeDue(stored, expiry - 15 * 60_000, 15 * 60_000))
+        assertFalse(TilePolicy.premiumPurgeDue(stored, expiry - 15 * 60_000 - 1, 15 * 60_000))
+        assertFalse(TilePolicy.premiumPurgeDue(stored, stored, 15 * 60_000))
+    }
+
     /** Straight line heading east, one point every 10 m, climbing [climbPerPoint] metres each. */
     private fun line(n: Int, climbPerPoint: Double = 0.0, start: LatLon = LatLon(54.0, -3.0), stepM: Double = 10.0): List<TrackPoint> =
         (0 until n).map { i ->
@@ -353,6 +366,11 @@ class StatsAndNavTest {
 
     @Test
     fun tilePolicy() {
+        val now = 100L * 3_600_000
+        assertTrue(TilePolicy.premiumCacheFresh(now - 24L * 3_600_000 + 1, now))
+        assertFalse(TilePolicy.premiumCacheFresh(now - 24L * 3_600_000, now))
+        assertFalse(TilePolicy.premiumCacheFresh(now - 25L * 3_600_000, now))
+        assertFalse(TilePolicy.premiumCacheFresh(now + 60_000, now))
         assertTrue(TilePolicy.isBulkDownloadForbidden("https://tile.openstreetmap.org/{z}/{x}/{y}.png"))
         assertTrue(TilePolicy.isBulkDownloadForbidden("https://a.tile.opentopomap.org/{z}/{x}/{y}.png"))
         assertTrue(TilePolicy.isBulkDownloadForbidden("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"))

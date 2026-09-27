@@ -163,7 +163,9 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
 
     /** Requests in flight are lost when the Bluetooth link drops; ask again after reconnecting. */
     fun linkChanged() {
+        cache.evictAll()
         pending.clear()
+        retryAt.clear()
         invalidate()
     }
 

@@ -32,6 +32,10 @@ data class TileSource(
     val isOnline: Boolean get() = template != null
 
     fun isPremium(z: Int) = premiumFromZoom != null && z >= premiumFromZoom
+
+    fun canStoreInPack(z: Int) = offlineDownloadAllowed && z in minZoom..downloadMaxZoom && !isPremium(z)
+
+    fun canReadFromPack(z: Int) = packId != null || !isPremium(z)
 }
 
 object TileSources {
@@ -55,9 +59,9 @@ object TileSources {
         offlineDownloadAllowed = true,
         downloadMaxZoom = 16,
         premiumFromZoom = 17,
-        note = "Needs your own free OS Data Hub API key. Zoom 7–16 is OS OpenData; zoom 17–20 is " +
-            "Premium, counts against your plan's free allowance and is kept for 24 hours at most. " +
-            "Offline packs only include OpenData zooms. For public rights of way, use OS Maps – Explorer & Landranger.",
+        note = "Needs your OS Data Hub API key. Overview maps (zooms 7–16) stay in your pack. " +
+            "Closer detail uses your plan's allowance and is kept for 24 hours. " +
+            "For public rights of way, use OS Maps – Explorer & Landranger.",
     )
 
     private fun osLeisure() = TileSource(
@@ -68,12 +72,14 @@ object TileSources {
         minZoom = 0,
         maxZoom = 9,
         requiresKey = true,
+        offlineDownloadAllowed = true,
+        downloadMaxZoom = 5,
         premiumFromZoom = 6,
         grid = TileGrid.BRITISH_NATIONAL_GRID,
         note = "OS's paper-map style, with public rights of way (footpaths, bridleways and byways) and open access " +
             "land: 1:50,000 Landranger zoomed out, 1:25,000 Explorer zoomed in. Great Britain only. Needs your OS Data " +
-            "Hub key. Everything more detailed than 1:100,000 is Premium: it counts against your plan's allowance " +
-            "and is kept for 24 hours at most, so it can't be saved in offline packs.",
+            "Hub key. Overview maps (zooms 0–5) stay in your pack. Landranger and Explorer detail at zooms 6–9 " +
+            "uses your plan's allowance; OS lets you keep it for 24 hours.",
     )
 
     fun builtIns(): List<TileSource> = listOf(
