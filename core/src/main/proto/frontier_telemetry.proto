@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package frontier.hiking;
+
+option java_package = "com.frontier.hiking.proto";
+option java_multiple_files = true;
+
+enum EmergencyStatus {
+  OK = 0;
+  MANUAL_CHECK_IN = 1;
+  DELAYED = 2;
+  INJURED_STATIONARY = 3;
+  INJURED_MOVING = 4;
+  FALL_DETECTED = 5;
+  CRITICAL_SOS = 6;
+}
+
+message HikerTelemetry {
+  string hiker_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+  int32 altitude_meters = 4;
+  uint32 battery_percent = 5;
+  uint64 timestamp = 6;
+  EmergencyStatus status = 7;
+  uint32 triage_code = 8;
+}
+
+message GroupMeshPayload {
+  string gateway_device_id = 1;
+  uint64 message_sequence = 2;
+  repeated HikerTelemetry hikers = 3;
+
+  message FallVector {
+    float impact_g_force = 1;
+    float freefall_duration_sec = 2;
+    float delta_altitude_meters = 3;
+  }
+
+  FallVector fall_telemetry = 4;
+}

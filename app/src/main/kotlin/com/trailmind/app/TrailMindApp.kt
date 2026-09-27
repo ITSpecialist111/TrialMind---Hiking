@@ -12,6 +12,8 @@ import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.nav.NavigationController
 import com.trailmind.app.sensor.Barometer
+import com.trailmind.app.sensor.FallMonitor
+import com.trailmind.app.frontier.FrontierCoordinator
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.watch.WatchLink
 
@@ -31,6 +33,10 @@ class TrailMindApp : Application() {
         private set
     lateinit var baro: Barometer
         private set
+    lateinit var frontier: FrontierCoordinator
+        private set
+    lateinit var fallMonitor: FallMonitor
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -46,7 +52,10 @@ class TrailMindApp : Application() {
         tiles = TileProvider(this)
         nav = NavigationController(this)
         location = LocationHub(nav)
+        frontier = FrontierCoordinator(this)
+        fallMonitor = FallMonitor(this, frontier::recordFall)
         watch = WatchLink(this)
+        frontier.start()
         Notifications.createChannels(this)
         CheckIn.arm(this)
         Async.io { tiles.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }

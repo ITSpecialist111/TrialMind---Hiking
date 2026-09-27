@@ -17,6 +17,7 @@ import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.map.DownloadService
 import com.trailmind.app.map.DownloadState
@@ -554,11 +555,21 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
 
 class SafetyPage(host: MainActivity) : Page(host) {
     private val onFix: (Fix) -> Unit = { update() }
+    private val onFrontier: () -> Unit = { refresh() }
     private var grid: TextView? = null
     private var detail: TextView? = null
 
-    override fun onShow() { app.location.addListener(onFix); update(); refresh() }
-    override fun onHide() { app.location.removeListener(onFix) }
+    override fun onShow() {
+        app.location.addListener(onFix)
+        app.frontier.addListener(onFrontier)
+        update()
+        refresh()
+    }
+
+    override fun onHide() {
+        app.location.removeListener(onFix)
+        app.frontier.removeListener(onFrontier)
+    }
 
     private fun locationText(f: Fix?): String? {
         f ?: return null
@@ -585,6 +596,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
                 locationText(app.location.latest)?.let { host.shareText("My location", it) } ?: host.toast("No GPS fix yet")
             }, ui.lp(0, weight = 1f))
         })
+        addView(frontierCard())
         val due = app.prefs.checkInDueMs
         addView(ui.card(spacing = 6) {
             addView(ui.text("Check-in", Ui.T.TITLE))
@@ -623,6 +635,59 @@ class SafetyPage(host: MainActivity) : Page(host) {
                 "Android also sends your location to UK 999 automatically when you call (Emergency Location Service), where supported.", Ui.T.CAPTION, p.onSurface))
         })
         if (contact.isBlank()) addView(ui.button("Set emergency contact", R.drawable.ic_tune, Ui.B.TEXT) { host.push(SettingsPage(host)) })
+    }
+
+    private fun frontierCard(): View = ui.card(spacing = 8) {
+        val prefs = app.prefs
+        val enabled = prefs.frontierEnabled
+        addView(ui.text("Frontier group safety", Ui.T.TITLE))
+        addView(ui.text(app.frontier.statusText(), Ui.T.BODY, if (enabled) p.primary else p.muted))
+        addView(ui.text(
+            "${app.frontier.heartbeatText()} · ${app.frontier.emergencyText()}",
+            Ui.T.CAPTION,
+        ))
+        if (app.frontier.satelliteState.constrainedCellularAvailable) {
+            addView(ui.text(
+                "Carrier services: SMS, RCS, WhatsApp, Messenger, WhatsApp audio, light app data and background location sync.",
+                Ui.T.CAPTION,
+            ))
+        }
+        addView(ui.switch("Frontier safety features", enabled) {
+            prefs.frontierEnabled = it
+            applyFrontierSettings()
+        })
+        addView(ui.switch("Share 30-second group heartbeats", prefs.frontierHeartbeatsEnabled) {
+            prefs.frontierHeartbeatsEnabled = it
+            applyFrontierSettings()
+        }.apply { isEnabled = enabled })
+        addView(ui.switch("Detect falls while recording", prefs.frontierFallDetectionEnabled) {
+            prefs.frontierFallDetectionEnabled = it
+            applyFrontierSettings()
+        }.apply {
+            isEnabled = enabled && app.fallMonitor.available
+        })
+        if (!app.fallMonitor.available) {
+            addView(ui.text("Fall detection is unavailable because this phone has no accelerometer and gyroscope pair.", Ui.T.CAPTION))
+        }
+        addView(ui.switch("Use satellite data when available", prefs.frontierSatelliteDataEnabled) {
+            prefs.frontierSatelliteDataEnabled = it
+            applyFrontierSettings()
+        }.apply { isEnabled = enabled })
+        addView(ui.text(
+            "These controls affect TrailMind only. Carrier messaging and WhatsApp or Messenger remain controlled by their own apps.",
+            Ui.T.CAPTION,
+        ))
+        if (app.frontier.emergencyText() != "No active emergency") {
+            addView(ui.button("Clear Frontier emergency", R.drawable.ic_close, Ui.B.OUTLINED) {
+                app.frontier.clearEmergency()
+            })
+        }
+    }
+
+    private fun applyFrontierSettings() {
+        app.frontier.applySettings()
+        TrackingService.send(host, TrackingService.ACTION_REFRESH_FRONTIER)
+        refresh()
     }
 
     private fun update() {

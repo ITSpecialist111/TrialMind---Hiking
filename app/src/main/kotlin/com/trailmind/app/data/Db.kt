@@ -8,6 +8,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.geo.Waypoint
+import com.trailmind.core.frontier.EmergencyStatus
+import com.trailmind.core.frontier.HikerTelemetry
 import com.trailmind.core.stats.TrackStats
 import com.trailmind.core.stats.TrackSummary
 
@@ -74,7 +76,7 @@ data class PackMeta(
     val premiumMs: Long = 0,
 )
 
-class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) {
+class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 3) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -116,6 +118,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
                attribution TEXT NOT NULL DEFAULT '', created_ms INTEGER NOT NULL, message TEXT,
                premium_max_zoom INTEGER NOT NULL DEFAULT 0, premium_ms INTEGER NOT NULL DEFAULT 0)""",
         )
+        createMeshHeartbeats(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -123,6 +126,17 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
             db.execSQL("ALTER TABLE packs ADD COLUMN premium_max_zoom INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE packs ADD COLUMN premium_ms INTEGER NOT NULL DEFAULT 0")
         }
+        if (oldVersion < 3) createMeshHeartbeats(db)
+    }
+
+    private fun createMeshHeartbeats(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE mesh_heartbeats(
+               hiker_id TEXT PRIMARY KEY NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
+               altitude_m INTEGER NOT NULL, battery_percent INTEGER NOT NULL, timestamp_s INTEGER NOT NULL,
+               status INTEGER NOT NULL, triage_code INTEGER NOT NULL, received_ms INTEGER NOT NULL)""",
+        )
+        db.execSQL("CREATE INDEX mesh_heartbeats_received_idx ON mesh_heartbeats(received_ms)")
     }
 
     // ---------------------------------------------------------------- routes
@@ -311,6 +325,51 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 2) 
         maxEleM = c.optDouble(c.getColumnIndexOrThrow("max_ele")), minEleM = c.optDouble(c.getColumnIndexOrThrow("min_ele")),
         routeId = c.optLong(c.getColumnIndexOrThrow("route_id")), pointCount = c.int("point_count"),
     )
+
+    // ---------------------------------------------------------------- frontier mesh
+
+    fun upsertMeshHeartbeat(telemetry: HikerTelemetry, receivedMs: Long = System.currentTimeMillis()) {
+        writableDatabase.insertWithOnConflict(
+            "mesh_heartbeats",
+            null,
+            ContentValues().apply {
+                put("hiker_id", telemetry.hikerId)
+                put("latitude", telemetry.latitude)
+                put("longitude", telemetry.longitude)
+                put("altitude_m", telemetry.altitudeMeters)
+                put("battery_percent", telemetry.batteryPercent)
+                put("timestamp_s", telemetry.timestampEpochSeconds)
+                put("status", telemetry.status.wireValue)
+                put("triage_code", telemetry.triageCode)
+                put("received_ms", receivedMs)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    fun meshHeartbeats(receivedAfterMs: Long = 0L): List<HikerTelemetry> =
+        readableDatabase.rawQuery(
+            """SELECT hiker_id, latitude, longitude, altitude_m, battery_percent, timestamp_s, status, triage_code
+               FROM mesh_heartbeats WHERE received_ms >= ? ORDER BY status DESC, timestamp_s DESC LIMIT 8""",
+            arrayOf(receivedAfterMs.toString()),
+        ).use { c ->
+            c.map {
+                HikerTelemetry(
+                    hikerId = it.getString(0),
+                    latitude = it.getDouble(1),
+                    longitude = it.getDouble(2),
+                    altitudeMeters = it.getInt(3),
+                    batteryPercent = it.getInt(4),
+                    timestampEpochSeconds = it.getLong(5),
+                    status = EmergencyStatus.fromWire(it.getInt(6)),
+                    triageCode = it.getInt(7),
+                )
+            }
+        }
+
+    fun pruneMeshHeartbeats(receivedBeforeMs: Long) {
+        writableDatabase.delete("mesh_heartbeats", "received_ms < ?", arrayOf(receivedBeforeMs.toString()))
+    }
 
     // ---------------------------------------------------------------- offline packs
 
