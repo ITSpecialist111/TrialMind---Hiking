@@ -75,6 +75,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val fabColumn = ui.column(spacing = 10)
     private var followFab: ImageButton
     private val orientationFab = ui.fab(R.drawable.ic_north, "North up") { toggleHeadingUp() }
+    private var orientationState = -1
     /** Direction of travel from GPS while walking, for heading up when the compass is disturbed. */
     private var courseDeg: Float? = null
     private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map") { host.setMapFullScreen(!host.mapFullScreen) }
@@ -169,7 +170,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
         mapView.setCenter(app.prefs.mapLat, app.prefs.mapLon, app.prefs.mapZoom)
         applySource()
-        applyOrientation()
+        updateHeading()
         // Heading up turns the map about you, so it opens on your position once there is a fix.
         if (app.prefs.mapHeadingUp) mapView.follow = true
         mapView.track = TrackingState.line
@@ -253,36 +254,43 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private fun toggleHeadingUp() {
         val on = !app.prefs.mapHeadingUp
         app.prefs.mapHeadingUp = on
-        applyOrientation()
+        updateHeading()
         // The map turns about its centre, so centre it on you.
         if (on) locate()
         host.toast(when {
             !on -> "North up"
-            host.compassDisturbed -> "Heading up. Nearby metal is upsetting the compass, so the map follows your walking direction."
+            host.compassDisturbed -> "Heading up. Metal or electronics nearby may upset the compass here, so the arrow is orange."
             host.compassUnreliable -> "Heading up. Move the phone in a figure of eight to calibrate the compass."
             else -> "Heading up: the map turns as you turn"
         })
     }
 
-    private fun applyOrientation() {
-        val on = app.prefs.mapHeadingUp
-        orientationFab.setImageDrawable(host.getDrawable(R.drawable.ic_north)?.mutate()?.apply { setTint(if (on) p.primary else p.onSurface) })
-        orientationFab.contentDescription = if (on) "Heading up. Tap for north up." else "North up. Tap for heading up."
-        updateHeading()
-    }
-
     /**
-     * North up shows the compass on the position cone. Heading up turns the map to the compass while it is calibrated and
-     * undisturbed, else to the direction of walking, else holds still; the cone shows that same heading.
+     * North up shows the compass on the position cone. Heading up turns the map with the compass, or with the direction
+     * of walking while the compass is disturbed or uncalibrated; the cone shows the same heading and the arrow turns orange.
      */
     private fun updateHeading() {
-        if (!app.prefs.mapHeadingUp) {
-            mapView.headingDeg = host.headingDeg?.toFloat()
+        val on = app.prefs.mapHeadingUp
+        val compass = host.headingDeg?.toFloat()
+        val doubtful = host.compassDisturbed || host.compassUnreliable
+        if (!on) {
+            mapView.headingDeg = compass
             mapView.bearing = 0f
         } else {
-            val heading = host.headingDeg?.toFloat()?.takeIf { !host.compassDisturbed && !host.compassUnreliable } ?: courseDeg
+            val heading = (if (doubtful) courseDeg else null) ?: compass ?: courseDeg
             mapView.headingDeg = heading
             heading?.let { mapView.bearing = it }
+        }
+        val state = if (!on) 0 else if (doubtful) 1 else 2
+        if (state != orientationState) {
+            orientationState = state
+            val tint = when (state) { 0 -> p.onSurface; 1 -> p.accent; else -> p.primary }
+            orientationFab.setImageDrawable(host.getDrawable(R.drawable.ic_north)?.mutate()?.apply { setTint(tint) })
+            orientationFab.contentDescription = when (state) {
+                0 -> "North up. Tap for heading up."
+                1 -> "Heading up, but the compass may be off here. Tap for north up."
+                else -> "Heading up. Tap for north up."
+            }
         }
         // The arrow points to north on the screen.
         orientationFab.rotation = -mapView.bearing
