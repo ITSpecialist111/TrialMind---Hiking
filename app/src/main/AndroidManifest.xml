@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -14,6 +15,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Fall alarm: shows over the lock screen, and sends the SOS text only if the user turns that on. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
     <!-- Watch companion link (Bluetooth RFCOMM to an already-paired watch; no scanning, no location). -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -22,6 +26,7 @@
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <queries>
         <!-- Google AI Edge Gallery (on-device Gemma) and Strava, only to check they are installed. -->
@@ -48,6 +53,9 @@
         android:supportsRtl="true"
         android:resizeableActivity="true"
         android:theme="@style/Theme.TrailMind">
+
+        <!-- TrailMind keeps to texts and small requests on satellite links (maps, terrain and route search wait for normal signal). -->
+        <meta-data android:name="android.telephony.PROPERTY_SATELLITE_DATA_OPTIMIZED" android:value="com.trailmind.app" />
 
         <activity
             android:name=".ui.MainActivity"
@@ -108,6 +116,18 @@
 
         <receiver android:name=".map.PremiumPurgeReceiver" android:exported="false" />
         <receiver android:name=".map.PremiumRenewalReceiver" android:exported="false" />
+
+        <activity
+            android:name=".frontier.FallAlertActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.trailmind.app.fall"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            tools:targetApi="27" />
+        <receiver android:name=".frontier.FallAlertReceiver" android:exported="false" />
 
         <service
             android:name=".watch.WatchLinkService"

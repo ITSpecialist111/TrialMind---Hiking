@@ -1,8 +1,11 @@
 package com.trailmind.app.ui
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 
 object Notifications {
     const val CH_TRACKING = "tracking"
@@ -11,6 +14,8 @@ object Notifications {
     const val CH_WATCH = "watch"
     const val CH_CHECK_IN = "check_in"
     const val CH_OFFLINE = "offline_renewal"
+    const val CH_FALL = "fall_alarm"
+    const val CH_SOS = "sos_status"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -22,6 +27,7 @@ object Notifications {
     const val ID_DUSK = 8
     const val ID_CHECK_IN = 9
     const val ID_RENEW = 10
+    const val ID_FALL = 11
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -40,6 +46,18 @@ object Notifications {
             description = "Return-time reminders and overdue follow-ups"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 400, 200, 400)
+        })
+        m.createNotificationChannel(NotificationChannel(CH_FALL, "Fall alarm and SOS", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Sounds an alarm after a possible fall and shows the SOS text to your emergency contact"
+            setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 800, 400, 800, 400, 800)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
+        m.createNotificationChannel(NotificationChannel(CH_SOS, "SOS text progress", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Whether your SOS text has been sent"
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)

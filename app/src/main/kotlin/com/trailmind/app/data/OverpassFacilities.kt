@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.JsonReader
 import com.trailmind.app.Async
+import com.trailmind.app.frontier.SatelliteNetworkManager
 import com.trailmind.app.map.TileProvider
 import com.trailmind.core.geo.Facility
 import com.trailmind.core.geo.FacilityCategory
@@ -61,6 +62,7 @@ object OverpassFacilities {
 
     fun fetch(context: Context, routeId: Long, points: List<LatLon>): SavedFacilities {
         require(points.isNotEmpty())
+        if (SatelliteNetworkManager.onSatellite(context)) throw IOException("Facilities need normal signal: TrailMind doesn't download them over satellite.")
         val query = query(points)
         var lastError: IOException? = null
         for (server in servers) {

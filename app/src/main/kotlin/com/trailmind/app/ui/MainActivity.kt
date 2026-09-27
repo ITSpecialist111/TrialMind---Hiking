@@ -94,6 +94,7 @@ class MainActivity : Activity() {
 
     private var pendingPermission: (() -> Unit)? = null
     private var pendingBluetooth: (() -> Unit)? = null
+    private var pendingSms: (() -> Unit)? = null
     private var pendingExport: String? = null
     private var backCallback: Any? = null
 
@@ -488,8 +489,23 @@ class MainActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), RC_BLUETOOTH)
     }
 
+    /** Runs [then] once TrailMind may send texts itself (only used for the SOS text the user turned on). */
+    fun withSmsPermission(then: () -> Unit) {
+        if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) { then(); return }
+        pendingSms = then
+        requestPermissions(arrayOf(Manifest.permission.SEND_SMS), RC_SMS)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RC_SMS) {
+            val then = pendingSms
+            pendingSms = null
+            if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) then?.invoke()
+            else toast("Without SMS permission TrailMind can only get the SOS text ready for you to send.")
+            stack.lastOrNull()?.refresh()
+            return
+        }
         if (requestCode == RC_BLUETOOTH) {
             val then = pendingBluetooth
             pendingBluetooth = null
@@ -731,6 +747,7 @@ class MainActivity : Activity() {
         private const val RC_PERMS = 10
         private const val RC_NOTIF = 11
         private const val RC_BLUETOOTH = 12
+        private const val RC_SMS = 13
         private const val RC_GPX = 20
         private const val RC_MBTILES = 21
         private const val RC_EXPORT = 22

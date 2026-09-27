@@ -11,6 +11,7 @@ import com.trailmind.app.Async
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackMeta
+import com.trailmind.app.frontier.SatelliteNetworkManager
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.map.TileFootprint
 import com.trailmind.core.map.TilePolicy
@@ -365,11 +366,12 @@ class TileProvider(private val app: TrailMindApp) {
         mem.evictAll()
     }
 
+    /** Tiles, terrain and routing need normal signal: satellite links only carry texts and small updates. */
     fun networkAllowed(): Boolean {
         if (app.prefs.offlineOnly) return false
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return false) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && !SatelliteNetworkManager.isSatellite(caps)
     }
 
     fun fetchNetwork(source: TileSource, key: TileKey): Fetch {

@@ -1,5 +1,7 @@
 package com.trailmind.app.data
 
+import com.trailmind.app.TrailMindApp
+import com.trailmind.app.frontier.SatelliteNetworkManager
 import com.trailmind.app.map.TileProvider
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
@@ -146,6 +148,7 @@ object WaymarkedTrails {
     }
 
     private fun get(url: String): String {
+        if (SatelliteNetworkManager.onSatellite(TrailMindApp.instance)) throw IOException("Finding routes needs normal signal: TrailMind doesn't search over satellite.")
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 15_000

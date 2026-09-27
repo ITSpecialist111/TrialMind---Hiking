@@ -207,4 +207,54 @@ class Prefs(context: Context) {
                 }
             }.apply()
         }
+
+    /** The running fall alarm or SOS: when it started (0 = none), its stage, what the text says, and how sending went. */
+    var fallAlertMs: Long
+        get() = sp.getLong("fall_alert_ms", 0L)
+        set(v) = sp.edit().putLong("fall_alert_ms", v).apply()
+
+    var fallStage: Int
+        get() = sp.getInt("fall_stage", 0)
+        set(v) = sp.edit().putInt("fall_stage", v).apply()
+
+    var sosSituation: String
+        get() = sp.getString("sos_situation", "") ?: ""
+        set(v) = sp.edit().putString("sos_situation", v).apply()
+
+    var sosAttempts: Int
+        get() = sp.getInt("sos_attempts", 0)
+        set(v) = sp.edit().putInt("sos_attempts", v).apply()
+
+    var sosFailed: Boolean
+        get() = sp.getBoolean("sos_failed", false)
+        set(v) = sp.edit().putBoolean("sos_failed", v).apply()
+
+    var sosSentMs: Long
+        get() = sp.getLong("sos_sent_ms", 0L)
+        set(v) = sp.edit().putLong("sos_sent_ms", v).apply()
+
+    /** The number the current SOS text is being sent to. */
+    var sosRecipient: String
+        get() = sp.getString("sos_recipient", "") ?: ""
+        set(v) = sp.edit().putString("sos_recipient", v).apply()
+
+    /** "number|time written in the text" for each number the current SOS text is confirmed sent to. */
+    var sosSentTo: Set<String>
+        get() = sp.getStringSet("sos_sent_to", emptySet()).orEmpty().toSet()
+        set(v) = sp.edit().putStringSet("sos_sent_to", v).apply()
+
+    /** Ids of alerts ended with "I'm OK" whose SOS texts may still report late; each late success gets an all-clear. */
+    var sosAllClearPending: Set<String>
+        get() = sp.getStringSet("sos_all_clear_pending", emptySet()).orEmpty().toSet()
+        set(v) = sp.edit().putStringSet("sos_all_clear_pending", v).apply()
+
+    /** The user lets TrailMind send the SOS text itself when they don't answer the fall alarm. Off until they choose it. */
+    var sosAutoSend: Boolean
+        get() = sp.getBoolean("sos_auto_send", false)
+        set(v) = sp.edit().putBoolean("sos_auto_send", v).apply()
+
+    /** The user says this phone is registered for UK emergencySMS, so texting 999 works. */
+    var emergencySmsRegistered: Boolean
+        get() = sp.getBoolean("emergency_sms_registered", false)
+        set(v) = sp.edit().putBoolean("emergency_sms_registered", v).apply()
 }

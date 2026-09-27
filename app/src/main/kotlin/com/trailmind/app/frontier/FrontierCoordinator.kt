@@ -1,6 +1,5 @@
 package com.trailmind.app.frontier
 
-import android.content.Context
 import android.os.BatteryManager
 import com.trailmind.app.Async
 import com.trailmind.app.TrailMindApp
@@ -27,9 +26,7 @@ class FrontierCoordinator(private val app: TrailMindApp) {
             .also { app.prefs.frontierDeviceId = it }
     }
     private val locationListener: (Fix) -> Unit = ::onFix
-    private val networkManager = SatelliteNetworkManager(
-        app.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager,
-    ) {
+    private val networkManager = SatelliteNetworkManager(app) {
         satelliteState = it
         notifyListeners()
     }
@@ -39,7 +36,7 @@ class FrontierCoordinator(private val app: TrailMindApp) {
     @Volatile private var pendingFall: FallVector? = app.prefs.frontierFallVector
 
     @Volatile
-    var satelliteState = SatelliteLinkState(null, false)
+    var satelliteState = SatelliteLinkState()
         private set
 
     fun start() {
@@ -78,6 +75,7 @@ class FrontierCoordinator(private val app: TrailMindApp) {
             Async.io { app.db.upsertMeshHeartbeat(telemetry(fix, localStatus)) }
         }
         notifyListeners()
+        FallAlert.start(app)
     }
 
     fun preparePayload(): PackedGroupPayload {
@@ -93,8 +91,6 @@ class FrontierCoordinator(private val app: TrailMindApp) {
             ),
         )
     }
-
-    fun supports(service: DirectToCellService): Boolean = service in satelliteState.availableServices
 
     fun openSatelliteDataConnection(url: URL): HttpURLConnection = networkManager.openDataConnection(url)
 
@@ -114,9 +110,10 @@ class FrontierCoordinator(private val app: TrailMindApp) {
 
     fun statusText(): String = when {
         !app.prefs.frontierEnabled -> "Frontier safety is off"
-        satelliteState.constrainedCellularAvailable -> "Satellite data candidate connected"
-        app.prefs.frontierSatelliteDataEnabled -> "Frontier active · no satellite data link detected"
-        else -> "Frontier active · satellite data disabled"
+        satelliteState.dataAvailable -> "Satellite data connected: TrailMind keeps to texts and small updates"
+        satelliteState.textsOverSatellite -> "On ${satelliteState.operatorName ?: "satellite"}: texts work, calls don't"
+        app.prefs.frontierSatelliteDataEnabled -> "Frontier active · not on satellite now"
+        else -> "Frontier active · not watching for satellite"
     }
 
     fun heartbeatText(nowMs: Long = System.currentTimeMillis()): String = when {

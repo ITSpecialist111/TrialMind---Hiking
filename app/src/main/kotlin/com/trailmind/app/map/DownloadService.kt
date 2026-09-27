@@ -16,6 +16,7 @@ import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.PackStatus
+import com.trailmind.app.frontier.SatelliteNetworkManager
 import com.trailmind.app.ui.MainActivity
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.ui.atTimeText
@@ -171,7 +172,7 @@ class DownloadService : Service() {
                     is TileProvider.Fetch.Error -> failed++
                 }
                 if (authFailures >= 3) { message = "Access denied by the tile server. Check your API key and plan."; break }
-                if (noNetwork >= 5) { message = "No internet connection (or offline-only mode is on)."; break }
+                if (noNetwork >= 5) { message = noNetworkMessage(); break }
                 if ((done + failed) % 25 == 0L) progress(packId, meta.name, done, failed, bytes, meta.tileTotal)
                 Thread.sleep(POLITE_DELAY_MS)
             }
@@ -202,7 +203,7 @@ class DownloadService : Service() {
                     TileProvider.Fetch.NoKey -> { message = "OS Data Hub API key missing."; break }
                     else -> premiumFailed++
                 }
-                if (noNetwork >= 5) { message = "No internet connection (or offline-only mode is on)."; break }
+                if (noNetwork >= 5) { message = noNetworkMessage(); break }
                 if ((done + failed + premiumFailed) % 25 == 0L) progress(packId, meta.name, done, failed + premiumFailed, bytes, meta.tileTotal)
                 Thread.sleep(POLITE_DELAY_MS)
             }
@@ -251,6 +252,9 @@ class DownloadService : Service() {
             app.tiles.reloadPacks()
         }
     }
+
+    private fun noNetworkMessage() = if (SatelliteNetworkManager.onSatellite(this))
+        "On satellite: map downloads wait for normal signal." else "No internet connection (or offline-only mode is on)."
 
     private fun progress(packId: Long, name: String, done: Long, failed: Long, bytes: Long, total: Long) {
         DownloadState.done = done; DownloadState.failed = failed

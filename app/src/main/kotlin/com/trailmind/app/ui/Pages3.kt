@@ -1,7 +1,10 @@
 package com.trailmind.app.ui
 
+import android.app.NotificationManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.text.InputType
 import android.text.format.DateUtils
 import android.view.View
@@ -15,6 +18,8 @@ import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.PackStatus
 import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
+import com.trailmind.app.frontier.FallAlert
+import com.trailmind.app.frontier.FallAlertActivity
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingState
 import com.trailmind.app.location.TrackingService
@@ -30,6 +35,7 @@ import com.trailmind.app.map.TileGrid
 import com.trailmind.core.ai.Briefing
 import com.trailmind.core.ai.BriefingInput
 import com.trailmind.core.format.Units
+import com.trailmind.core.frontier.SosText
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
@@ -562,6 +568,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
     override fun onShow() {
         app.location.addListener(onFix)
         app.frontier.addListener(onFrontier)
+        FallAlert.addListener(onFrontier)
         update()
         refresh()
     }
@@ -569,6 +576,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
     override fun onHide() {
         app.location.removeListener(onFix)
         app.frontier.removeListener(onFrontier)
+        FallAlert.removeListener(onFrontier)
     }
 
     private fun locationText(f: Fix?): String? {
@@ -597,6 +605,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
             }, ui.lp(0, weight = 1f))
         })
         addView(frontierCard())
+        addView(sosCard())
         val due = app.prefs.checkInDueMs
         addView(ui.card(spacing = 6) {
             addView(ui.text("Check-in", Ui.T.TITLE))
@@ -646,9 +655,9 @@ class SafetyPage(host: MainActivity) : Page(host) {
             "${app.frontier.heartbeatText()} · ${app.frontier.emergencyText()}",
             Ui.T.CAPTION,
         ))
-        if (app.frontier.satelliteState.constrainedCellularAvailable) {
+        if (app.frontier.satelliteState.textsOverSatellite || app.frontier.satelliteState.dataAvailable) {
             addView(ui.text(
-                "Carrier services: SMS, RCS, WhatsApp, Messenger, WhatsApp audio, light app data and background location sync.",
+                "Satellite carries texts, location sharing and some apps. It doesn't carry calls, including 999 calls: text instead.",
                 Ui.T.CAPTION,
             ))
         }
@@ -669,17 +678,18 @@ class SafetyPage(host: MainActivity) : Page(host) {
         if (!app.fallMonitor.available) {
             addView(ui.text("Fall detection is unavailable because this phone has no accelerometer and gyroscope pair.", Ui.T.CAPTION))
         }
-        addView(ui.switch("Use satellite data when available", prefs.frontierSatelliteDataEnabled) {
+        addView(ui.switch("Watch for satellite (O2 Satellite)", prefs.frontierSatelliteDataEnabled) {
             prefs.frontierSatelliteDataEnabled = it
             applyFrontierSettings()
         }.apply { isEnabled = enabled })
         addView(ui.text(
-            "These controls affect TrailMind only. Carrier messaging and WhatsApp or Messenger remain controlled by their own apps.",
+            "Where there's no mobile signal, O2 Satellite connects on its own. On satellite TrailMind keeps to texts and small updates: maps, terrain and route search wait for normal signal.",
             Ui.T.CAPTION,
         ))
         if (app.frontier.emergencyText() != "No active emergency") {
+            // Same as "I'm OK" on the fall alarm: it also stops the alarm and tells the contact if an SOS went.
             addView(ui.button("Clear Frontier emergency", R.drawable.ic_close, Ui.B.OUTLINED) {
-                app.frontier.clearEmergency()
+                FallAlert.ok(host)
             })
         }
     }
@@ -688,6 +698,60 @@ class SafetyPage(host: MainActivity) : Page(host) {
         app.frontier.applySettings()
         TrackingService.send(host, TrackingService.ACTION_REFRESH_FRONTIER)
         refresh()
+    }
+
+    private fun sosCard(): View = ui.card(spacing = 8) {
+        val prefs = app.prefs
+        val contact = prefs.emergencyContact
+        val name = FallAlert.contactName(host).ifBlank { "your emergency contact" }
+        addView(ui.text("SOS text", Ui.T.TITLE))
+        addView(ui.text("After a possible fall TrailMind sounds an alarm and asks if you're OK for ${FallAlert.COUNTDOWN_MS / 1000} seconds. " +
+            "Then it texts $name your grid reference, a map link and your battery. One plain text, so it also goes over satellite.", Ui.T.CAPTION))
+        if (prefs.frontierEnabled && prefs.frontierFallDetectionEnabled) {
+            val nm = Notifications.manager(host)
+            if (!nm.areNotificationsEnabled() || nm.getNotificationChannel(Notifications.CH_FALL)?.importance == NotificationManager.IMPORTANCE_NONE)
+                addView(ui.banner("Notifications are off, so the fall alarm can't sound.", danger = true))
+            else if (Build.VERSION.SDK_INT >= 34 && !nm.canUseFullScreenIntent()) {
+                addView(ui.banner("Allow full-screen alerts so the fall alarm shows over the lock screen."))
+                addView(ui.button("Allow full-screen alerts", null, Ui.B.TEXT) {
+                    runCatching { host.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${host.packageName}"))) }
+                })
+            }
+        }
+        if (FallAlert.stage(host) != FallAlert.Stage.NONE) addView(ui.button("Open the fall alarm", R.drawable.ic_warning, Ui.B.DANGER) {
+            host.startActivity(Intent(host, FallAlertActivity::class.java))
+        })
+        addView(ui.switch("Send it without asking me", prefs.sosAutoSend && FallAlert.hasSmsPermission(host)) { on ->
+            if (!on) { prefs.sosAutoSend = false; refresh() }
+            else host.withSmsPermission { prefs.sosAutoSend = true; refresh() }
+        }.apply { isEnabled = contact.isNotBlank() })
+        addView(ui.text(when {
+            contact.isBlank() -> "Set an emergency contact to use this."
+            SosText.isEmergencyNumber(contact) -> "Your emergency contact is an emergency number. TrailMind never texts it by itself: use Text 999 below."
+            FallAlert.canSendItself(host) -> "On: if you don't answer, TrailMind sends the text itself and keeps trying until it goes."
+            else -> "Off: TrailMind gets the text ready and you tap Send in your messages app."
+        }, Ui.T.CAPTION))
+        if (contact.isNotBlank()) addView(ui.button("Send SOS text to $name", R.drawable.ic_sos, Ui.B.OUTLINED) {
+            val text = FallAlert.message(host, FallAlert.HELP)
+            if (!FallAlert.canSendItself(host)) { compose(contact, text); return@button }
+            ui.confirm("Send SOS text to $name?", text, "Send", danger = true) {
+                FallAlert.sendNow(host, FallAlert.HELP)
+                host.startActivity(Intent(host, FallAlertActivity::class.java))
+            }
+        })
+        addView(ui.divider())
+        addView(ui.text("999 by text (emergencySMS)", Ui.T.TITLE))
+        addView(ui.text("Satellite can't carry 999 calls. Register this phone for emergencySMS before you go, and you can text 999 instead.", Ui.T.CAPTION))
+        addView(ui.switch("This phone is registered for emergencySMS", prefs.emergencySmsRegistered) {
+            prefs.emergencySmsRegistered = it
+            refresh()
+        })
+        addView(if (prefs.emergencySmsRegistered) ui.button("Text 999", null, Ui.B.TONAL) { compose("999", FallAlert.emergencyMessage(host)) }
+        else ui.button("Register: text 'register' to 999", null, Ui.B.TONAL) { compose("999", "register") })
+    }
+
+    private fun compose(number: String, body: String) {
+        runCatching { host.startActivity(FallAlert.composeIntent(number, body)) }.onFailure { host.toast("No SMS app available") }
     }
 
     private fun update() {
