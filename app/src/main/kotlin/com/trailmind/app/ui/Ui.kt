@@ -305,19 +305,25 @@ class Ui(val ctx: Context) {
         addView(text(message, T.CAPTION, p.onSurface), lp(0, weight = 1f))
     }
 
-    /** Header row used by every page: back arrow (optional), title, trailing actions. */
-    fun header(title: String, onBack: (() -> Unit)?, vararg actions: View): LinearLayout = row(spacing = 4) {
-        setPadding(dp(4), dp(8), dp(8), dp(4))
-        if (onBack != null) {
-            addView(ImageButton(ctx).apply {
-                setImageDrawable(ctx.getDrawable(com.trailmind.app.R.drawable.ic_arrow_back)?.mutate()?.apply { setTint(p.onSurface) })
-                contentDescription = "Back"
-                background = ripple(null, 0x22000000, GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
-                setOnClickListener { onBack() }
-            }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        } else addView(View(ctx), LinearLayout.LayoutParams(dp(12), 1))
-        addView(text(title, T.HEADLINE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
-        actions.forEach { addView(it) }
+    /** Header used by every page: back arrow (optional) and title, with any actions on a wrapping row below it. */
+    fun header(title: String, onBack: (() -> Unit)?, vararg actions: View): LinearLayout {
+        val top = row(spacing = 4) {
+            setPadding(dp(4), dp(8), dp(8), dp(4))
+            if (onBack != null) {
+                addView(ImageButton(ctx).apply {
+                    setImageDrawable(ctx.getDrawable(com.trailmind.app.R.drawable.ic_arrow_back)?.mutate()?.apply { setTint(p.onSurface) })
+                    contentDescription = "Back"
+                    background = ripple(null, 0x22000000, GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
+                    setOnClickListener { onBack() }
+                }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            } else addView(View(ctx), LinearLayout.LayoutParams(dp(12), 1))
+            addView(text(title, T.HEADLINE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
+        }
+        if (actions.isEmpty()) return top
+        return column {
+            addView(top)
+            addView(flow { setPadding(dp(16), 0, dp(12), dp(4)); actions.forEach { addView(it) } })
+        }
     }
 
     fun dialog(): AlertDialog.Builder = AlertDialog.Builder(
