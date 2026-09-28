@@ -37,6 +37,7 @@ Ordnance Survey with your OS requests.
 |---|---|---|
 | [Ordnance Survey](https://www.ordnancesurvey.co.uk/legal) (OS Maps API, OS Names API) | OS maps, place and postcode search, names for offline areas | The map tiles for the area on screen or being downloaded, what you type into search, or the area being named; your OS API key |
 | [OpenStreetMap Foundation](https://osmfoundation.org/wiki/Privacy_Policy) tile servers | OpenStreetMap map | The map tiles for the area on screen |
+| [Geospatial Information Authority of Japan](https://maps.gsi.go.jp/development/ichiran.html) (GSI Tiles, cyberjapandata.gsi.go.jp) | Japan maps: GSI Standard Map, Aerial Photo and Hill shading | The map tiles for the area on screen or being downloaded |
 | Mapzen Terrain Tiles on [Amazon Web Services](https://aws.amazon.com/privacy/) | Heights, steep-ground shading, elevation profiles | The terrain tiles for the area involved |
 | [Open-Meteo](https://open-meteo.com/en/terms) | Mountain forecast for a route | The position and height of the route's high point |
 | [BRouter](https://brouter.de/) | Snapping a planned route to paths | The points you placed on the map |

@@ -3,14 +3,18 @@ package com.trailmind.app.map
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -129,6 +133,10 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; bngFootprintVertices.keys.retainAll(v.toSet()); invalidate() }
     var showSteepGround = false
         set(v) { if (field != v) { field = v; invalidate() } }
+    /** GSI hill shading (Japan) over the base map, or null when off. */
+    var hillshade: TileSource? = null
+        set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
+    private var hillshadeDrawn = false
     private val bngFootprintVertices = HashMap<TileFootprint, MutableMap<Long, LatLon>>()
 
     var position: LatLon? = null; private set
@@ -169,6 +177,11 @@ class TileMapView(context: Context) : View(context) {
 
     // --- paints (allocated once)
     private val tilePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val hillshadePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        alpha = 150
+        if (Build.VERSION.SDK_INT >= 29) blendMode = BlendMode.MULTIPLY
+        else xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+    }
     private val gridPaint = Paint().apply { color = Color.rgb(226, 230, 222); strokeWidth = 1f }
     private val bgColor = Color.rgb(238, 241, 234)
     private val routeCasing = strokePaint(Color.WHITE, 8f)
@@ -415,6 +428,7 @@ class TileMapView(context: Context) : View(context) {
         canvas.save()
         canvas.rotate(-bearing, w / 2, h / 2)
         drawTiles(canvas, w, h)
+        drawHillshade(canvas, w, h)
         drawOfflineAreas(canvas, w, h)
         drawSteepGround(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
@@ -471,6 +485,12 @@ class TileMapView(context: Context) : View(context) {
             return
         }
         val zi = zf.coerceAtMost(src0.maxZoom)
+        drawMercatorTiles(canvas, w, h, src0, zi, tilePaint, gridLines = true)
+    }
+
+    /** Web Mercator tiles of [s] at zoom [zi], scaled to the current zoom; missing tiles show an enlarged lower zoom. */
+    private fun drawMercatorTiles(canvas: Canvas, w: Float, h: Float, s: TileSource, zi: Int, paint: Paint, gridLines: Boolean): Boolean {
+        var drawn = false
         val scale = 2.0.pow(zoom - zi)
         val ts = WebMercator.TILE_SIZE
         val size = (ts * scale).toFloat()
@@ -489,20 +509,31 @@ class TileMapView(context: Context) : View(context) {
             if (!onScreen(left, top, left + size, top + size, w, h)) continue
             dst.set(left, top, left + size + 0.5f, top + size + 0.5f)
             val key = TileKey(zi, wx, ty)
-            val bmp = provider.cached(src0, key)
+            val bmp = provider.cached(s, key)
             if (bmp != null) {
-                canvas.drawBitmap(bmp, null, dst, tilePaint)
-                if (provider.isApproximate(src0, key)) provider.request(src0, key)
+                canvas.drawBitmap(bmp, null, dst, paint)
+                drawn = true
+                if (provider.isApproximate(s, key)) provider.request(s, key)
             } else {
-                provider.request(src0, key)
-                val pb = fallbackFor(src0, key)
-                if (pb != null) canvas.drawBitmap(pb, src, dst, tilePaint)
-                else {
+                provider.request(s, key)
+                val pb = fallbackFor(s, key)
+                if (pb != null) { canvas.drawBitmap(pb, src, dst, paint); drawn = true }
+                else if (gridLines) {
                     canvas.drawLine(dst.left, dst.top, dst.right, dst.top, gridPaint)
                     canvas.drawLine(dst.left, dst.top, dst.left, dst.bottom, gridPaint)
                 }
             }
         }
+        return drawn
+    }
+
+    /** GSI hill shading of Japan, multiplied into whatever base map is showing. */
+    private fun drawHillshade(canvas: Canvas, w: Float, h: Float) {
+        hillshadeDrawn = false
+        val s = hillshade ?: return
+        val zf = floor(zoom).toInt()
+        if (zf < s.minZoom || !TileSources.overlapsJapan(visibleBounds())) return
+        hillshadeDrawn = drawMercatorTiles(canvas, w, h, s, zf.coerceAtMost(s.maxZoom), hillshadePaint, gridLines = false)
     }
 
     /**
@@ -922,7 +953,10 @@ class TileMapView(context: Context) : View(context) {
         val nice = if (imperial) NICE_FEET.map { it * 0.3048 } else NICE_METRES
         val metres = nice.lastOrNull { it / mpp <= maxPx } ?: nice.first()
         val px = (metres / mpp).toFloat()
-        val credit = TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM }
+        val credit = listOfNotNull(
+            TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM },
+            "Hill shading: ${TileSources.GSI_ATTRIBUTION}".takeIf { hillshadeDrawn && source.attribution != TileSources.GSI_ATTRIBUTION },
+        ).joinToString(" · ").ifEmpty { null }
         var creditWidth = 0f
         var creditHeight = 0f
         if (credit != null) {

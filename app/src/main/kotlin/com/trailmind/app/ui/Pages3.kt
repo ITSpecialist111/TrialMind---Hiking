@@ -179,6 +179,7 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
             addView(ui.text("• OS Maps areas, downloaded with your own OS Data Hub key. Overview maps stay in your pack.\n" +
                 "• Explorer 1:25k detail can be added for 24 hours, the longest OS allows. Add it on the day of the hike. TrailMind asks before it expires, and you choose whether to renew it.\n" +
                 "• Any raster MBTiles file you have the right to use (e.g. made with QGIS, MOBAC or bought).\n" +
+                "• Japan: GSI Aerial Photo and GSI Hill shading (turn it on under Overlays). GSI's Standard Map is browse-only.\n" +
                 "• OpenStreetMap's public tiles are never bulk-downloaded: their usage policy forbids it. Areas you browse are cached for a few days only.\n" +
                 "Zoomed in beyond what is on the phone, the map enlarges the closest zoom it has.", Ui.T.CAPTION))
         })
@@ -906,6 +907,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("About", Ui.T.TITLE))
             addView(ui.text("TrailMind ${app.versionName} · personal offline-first hiking app.\n" +
                 "Map data: © OpenStreetMap contributors (ODbL); Contains OS data © Crown copyright and database rights (OS OpenData under the Open Government Licence; OS Premium under your OS Data Hub plan).\n" +
+                "Japan map: 出典：国土地理院 (Geospatial Information Authority of Japan, GSI Tiles).\n" +
                 "Routes found with Waymarked Trails; their heights: ASTER GDEM is a product of METI and NASA.\n" +
                 "Weather data by Open-Meteo.com (CC BY 4.0).\n" +
                 "Icons: Material Symbols (Apache 2.0).\n" +
@@ -919,6 +921,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 addView(ui.button("Report an OpenStreetMap issue", null, Ui.B.TEXT) { host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }, ui.lp(0, weight = 1f))
             })
             addView(ui.button("Weather data licence (CC BY 4.0)", null, Ui.B.TEXT) { host.openUrl(OpenMeteo.LICENCE_URL) })
+            addView(ui.button("GSI Tiles (Japan) terms", null, Ui.B.TEXT) { host.openUrl(TileSources.GSI_TILES_URL) })
             addView(ui.button("Show safety introduction", null, Ui.B.TEXT) { host.push(OnboardingPage(host).also { app.prefs.onboardingAccepted = true }) })
         })
 
@@ -926,7 +929,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("Privacy", Ui.T.TITLE))
             addView(ui.text("No accounts, ads or analytics, and no backups: your routes, hikes, emergency contact and OS key stay on this phone. " +
                 "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
-                "Ordnance Survey, OpenStreetMap, Mapzen terrain tiles on Amazon Web Services, Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
+                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), Mapzen terrain tiles on Amazon Web Services, Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
                 "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
                 "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
         })

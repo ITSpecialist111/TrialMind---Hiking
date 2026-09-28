@@ -62,6 +62,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("show_steep_ground", false)
         set(v) = sp.edit().putBoolean("show_steep_ground", v).apply()
 
+    /** GSI hill shading (Japan) over the base map. */
+    var showGsiHillshade: Boolean
+        get() = sp.getBoolean("show_gsi_hillshade", false)
+        set(v) = sp.edit().putBoolean("show_gsi_hillshade", v).apply()
+
     var showFacilities: Boolean
         get() = sp.getBoolean("show_facilities", true)
         set(v) = sp.edit().putBoolean("show_facilities", v).apply()

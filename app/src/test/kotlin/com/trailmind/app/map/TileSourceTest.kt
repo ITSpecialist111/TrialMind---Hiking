@@ -1,5 +1,6 @@
 package com.trailmind.app.map
 
+import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.map.TilePolicy
 import kotlin.test.Test
@@ -74,5 +75,44 @@ class TileSourceTest {
         val osm = TileSources.builtIns().single { it.id == TileSources.OSM }
         assertFalse(osm.offlineDownloadAllowed)
         assertFalse(osm.isPremium(19))
+    }
+
+    @Test
+    fun gsiJapanMapIsBrowseOnlyWebMercatorWithCredit() {
+        val gsi = TileSources.builtIns().single { it.id == TileSources.GSI_STD }
+        assertEquals("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", gsi.template)
+        assertEquals(null, TilePolicy.validateTemplate(gsi.template!!))
+        assertEquals(TileGrid.WEB_MERCATOR, gsi.grid)
+        assertEquals(18, gsi.maxZoom)
+        assertFalse(gsi.requiresKey)
+        assertFalse(gsi.offlineDownloadAllowed)
+        (0..20).forEach { assertFalse(gsi.canStoreInPack(it), "GSI zoom $it must not enter MBTiles") }
+        assertTrue(gsi.attribution.startsWith("出典：国土地理院"))
+    }
+
+    @Test
+    fun gsiPhotoAndHillshadeCanBeSavedOffline() {
+        val photo = TileSources.builtIns().single { it.id == TileSources.GSI_PHOTO }
+        val shade = TileSources.hillshade()
+        listOf(photo, shade).forEach { s ->
+            assertEquals(null, TilePolicy.validateTemplate(s.template!!), s.id)
+            assertFalse(TilePolicy.isBulkDownloadForbidden(s.template!!), s.id)
+            assertTrue(s.offlineDownloadAllowed, s.id)
+            assertFalse(s.requiresKey, s.id)
+            assertEquals(null, s.premiumFromZoom, s.id)
+            assertEquals(TileSources.GSI_ATTRIBUTION, s.attribution, s.id)
+            assertTrue(s.canStoreInPack(s.downloadMaxZoom), s.id)
+        }
+        assertEquals(17, photo.downloadMaxZoom)
+        assertEquals(16, shade.maxZoom)
+        assertFalse(photo.overlay)
+        assertTrue(shade.overlay)
+        assertEquals(listOf(TileSources.GSI_HILLSHADE), TileSources.builtIns().filter { it.overlay }.map { it.id })
+    }
+
+    @Test
+    fun hillshadeIsOnlyRequestedAroundJapan() {
+        assertTrue(TileSources.overlapsJapan(BoundingBox(35.3, 138.6, 35.5, 138.9)))
+        assertFalse(TileSources.overlapsJapan(BoundingBox(51.7, -2.6, 51.8, -2.5)))
     }
 }

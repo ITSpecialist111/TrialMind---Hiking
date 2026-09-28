@@ -2,6 +2,7 @@ package com.trailmind.app.map
 
 import com.trailmind.app.data.PackMeta
 import com.trailmind.app.data.Prefs
+import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.map.TilePolicy
 import java.util.Calendar
 
@@ -30,6 +31,8 @@ data class TileSource(
     val grid: TileGrid = TileGrid.WEB_MERCATOR,
     /** Ordnance Survey maps, which OS's API branding rules require to show the OS logo on the map. */
     val showsOsLogo: Boolean = false,
+    /** Drawn over the base map (from the Overlays menu), never picked as the base map itself. */
+    val overlay: Boolean = false,
 ) {
     val isOnline: Boolean get() = template != null
 
@@ -46,13 +49,18 @@ object TileSources {
     const val OS_ROAD = "os_road"
     const val OS_LIGHT = "os_light"
     const val OS_LEISURE = "os_leisure"
+    const val GSI_STD = "gsi_std"
+    const val GSI_PHOTO = "gsi_photo"
+    const val GSI_HILLSHADE = "gsi_hillshade"
     const val CUSTOM = "custom"
+    const val GSI_ATTRIBUTION = "出典：国土地理院 (Geospatial Information Authority of Japan)"
 
     // Where the map credits lead: OSM's licence and error reporting, OS's terms and its Errors and Omissions Tool.
     const val OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright"
     const val OSM_FIX_THE_MAP_URL = "https://www.openstreetmap.org/fixthemap"
     const val OS_TERMS_URL = "https://www.ordnancesurvey.co.uk/legal"
     const val OS_ERRORS_URL = "https://osdatahub.os.uk/apps/errors-and-omissions"
+    const val GSI_TILES_URL = "https://maps.gsi.go.jp/development/ichiran.html"
 
     private fun year() = Calendar.getInstance().get(Calendar.YEAR)
 
@@ -108,7 +116,48 @@ object TileSources {
         osLeisure(),
         osSource(OS_ROAD, "Road", "Road"),
         osSource(OS_LIGHT, "Light", "Light"),
+        TileSource(
+            id = GSI_STD,
+            name = "Japan – GSI Standard Map (online)",
+            template = "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
+            attribution = GSI_ATTRIBUTION,
+            minZoom = 5,
+            maxZoom = 18,
+            // A basic survey result (基本測量成果): real-time use needs only the credit, but stored copies can need
+            // approval under Japan's Survey Act (測量法), so this stays browse-only.
+            note = "Japan's national 1:25,000-based topographic map, with contours, footpaths, summits and huts. " +
+                "Labels are in Japanese. Browsing only: saving it offline can need approval under Japan's Survey Act. " +
+                "For offline use in Japan, download GSI Aerial Photo and GSI Hill shading.",
+        ),
+        // Not basic survey results: GSI lets these be used, including stored offline, with the credit only.
+        TileSource(
+            id = GSI_PHOTO,
+            name = "Japan – GSI Aerial Photo",
+            template = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",
+            attribution = GSI_ATTRIBUTION,
+            minZoom = 2,
+            maxZoom = 18,
+            offlineDownloadAllowed = true,
+            downloadMaxZoom = 17,
+            note = "GSI's seamless aerial photos of Japan, sharp enough to pick out paths and clearings. " +
+                "Can be downloaded for offline use (credit only, no application needed).",
+        ),
+        TileSource(
+            id = GSI_HILLSHADE,
+            name = "Japan – GSI Hill shading (overlay)",
+            template = "https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png",
+            attribution = GSI_ATTRIBUTION,
+            minZoom = 2,
+            maxZoom = 16,
+            offlineDownloadAllowed = true,
+            overlay = true,
+            note = "Hill shading of Japan from GSI's 5–10 m elevation model, drawn over any map from Overlays. " +
+                "Download it for offline use as its own pack (credit only, no application needed).",
+        ),
     )
+
+    /** GSI's Japan-only overlay tiles exist only around Japan; elsewhere they are not requested. */
+    fun overlapsJapan(b: BoundingBox) = b.maxLat >= 20.0 && b.minLat <= 46.0 && b.maxLon >= 122.0 && b.minLon <= 154.0
 
     fun custom(prefs: Prefs): TileSource? {
         val t = prefs.customTemplate
@@ -141,6 +190,10 @@ object TileSources {
     fun all(prefs: Prefs, packs: List<PackMeta>): List<TileSource> =
         builtIns() + listOfNotNull(custom(prefs)) +
             packs.filter { it.kind == com.trailmind.app.data.PackKind.IMPORT }.map { fromPack(it) }
+
+    fun baseLayers(prefs: Prefs, packs: List<PackMeta>): List<TileSource> = all(prefs, packs).filterNot { it.overlay }
+
+    fun hillshade(): TileSource = builtIns().single { it.id == GSI_HILLSHADE }
 
     fun byId(id: String, prefs: Prefs, packs: List<PackMeta>): TileSource =
         all(prefs, packs).firstOrNull { it.id == id } ?: builtIns().first()

@@ -335,6 +335,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val s = currentSource()
         mapView.source = s
         mapView.showSteepGround = app.prefs.showSteepGround
+        mapView.hillshade = if (app.prefs.showGsiHillshade) TileSources.hillshade() else null
         layerChip.text = s.name
         updateHint()
         updateOfflineAreas()
@@ -367,7 +368,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     }
 
     private fun chooseLayer() {
-        val sources = TileSources.all(app.prefs, app.tiles.packs)
+        val sources = TileSources.baseLayers(app.prefs, app.tiles.packs)
         val current = currentSource().id
         val labels = sources.map { s ->
             buildString {
@@ -393,14 +394,22 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                         "\n\n${TerrainProvider.CREDIT}\n${TerrainProvider.REQUIRED_ATTRIBUTION}")
                     .setPositiveButton("OK", null).show()
             }
-            .setPositiveButton("Offline areas: ${if (app.prefs.showOfflineAreas) "on" else "off"}") { _, _ ->
-                app.prefs.showOfflineAreas = !app.prefs.showOfflineAreas
-                updateOfflineAreas()
+            .setPositiveButton("Overlays") { _, _ -> chooseOverlays() }
+            .show()
+    }
+
+    private fun chooseOverlays() {
+        val labels = arrayOf("Steep ground (25° and steeper)", "Hill shading (Japan, GSI)", "Offline areas")
+        val checked = booleanArrayOf(app.prefs.showSteepGround, app.prefs.showGsiHillshade, app.prefs.showOfflineAreas)
+        ui.dialog().setTitle("Overlays")
+            .setMultiChoiceItems(labels, checked) { _, which, on ->
+                when (which) {
+                    0 -> { app.prefs.showSteepGround = on; mapView.showSteepGround = on }
+                    1 -> { app.prefs.showGsiHillshade = on; mapView.hillshade = if (on) TileSources.hillshade() else null }
+                    else -> { app.prefs.showOfflineAreas = on; updateOfflineAreas() }
+                }
             }
-            .setNegativeButton("Steep ground: ${if (app.prefs.showSteepGround) "on" else "off"}") { _, _ ->
-                app.prefs.showSteepGround = !app.prefs.showSteepGround
-                mapView.showSteepGround = app.prefs.showSteepGround
-            }
+            .setPositiveButton("Done", null)
             .show()
     }
 
@@ -448,6 +457,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             s.attribution,
             OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
             TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
+            "Hill shading (Japan): ${TileSources.GSI_ATTRIBUTION}".takeIf { app.prefs.showGsiHillshade && s.attribution != TileSources.GSI_ATTRIBUTION },
         ).joinToString("\n\n")
         val dialog = ui.dialog().setTitle("Map data").setMessage(credits).setNegativeButton("Close", null)
         when {
@@ -455,6 +465,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 .setNeutralButton("Report an error") { _, _ -> host.openUrl(TileSources.OS_ERRORS_URL) }
             s.id == TileSources.OSM -> dialog.setPositiveButton("Licence") { _, _ -> host.openUrl(TileSources.OSM_COPYRIGHT_URL) }
                 .setNeutralButton("Report a map issue") { _, _ -> host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }
+            s.attribution == TileSources.GSI_ATTRIBUTION || app.prefs.showGsiHillshade ->
+                dialog.setPositiveButton("GSI tiles") { _, _ -> host.openUrl(TileSources.GSI_TILES_URL) }
         }
         dialog.show()
     }
