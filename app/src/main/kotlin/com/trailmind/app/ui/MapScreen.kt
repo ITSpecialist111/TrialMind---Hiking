@@ -15,6 +15,7 @@ import com.trailmind.app.data.OverpassFacilities
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.map.LidarProvider
 import com.trailmind.app.map.MapMarker
 import com.trailmind.app.map.MercatorLine
 import com.trailmind.app.map.TileMapView
@@ -308,13 +309,17 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         pinChip.text = "Clear search pin  ✕"
         val job = ++searchPinHeightJob
         centerOn(position, zoom)
-        Async.run({ app.terrain.sample(position) }) { result ->
+        Async.run({ groundHeight(position) }) { result ->
             if (job != searchPinHeightJob || mapView.searchPin?.position != position) return@run
-            result.getOrNull()?.let {
-                pinChip.text = "$name · Height about ${Units.elevation(it, app.prefs.imperial)} · ${TerrainProvider.CREDIT} · Clear search pin  ✕"
+            result.getOrNull()?.let { (height, credit) ->
+                pinChip.text = "$name · Height about ${Units.elevation(height, app.prefs.imperial)} · $credit · Clear search pin  ✕"
             }
         }
     }
+
+    /** Ground height at [at] with its credit: LiDAR already on the phone first, then the terrain model. */
+    private fun groundHeight(at: LatLon): Pair<Double, String>? =
+        app.lidar.sample(at)?.let { it to LidarProvider.CREDIT } ?: app.terrain.sample(at)?.let { it to TerrainProvider.CREDIT }
 
     fun clearSearchPin() {
         searchPinHeightJob++
@@ -335,6 +340,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val s = currentSource()
         mapView.source = s
         mapView.showSteepGround = app.prefs.showSteepGround
+        mapView.showLidar = app.prefs.showLidar
         mapView.hillshade = if (app.prefs.showGsiHillshade) TileSources.hillshade() else null
         layerChip.text = s.name
         updateHint()
@@ -391,26 +397,44 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             .setNeutralButton("About sources") { _, _ ->
                 ui.dialog().setTitle("Map sources")
                     .setMessage(TileSources.all(app.prefs, app.tiles.packs).joinToString("\n\n") { "${it.name}\n${it.note}" } +
-                        "\n\n${TerrainProvider.CREDIT}\n${TerrainProvider.REQUIRED_ATTRIBUTION}")
-                    .setPositiveButton("OK", null).show()
+                        "\n\n${TerrainProvider.CREDIT}\n${TerrainProvider.REQUIRED_ATTRIBUTION}" +
+                        "\n\n1 m LiDAR hill shading, crags and heights for England: Environment Agency LIDAR Composite DTM, " +
+                        "Open Government Licence v3.0.\n${LidarProvider.CREDIT}")
+                    .setPositiveButton("OK", null)
+                    .setNeutralButton("LiDAR licence") { _, _ -> host.openUrl(LidarProvider.LICENCE_URL) }
+                    .show()
             }
             .setPositiveButton("Overlays") { _, _ -> chooseOverlays() }
             .show()
     }
 
     private fun chooseOverlays() {
-        val labels = arrayOf("Steep ground (25° and steeper)", "Hill shading (Japan, GSI)", "Offline areas")
-        val checked = booleanArrayOf(app.prefs.showSteepGround, app.prefs.showGsiHillshade, app.prefs.showOfflineAreas)
-        ui.dialog().setTitle("Overlays")
+        val labels = arrayOf("Steep ground (25° and steeper)", "LiDAR hill shading and crags (England)", "Hill shading (Japan, GSI)", "Offline areas")
+        val checked = booleanArrayOf(app.prefs.showSteepGround, app.prefs.showLidar, app.prefs.showGsiHillshade, app.prefs.showOfflineAreas)
+        // A dialog with a list cannot also show a message, so the note goes in a custom title.
+        val title = ui.column(padding = 20, spacing = 4) {
+            addView(ui.text("Overlays", Ui.T.TITLE))
+            addView(ui.text("LiDAR shows 1 m detail of the ground in England, with crags in dark red. It loads when you zoom in close " +
+                "with signal, stays on the phone, and route offline maps save it along the route. " +
+                "Japan's hill shading comes from GSI; download it from Offline maps to see it without signal.", Ui.T.CAPTION))
+        }
+        ui.dialog().setCustomTitle(title)
             .setMultiChoiceItems(labels, checked) { _, which, on ->
                 when (which) {
                     0 -> { app.prefs.showSteepGround = on; mapView.showSteepGround = on }
-                    1 -> { app.prefs.showGsiHillshade = on; mapView.hillshade = if (on) TileSources.hillshade() else null }
+                    1 -> { app.prefs.showLidar = on; mapView.showLidar = on }
+                    2 -> { app.prefs.showGsiHillshade = on; mapView.hillshade = if (on) TileSources.hillshade() else null }
                     else -> { app.prefs.showOfflineAreas = on; updateOfflineAreas() }
                 }
             }
             .setPositiveButton("Done", null)
             .show()
+    }
+
+    /** Turns on LiDAR shading, for places a route check points to. */
+    fun showLidarLayer() {
+        app.prefs.showLidar = true
+        mapView.showLidar = true
     }
 
     // ---------------------------------------------------------------- TileMapView.Listener
@@ -439,9 +463,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 }
             }.create()
         dialog.show()
-        Async.run({ app.terrain.sample(at) }) { result ->
-            result.getOrNull()?.let { height ->
-                heightText.text = "Height about ${Units.elevation(height, app.prefs.imperial)}\n${TerrainProvider.CREDIT}"
+        Async.run({ groundHeight(at) }) { result ->
+            result.getOrNull()?.let { (height, credit) ->
+                heightText.text = "Height about ${Units.elevation(height, app.prefs.imperial)}\n$credit"
                 heightText.visibility = View.VISIBLE
             }
         }
@@ -457,6 +481,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             s.attribution,
             OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
             TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
+            LidarProvider.CREDIT.takeIf { app.prefs.showLidar },
             "Hill shading (Japan): ${TileSources.GSI_ATTRIBUTION}".takeIf { app.prefs.showGsiHillshade && s.attribution != TileSources.GSI_ATTRIBUTION },
         ).joinToString("\n\n")
         val dialog = ui.dialog().setTitle("Map data").setMessage(credits).setNegativeButton("Close", null)

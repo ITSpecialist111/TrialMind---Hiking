@@ -39,6 +39,7 @@ Ordnance Survey with your OS requests.
 | [OpenStreetMap Foundation](https://osmfoundation.org/wiki/Privacy_Policy) tile servers | OpenStreetMap map | The map tiles for the area on screen |
 | [Geospatial Information Authority of Japan](https://maps.gsi.go.jp/development/ichiran.html) (GSI Tiles, cyberjapandata.gsi.go.jp) | Japan maps: GSI Standard Map, Aerial Photo and Hill shading | The map tiles for the area on screen or being downloaded |
 | Mapzen Terrain Tiles on [Amazon Web Services](https://aws.amazon.com/privacy/) | Heights, steep-ground shading, elevation profiles | The terrain tiles for the area involved |
+| [Environment Agency](https://environment.data.gov.uk/support/faqs/275811163/275811229) (Defra Data Services Platform) | 1 m LiDAR hill shading, crags, ground heights and route terrain checks in England | The 256 m grid squares for the area on screen, along a route being checked, or along a route's offline map |
 | [Open-Meteo](https://open-meteo.com/en/terms) | Mountain forecast for a route | The position and height of the route's high point |
 | [BRouter](https://brouter.de/) | Snapping a planned route to paths | The points you placed on the map |
 | [Waymarked Trails](https://hiking.waymarkedtrails.org/) | Finding waymarked routes | The map area or the name you search for; the route you pick |

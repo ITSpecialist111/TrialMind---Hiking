@@ -11,3 +11,4 @@ captures
 *.keystore
 !debug-sample.keystore
 *.jks
+.vscode

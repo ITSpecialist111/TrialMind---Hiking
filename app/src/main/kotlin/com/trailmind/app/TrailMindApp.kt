@@ -10,6 +10,7 @@ import com.trailmind.app.data.Prefs
 import com.trailmind.app.data.RoutePlanner
 import com.trailmind.app.location.LocationHub
 import com.trailmind.app.location.CheckIn
+import com.trailmind.app.map.LidarProvider
 import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.map.TerrainProvider
@@ -36,6 +37,8 @@ class TrailMindApp : Application() {
     lateinit var tiles: TileProvider
         private set
     lateinit var terrain: TerrainProvider
+        private set
+    lateinit var lidar: LidarProvider
         private set
     lateinit var nav: NavigationController
         private set
@@ -65,6 +68,7 @@ class TrailMindApp : Application() {
         baro = Barometer(this)
         tiles = TileProvider(this)
         terrain = TerrainProvider(this)
+        lidar = LidarProvider(this)
         nav = NavigationController(this)
         location = LocationHub(nav)
         frontier = FrontierCoordinator(this)
@@ -73,7 +77,7 @@ class TrailMindApp : Application() {
         frontier.start()
         Notifications.createChannels(this)
         CheckIn.arm(this)
-        Async.io { tiles.trimDiskCache(); terrain.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }
+        Async.io { tiles.trimDiskCache(); terrain.trimDiskCache(); lidar.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }
     }
 
     companion object {

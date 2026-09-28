@@ -26,6 +26,7 @@ import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.map.DownloadService
 import com.trailmind.app.map.DownloadState
+import com.trailmind.app.map.LidarProvider
 import com.trailmind.app.map.MbTiles
 import com.trailmind.app.map.PremiumRenewal
 import com.trailmind.app.map.TileProvider
@@ -42,6 +43,7 @@ import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.Sun
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
+import com.trailmind.core.map.Lidar
 import com.trailmind.core.map.TileCoverage
 import com.trailmind.core.map.TilePolicy
 import com.trailmind.core.stats.HighPoint
@@ -66,6 +68,8 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
     private var count: Long? = null
     private var countedArea: BoundingBox? = null
     private var premiumCount = 0L
+    private var lidarMissing = 0
+    private var lidarSquares = 0
     private var countJob = 0
     private var progressViews = HashMap<Long, Pair<android.widget.ProgressBar, TextView>>()
     private var premiumExpiries = emptyMap<Long, PremiumRenewal.Detail>()
@@ -152,8 +156,17 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                     .take(TilePolicy.MAX_TILES_PER_DOWNLOAD + 1).count().toLong()
                 else if (rd != null) TileCoverage.corridorCount(rd.points.map { it.latLon() }, corridorBuffer, from, to)
                 else WebMercator.countTiles(box, from, to)
-            tiles(minZ, maxZ) to (if (pz.isEmpty()) 0L else tiles(pz.first, pz.last))
-        }) { r -> if (job == countJob) { r.getOrNull()?.let { (open, premium) -> count = open + premium; premiumCount = premium; countedArea = box }; refresh() } }
+            val lidar = rd?.let { Lidar.corridor(it.points.map { p -> OsGrid.project(p.latLon()) }, LidarProvider.PACK_CORRIDOR_M) }.orEmpty()
+            Triple(tiles(minZ, maxZ), if (pz.isEmpty()) 0L else tiles(pz.first, pz.last), lidar.size to app.lidar.missing(lidar))
+        }) { r ->
+            if (job == countJob) {
+                r.getOrNull()?.let { (open, premium, lidar) ->
+                    count = open + premium; premiumCount = premium; countedArea = box
+                    lidarSquares = lidar.first; lidarMissing = lidar.second
+                }
+                refresh()
+            }
+        }
     }
 
     override fun render(): View = scaffold("Offline maps") {
@@ -238,6 +251,12 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                 c == 0L && s.grid == TileGrid.BRITISH_NATIONAL_GRID -> "Explorer and Landranger maps only cover Great Britain. Choose an area there."
                 else -> "$c tiles · about ${"%.0f".format(c * AVG_TILE_KB / 1024.0)} MB"
             }, Ui.T.BODY, if (tooMany) p.danger else p.onSurface))
+            if (routeId != null && lidarSquares > 0) {
+                addView(ui.switch("Also save 1 m LiDAR near the route (England)", app.prefs.packLidar) { app.prefs.packLidar = it })
+                addView(ui.text(if (lidarMissing == 0) "The LiDAR within 150 m of this route is already on the phone."
+                    else "Hill shading, crags and ground heights within 150 m of the route: about " +
+                        "${"%.0f".format(lidarMissing * LidarProvider.SQUARE_BYTES_ESTIMATE / 1_048_576.0)} MB more.", Ui.T.CAPTION))
+            }
             addView(ui.text(s.note, Ui.T.CAPTION))
             addView(ui.text(s.attribution, Ui.T.CAPTION))
             addView(ui.button("Download", R.drawable.ic_download) {
@@ -910,6 +929,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 "Japan map: 出典：国土地理院 (Geospatial Information Authority of Japan, GSI Tiles).\n" +
                 "Routes found with Waymarked Trails; their heights: ASTER GDEM is a product of METI and NASA.\n" +
                 "Weather data by Open-Meteo.com (CC BY 4.0).\n" +
+                "1 m LiDAR terrain for England, under the Open Government Licence: © Environment Agency copyright and/or database right 2022. All rights reserved.\n" +
                 "Icons: Material Symbols (Apache 2.0).\n" +
                 "Estimates use Naismith's rule with Langmuir corrections and Tobler's hiking function; they exclude breaks.", Ui.T.CAPTION))
             addView(ui.row {
@@ -922,6 +942,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             })
             addView(ui.button("Weather data licence (CC BY 4.0)", null, Ui.B.TEXT) { host.openUrl(OpenMeteo.LICENCE_URL) })
             addView(ui.button("GSI Tiles (Japan) terms", null, Ui.B.TEXT) { host.openUrl(TileSources.GSI_TILES_URL) })
+            addView(ui.button("LiDAR licence (Open Government Licence)", null, Ui.B.TEXT) { host.openUrl(LidarProvider.LICENCE_URL) })
             addView(ui.button("Show safety introduction", null, Ui.B.TEXT) { host.push(OnboardingPage(host).also { app.prefs.onboardingAccepted = true }) })
         })
 
@@ -929,7 +950,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("Privacy", Ui.T.TITLE))
             addView(ui.text("No accounts, ads or analytics, and no backups: your routes, hikes, emergency contact and OS key stay on this phone. " +
                 "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
-                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), Mapzen terrain tiles on Amazon Web Services, Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
+                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), Mapzen terrain tiles on Amazon Web Services, the Environment Agency (LiDAR), Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
                 "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
                 "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
         })

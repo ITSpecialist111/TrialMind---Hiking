@@ -128,13 +128,20 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 4) 
             db.execSQL("ALTER TABLE packs ADD COLUMN premium_ms INTEGER NOT NULL DEFAULT 0")
         }
         // Test builds shipped two different version 3 schemas (terrain or Frontier), so version 4 adds whichever is missing.
-        if (oldVersion < 4) {
-            val hasTerrainColumn = db.compileStatement(
-                "SELECT COUNT(*) FROM pragma_table_info('routes') WHERE name = 'terrain_derived'",
-            ).use { it.simpleQueryForLong() } > 0
-            if (!hasTerrainColumn) db.execSQL("ALTER TABLE routes ADD COLUMN terrain_derived INTEGER NOT NULL DEFAULT 0")
-            createMeshHeartbeats(db)
-        }
+        if (oldVersion < 4) ensureVersion4(db)
+    }
+
+    // Newer test builds only add tables, which this build ignores, so keep the user's data instead of crashing.
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        ensureVersion4(db)
+    }
+
+    private fun ensureVersion4(db: SQLiteDatabase) {
+        val hasTerrainColumn = db.compileStatement(
+            "SELECT COUNT(*) FROM pragma_table_info('routes') WHERE name = 'terrain_derived'",
+        ).use { it.simpleQueryForLong() } > 0
+        if (!hasTerrainColumn) db.execSQL("ALTER TABLE routes ADD COLUMN terrain_derived INTEGER NOT NULL DEFAULT 0")
+        createMeshHeartbeats(db)
     }
 
     private fun createMeshHeartbeats(db: SQLiteDatabase) {

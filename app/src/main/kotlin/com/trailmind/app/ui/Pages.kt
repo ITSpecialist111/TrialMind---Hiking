@@ -18,15 +18,18 @@ import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.HikeMeta
 import com.trailmind.app.data.HikeStatus
+import com.trailmind.app.data.LidarChecks
 import com.trailmind.app.data.OpenMeteo
 import com.trailmind.app.data.OverpassFacilities
 import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.data.SavedFacilities
+import com.trailmind.app.data.SavedLidarCheck
 import com.trailmind.app.data.WaymarkedTrails
 import com.trailmind.app.location.TrackingState
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.LocationHub
+import com.trailmind.app.map.LidarProvider
 import com.trailmind.app.map.TileSources
 import com.trailmind.app.map.TileGrid
 import com.trailmind.app.map.TerrainProvider
@@ -48,6 +51,7 @@ import com.trailmind.core.stats.TrackStats
 import java.io.StringWriter
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.roundToInt
 
 private fun fmtDate(ms: Long): String = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(ms))
 
@@ -250,6 +254,10 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     private var checking = false
     private var fetchingWeather = false
     private var addingTerrain = false
+    private var lidarCheck: SavedLidarCheck? = null
+    private var lidarSquares: Int? = null
+    private var lidarMissing = 0
+    private val lidarListener: () -> Unit = { loadLidar() }
     private val facilityListener: (Result<SavedFacilities>) -> Unit = { result ->
         result.onSuccess { facilities = it; facilityCacheUnreadable = false; showAllFacilities = false; host.map.updateFacilities() }
             .onFailure { host.toast("Could not find facilities: ${it.message ?: "connection failed"}") }
@@ -265,6 +273,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
     override fun onShow() {
         app.nav.addListener(navListener)
         OverpassFacilities.addListener(routeId, facilityListener)
+        LidarChecks.addListener(routeId, lidarListener)
         if (!loading) {
             loading = true
             Async.run({ Triple(app.db.routeData(routeId), OverpassFacilities.saved(host.applicationContext, routeId), OverpassFacilities.hasSaved(host.applicationContext, routeId)) }) { r ->
@@ -274,16 +283,107 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
             loaded = true
             loading = false
             updateReadiness()
+            loadLidar()
             refresh()
             }
         }
         if (loaded) updateReadiness()
+        if (loaded) loadLidar()
         if (loaded) refresh()
     }
 
     override fun onHide() {
         app.nav.removeListener(navListener)
         OverpassFacilities.removeListener(routeId, facilityListener)
+        LidarChecks.removeListener(routeId, lidarListener)
+    }
+
+    /** The saved LiDAR check, and how many squares a check needs and still has to download. */
+    private fun loadLidar() {
+        val points = data?.points?.map { it.latLon() } ?: return
+        Async.run({
+            val squares = LidarChecks.squares(points)
+            Triple(LidarChecks.saved(host, routeId), squares.size, app.lidar.missing(squares))
+        }) { r ->
+            r.getOrNull()?.let { (saved, count, missing) -> lidarCheck = saved; lidarSquares = count; lidarMissing = missing }
+            refresh()
+        }
+    }
+
+    private fun lidarCard(d: RouteData): View = ui.card(spacing = 6) {
+        val imperial = app.prefs.imperial
+        addView(ui.text("Terrain check (1 m LiDAR)", Ui.T.TITLE))
+        val squares = lidarSquares
+        if (squares == 0) {
+            addView(ui.text("The Environment Agency's LiDAR covers England, and this route is outside it.", Ui.T.CAPTION))
+            return@card
+        }
+        val progress = LidarChecks.progress(routeId)
+        val saved = lidarCheck
+        when {
+            progress != null -> addView(ui.text(if (progress.total == 0) "Starting…"
+                else "Downloading LiDAR: ${progress.done} of ${progress.total} squares… You can leave this page.", Ui.T.CAPTION))
+            saved == null -> addView(ui.text("Looks along the route for ground steep enough to need hands (35° or more over 10 m) and for crags " +
+                "within 10 m, from the Environment Agency's 1 m survey of England.", Ui.T.CAPTION))
+        }
+        if (progress == null) LidarChecks.error(routeId)?.let { addView(ui.text(it, Ui.T.CAPTION, p.danger)) }
+        if (saved != null && progress == null) {
+            val report = saved.report
+            // A result for the whole route needs LiDAR along all of it; a gap is never rounded up to 100%.
+            val full = report.lengthM > 0 && report.coveredM >= report.lengthM - 0.5
+            val coverage = when {
+                full -> 100
+                report.lengthM > 0 -> (report.coveredM / report.lengthM * 100).toInt().coerceAtMost(99)
+                else -> 0
+            }
+            addView(ui.text("Checked ${fmtDate(saved.checkedMs)} · LiDAR covers $coverage% of the route", Ui.T.CAPTION))
+            if (report.steep.isEmpty() && report.crags.isEmpty()) addView(ui.text(when {
+                full -> "No stretch of the line is 35° or steeper over 10 m, and no crag is within 10 m of it."
+                report.coveredM > 0 -> "Where LiDAR covers the route, no stretch of the line is 35° or steeper over 10 m, and no crag " +
+                    "is within 10 m of it. The rest of the route wasn't checked."
+                else -> "LiDAR has no heights along this route, so it couldn't be checked. The Environment Agency's survey covers " +
+                    "most of England, but not Wales or Scotland."
+            }, Ui.T.BODY))
+            else if (!full) addView(ui.text("Only the $coverage% of the route that LiDAR covers was checked.", Ui.T.CAPTION))
+            if (report.steep.isNotEmpty()) {
+                addView(ui.text("Steep enough for hands: ${report.steep.size}", Ui.T.LABEL))
+                report.steep.take(12).forEach { s ->
+                    addView(ui.listItem("At ${Units.distance(s.startM, imperial)} · ${s.value.roundToInt()}°",
+                        "For ${Units.distance(s.endM - s.startM, imperial)} along the line. Tap to see it.") { showOnMap(s.at) })
+                }
+            }
+            if (report.crags.isNotEmpty()) {
+                addView(ui.text("Crag within 10 m: ${report.crags.size}", Ui.T.LABEL))
+                report.crags.take(12).forEach { s ->
+                    addView(ui.listItem("At ${Units.distance(s.startM, imperial)} · ${if (s.value < 1) "on the line" else "${Units.distance(s.value, imperial)} away"}",
+                        "For ${Units.distance(maxOf(s.endM - s.startM, 1.0), imperial)} along the line. Tap to see it.") { showOnMap(s.at) })
+                }
+            }
+            addView(ui.text("Measured along the route line: a path that zigzags up a slope is less steep than the line, and the line " +
+                "can be a few metres off the path. LiDAR is the bare ground, without walls, trees or buildings. Look at the map before you rely on it.", Ui.T.CAPTION))
+        }
+        if (progress == null) {
+            val online = app.tiles.networkAllowed()
+            val missing = lidarMissing
+            addView(ui.button(if (saved == null) "Check with LiDAR" else "Check again", R.drawable.ic_route, Ui.B.TONAL) {
+                if (LidarChecks.start(host, routeId, d.points.map { it.latLon() })) refresh()
+            }.apply { isEnabled = squares != null && (online || missing == 0); alpha = if (isEnabled) 1f else 0.5f })
+            addView(ui.text(when {
+                squares == null -> "Working out the download…"
+                missing == 0 -> "The LiDAR for this route is on the phone."
+                !online -> "Needs normal signal to download about ${lidarMb(missing)}."
+                else -> "Downloads about ${lidarMb(missing)} and keeps it on the phone."
+            }, Ui.T.CAPTION))
+        }
+        addView(ui.link(LidarProvider.CREDIT) { host.openUrl(LidarProvider.DATASET_URL) })
+    }
+
+    private fun lidarMb(squares: Int) = "%.1f MB".format(squares * LidarProvider.SQUARE_BYTES_ESTIMATE / 1_048_576.0)
+
+    private fun showOnMap(at: LatLon) {
+        host.map.showLidarLayer()
+        if (app.nav.active?.data?.meta?.id == routeId) host.map.centerOn(at, 17.0)
+        else app.nav.follow(routeId) { if (it != null) host.map.centerOn(at, 17.0) }
     }
 
     fun onBaseMapChanged() {
@@ -484,6 +584,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     }.apply { isEnabled = !addingTerrain })
                 }
             })
+            addView(lidarCard(d))
             addView(ui.row {
                 if (following) addView(ui.button("Stop following", R.drawable.ic_close, Ui.B.TONAL) { app.nav.stopFollowing() }, ui.lp(0, weight = 1f))
                 else addView(ui.button("Follow route", R.drawable.ic_navigation) {
@@ -583,7 +684,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Delete", R.drawable.ic_delete, Ui.B.TEXT) {
                     ui.confirm("Delete route?", "\"${d.meta.name}\" will be removed. Recorded hikes are kept.", "Delete") {
                         if (following) app.nav.stopFollowing()
-                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId); OverpassFacilities.delete(host, routeId) }) { result ->
+                        Async.run({ app.db.deleteRoute(routeId); OpenMeteo.delete(host, routeId); OverpassFacilities.delete(host, routeId); LidarChecks.delete(host, routeId) }) { result ->
                             if (result.isSuccess && app.prefs.checkInRouteId == routeId) CheckIn.clear(host)
                             host.goBack()
                         }

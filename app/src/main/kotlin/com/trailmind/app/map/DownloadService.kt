@@ -20,7 +20,9 @@ import com.trailmind.app.frontier.SatelliteNetworkManager
 import com.trailmind.app.ui.MainActivity
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.ui.atTimeText
+import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TileKey
+import com.trailmind.core.map.Lidar
 import com.trailmind.core.map.TilePolicy
 import com.trailmind.core.map.TileCoverage
 import java.util.concurrent.CopyOnWriteArraySet
@@ -210,21 +212,36 @@ class DownloadService : Service() {
             if (meta.premiumMaxZoom >= premiumFrom && !cancelled && message == null && premiumNote == null && premiumFailed == 0L) {
                 db.updatePack(packId, ContentValues().apply { put("premium_ms", earliestPremiumMs.takeIf { it != Long.MAX_VALUE } ?: 0L) })
             }
+            var lidarFailed = 0
             if (!cancelled && message == null) {
                 val routePoints = meta.routeId?.let { db.routeData(it)?.points?.map { point -> point.latLon() } }
                 val terrainResult = app.terrain.download(TerrainProvider.packTiles(routePoints, meta.bounds, meta.bufferM)) { cancelled }
                 Log.i("DownloadService", "saved ${terrainResult.first} terrain tiles; ${terrainResult.second} unavailable")
+                if (routePoints != null && app.prefs.packLidar) {
+                    val squares = Lidar.corridor(routePoints.map { OsGrid.project(it) }, LidarProvider.PACK_CORRIDOR_M)
+                    val packName = meta.name
+                    val lidarResult = app.lidar.download(squares, { cancelled }) { saved ->
+                        if (saved % 8 == 1) Notifications.manager(this).notify(Notifications.ID_DOWNLOAD,
+                            progressNotification("Saving 1 m LiDAR for $packName", saved.toLong(), squares.size.toLong()))
+                    }
+                    Log.i("DownloadService", "saved ${lidarResult.first} LiDAR squares; ${lidarResult.second} unavailable")
+                    lidarFailed = lidarResult.second
+                }
             }
             failed += premiumFailed
             if (message == null) message = premiumNote
             val status = when {
                 message != null && message != premiumNote && done == 0L -> PackStatus.FAILED
                 cancelled || (message != null && message != premiumNote) -> PackStatus.PAUSED
-                premiumNote != null || failed > 0 -> PackStatus.PARTIAL
+                premiumNote != null || failed > 0 || lidarFailed > 0 -> PackStatus.PARTIAL
                 else -> PackStatus.COMPLETE
             }
-            db.updatePackProgress(packId, done, failed, bytes, status,
-                message ?: if (failed > 0) "$failed tiles failed; tap Resume to retry." else null)
+            db.updatePackProgress(packId, done, failed, bytes, status, message ?: when {
+                failed > 0 && lidarFailed > 0 -> "$failed tiles and $lidarFailed LiDAR squares failed; tap Resume to retry."
+                failed > 0 -> "$failed tiles failed; tap Resume to retry."
+                lidarFailed > 0 -> "$lidarFailed LiDAR squares failed; tap Resume to retry."
+                else -> null
+            })
             meta = db.pack(packId)
             val detailUntil = earliestPremiumMs.takeIf { status == PackStatus.COMPLETE && it != Long.MAX_VALUE }?.plus(TilePolicy.PREMIUM_CACHE_MS)
             val summary = "${status.name.lowercase().replaceFirstChar { it.uppercase() }} – $done tiles" + when {

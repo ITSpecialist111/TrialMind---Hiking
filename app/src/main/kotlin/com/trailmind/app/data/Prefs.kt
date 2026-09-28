@@ -62,6 +62,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("show_steep_ground", false)
         set(v) = sp.edit().putBoolean("show_steep_ground", v).apply()
 
+    /** Hill shading and crags from 1 m LiDAR (England) on the map. */
+    var showLidar: Boolean
+        get() = sp.getBoolean("show_lidar", false)
+        set(v) = sp.edit().putBoolean("show_lidar", v).apply()
+
+    /** Route offline maps also save 1 m LiDAR near the route (England). */
+    var packLidar: Boolean
+        get() = sp.getBoolean("pack_lidar", true)
+        set(v) = sp.edit().putBoolean("pack_lidar", v).apply()
+
     /** GSI hill shading (Japan) over the base map. */
     var showGsiHillshade: Boolean
         get() = sp.getBoolean("show_gsi_hillshade", false)

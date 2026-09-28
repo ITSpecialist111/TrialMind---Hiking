@@ -29,6 +29,7 @@ import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
 import com.trailmind.core.map.BngTiles
+import com.trailmind.core.map.Lidar
 import com.trailmind.core.map.TileFootprint
 import com.trailmind.core.nav.DistanceMarks
 import kotlin.math.floor
@@ -88,6 +89,7 @@ class TileMapView(context: Context) : View(context) {
 
     private val provider = TrailMindApp.instance.tiles
     private val terrain = TrailMindApp.instance.terrain
+    private val lidar = TrailMindApp.instance.lidar
     private val density = resources.displayMetrics.density
     var listener: Listener? = null
 
@@ -133,10 +135,15 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; bngFootprintVertices.keys.retainAll(v.toSet()); invalidate() }
     var showSteepGround = false
         set(v) { if (field != v) { field = v; invalidate() } }
+    /** 1 m LiDAR hill shading and crags, in England, when zoomed in. */
+    var showLidar = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+    private var lidarDrawn = false
     /** GSI hill shading (Japan) over the base map, or null when off. */
     var hillshade: TileSource? = null
         set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
     private var hillshadeDrawn = false
+    private val lidarCorners = HashMap<Long, LatLon>()
     private val bngFootprintVertices = HashMap<TileFootprint, MutableMap<Long, LatLon>>()
 
     var position: LatLon? = null; private set
@@ -248,6 +255,8 @@ class TileMapView(context: Context) : View(context) {
     private val tileCorners = floatArrayOf(0f, 0f, 256f, 0f, 256f, 256f, 0f, 256f)
     // Half a pixel of overlap so neighbouring warped tiles leave no hairline seams.
     private val tileRect = RectF(-0.5f, -0.5f, 256.5f, 256.5f)
+    // LiDAR corners in mesh order (north-west, north-east, south-west, south-east).
+    private val lidarMesh = FloatArray(8)
     private var cornerX = FloatArray(0)
     private var cornerY = FloatArray(0)
     private val labelBoxes = ArrayList<RectF>()
@@ -404,6 +413,7 @@ class TileMapView(context: Context) : View(context) {
         super.onAttachedToWindow()
         provider.addListener(tileListener)
         terrain.addListener(terrainListener)
+        lidar.addListener(terrainListener)
     }
 
     override fun onDetachedFromWindow() {
@@ -411,6 +421,7 @@ class TileMapView(context: Context) : View(context) {
         pendingTaps.clear()
         provider.removeListener(tileListener)
         terrain.removeListener(terrainListener)
+        lidar.removeListener(terrainListener)
         super.onDetachedFromWindow()
     }
 
@@ -430,6 +441,7 @@ class TileMapView(context: Context) : View(context) {
         drawTiles(canvas, w, h)
         drawHillshade(canvas, w, h)
         drawOfflineAreas(canvas, w, h)
+        drawLidar(canvas, w, h)
         drawSteepGround(canvas, w, h)
         route?.let { drawLine(canvas, it, routeCasing, w, h); drawLine(canvas, it, routePaint, w, h) }
         track?.let { drawLine(canvas, it, trackPaint, w, h) }
@@ -694,6 +706,56 @@ class TileMapView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * 1 m LiDAR squares on the National Grid, each drawn through its exact corners. The shading is translucent, so squares
+     * must not overlap like opaque map tiles do: shared edges would be shaded twice and show as dark grid lines.
+     */
+    private fun drawLidar(canvas: Canvas, w: Float, h: Float) {
+        lidarDrawn = false
+        // Every frame, even with the layer off: squares asked for before it are no longer wanted, so none are downloaded.
+        lidar.beginFrame()
+        if (!showLidar || zoom < LIDAR_MIN_ZOOM) return
+        var minE = Double.MAX_VALUE
+        var maxE = -Double.MAX_VALUE
+        var minN = Double.MAX_VALUE
+        var maxN = -Double.MAX_VALUE
+        for (i in 0..2) for (j in 0..2) {
+            val g = OsGrid.project(screenToLatLon(w * i / 2, h * j / 2))
+            minE = minOf(minE, g.easting); maxE = maxOf(maxE, g.easting)
+            minN = minOf(minN, g.northing); maxN = maxOf(maxN, g.northing)
+        }
+        val squares = Lidar.box(minE, minN, maxE, maxN, LidarProvider.MAX_VISIBLE) ?: return
+        if (squares.isEmpty()) return
+        lidar.keepOverlays(squares.size)
+        if (lidarCorners.size > 20_000) lidarCorners.clear()
+        fun corner(col: Int, row: Int, index: Int) {
+            val key = (col.toLong() shl 32) or (row.toLong() and 0xFFFF_FFFFL)
+            val p = lidarCorners.getOrPut(key) { OsGrid.toWgs84(col * Lidar.SIZE.toDouble(), row * Lidar.SIZE.toDouble()) }
+            lidarMesh[index] = toScreenX(p.lon, w)
+            lidarMesh[index + 1] = toScreenY(p.lat, h)
+        }
+        val fetch = zoom >= LIDAR_FETCH_ZOOM
+        val m = lidarMesh
+        for (square in squares) {
+            corner(square.col, square.row + 1, 0)
+            corner(square.col + 1, square.row + 1, 2)
+            corner(square.col, square.row, 4)
+            corner(square.col + 1, square.row, 6)
+            val left = minOf(minOf(m[0], m[2]), minOf(m[4], m[6]))
+            val right = maxOf(maxOf(m[0], m[2]), maxOf(m[4], m[6]))
+            val top = minOf(minOf(m[1], m[3]), minOf(m[5], m[7]))
+            val bottom = maxOf(maxOf(m[1], m[3]), maxOf(m[5], m[7]))
+            if (!onScreen(left, top, right, bottom, w, h)) continue
+            val bitmap = lidar.overlay(square)
+            if (bitmap == null || lidar.isStale(square)) lidar.requestOverlay(square, fetch)
+            if (bitmap != null && bitmap !== LidarProvider.EMPTY) {
+                // Neighbours share the same corner values, so the triangles meet with no gap and no overlap.
+                canvas.drawBitmapMesh(bitmap, 1, 1, m, 0, null, 0, tilePaint)
+                lidarDrawn = true
+            }
+        }
+    }
+
     private fun drawBngOfflineArea(canvas: Canvas, w: Float, h: Float, footprint: TileFootprint) {
         val vertices = bngFootprintVertices.getOrPut(footprint) { HashMap() }
         fun corner(x: Int, y: Int): Pair<Float, Float> {
@@ -953,31 +1015,35 @@ class TileMapView(context: Context) : View(context) {
         val nice = if (imperial) NICE_FEET.map { it * 0.3048 } else NICE_METRES
         val metres = nice.lastOrNull { it / mpp <= maxPx } ?: nice.first()
         val px = (metres / mpp).toFloat()
-        val credit = listOfNotNull(
+        val credits = listOfNotNull(
             TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM },
+            LidarProvider.CREDIT.takeIf { lidarDrawn },
             "Hill shading: ${TileSources.GSI_ATTRIBUTION}".takeIf { hillshadeDrawn && source.attribution != TileSources.GSI_ATTRIBUTION },
-        ).joinToString(" · ").ifEmpty { null }
+        )
+        val creditSizes = FloatArray(credits.size)
         var creditWidth = 0f
-        var creditHeight = 0f
-        if (credit != null) {
+        credits.forEachIndexed { i, credit ->
             attrPaint.textSize = 10.5f * density
-            creditWidth = attrPaint.measureText(credit)
-            if (creditWidth > w - 2 * pad) {
-                attrPaint.textSize *= (w - 2 * pad) / creditWidth
-                creditWidth = attrPaint.measureText(credit)
+            var width = attrPaint.measureText(credit)
+            if (width > w - 2 * pad) {
+                attrPaint.textSize *= (w - 2 * pad) / width
+                width = attrPaint.measureText(credit)
             }
-            creditHeight = attrPaint.textSize
+            creditSizes[i] = attrPaint.textSize
+            creditWidth = maxOf(creditWidth, width)
         }
-        val attrHeight = th + if (credit != null) creditHeight + pad else 0f
+        val attrHeight = th + creditSizes.sum() + pad * credits.size
         canvas.drawRect(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h, attrBg)
         creditBox.set(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h)
         attrPaint.textSize = th
         canvas.drawText(attr, pad, h - pad - 1 * density, attrPaint)
-        if (credit != null) {
-            attrPaint.textSize = creditHeight
-            canvas.drawText(credit, pad, h - th - 2 * pad - 1 * density, attrPaint)
-            attrPaint.textSize = 10.5f * density
+        var baseline = h - th - 2 * pad - 1 * density
+        credits.forEachIndexed { i, credit ->
+            attrPaint.textSize = creditSizes[i]
+            canvas.drawText(credit, pad, baseline, attrPaint)
+            baseline -= creditSizes[i] + pad
         }
+        attrPaint.textSize = 10.5f * density
         val by = h - attrHeight - 2 * pad - 10 * density
         val bx = 12 * density
         canvas.drawRect(bx - 4 * density, by - 16 * density, bx + px + 4 * density, by + 5 * density, attrBg)
@@ -1023,6 +1089,10 @@ class TileMapView(context: Context) : View(context) {
     companion object {
         /** Below this the whole screen needs too many terrain tiles to shade steep ground. */
         const val STEEP_MIN_ZOOM = 13.0
+        /** LiDAR squares already on the phone show from here, when few enough fill the screen... */
+        const val LIDAR_MIN_ZOOM = 14.5
+        /** ...and missing ones are downloaded only this close, where a screen needs a few megabytes, not tens. */
+        const val LIDAR_FETCH_ZOOM = 16.5
         private val NICE_METRES = listOf(5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10_000.0, 20_000.0, 50_000.0, 100_000.0, 200_000.0, 500_000.0)
         private val NICE_FEET = listOf(20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2640.0, 5280.0, 10560.0, 26400.0, 52800.0, 105600.0, 264000.0, 528000.0)
     }
