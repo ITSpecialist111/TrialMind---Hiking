@@ -1,6 +1,6 @@
 # HikingApp101 – TrailMind
 
-TrailMind is a personal, offline-first Android hiking app for the UK. It shows **Ordnance Survey maps** (using your own free OS Data Hub key) and **OpenStreetMap** for browsing. It can store licensed maps offline, find waymarked routes or follow imported GPX routes, record a breadcrumb track with a foreground location service, and give you a compass, grid references, elevation profiles and time estimates. You can export hikes as GPX for Strava, and prepare briefings for an on-device Gemma model. The layout adapts to the Galaxy Z Fold cover screen and the inner screen.
+TrailMind is a personal, offline-first Android hiking app for the UK. It shows **Ordnance Survey maps** (using your own free OS Data Hub key) and **OpenStreetMap** for browsing. It can store licensed maps offline, find waymarked routes or follow imported GPX routes, record a breadcrumb track with a foreground location service, and give you a compass, grid references, elevation profiles and time estimates. In a **trip group**, everyone's phone shows the rest of the party on the map over long-range Bluetooth, with no signal needed, and raises the alarm if someone falls. You can export hikes as GPX for Strava, and prepare briefings for an on-device Gemma model. The layout adapts to the Galaxy Z Fold cover screen and the inner screen.
 
 > **Safety:** TrailMind supports navigation; it does not replace it. Carry a paper map and compass and know how to use them. GPS, batteries and phone signal all fail. In the UK, call **999/112** and ask for **Police → Mountain Rescue**.
 
@@ -158,7 +158,7 @@ The script calls aapt2, `kotlinc` 2.4.0 (downloaded from Maven Central with SHA-
 - `scripts/e2e.ps1` passes all 62 checks on the Fold and watch emulators with a Premium-plan OS key, including Premium tiles and their 24-hour purge, offline enlargement past the cached zooms, finding and adding a route online, and the watch link with the phone app in the background and the watch screen off.
 - Real devices: installed and run on a Galaxy Z Fold7 (SM-F966B, Android 16, One UI 8.5) and a Galaxy Watch4 40 mm (SM-R860, 396×396). Checked: GPS fix (±3–4 m), barometer pressure and barometric altitude, inner-screen layout, miles/feet, the watch compass dial, and the Bluetooth link between them, including with the phone app in the background and after the watch screen was off for 25 s.
 - Release build: `./gradlew :app:bundleRelease :wear:bundleRelease` gives R8-minified bundles with unused resources removed and no native code, phone version code 1 and watch 1000001. Signing with an upload key was checked with a throwaway key. `scripts/e2e.ps1 -Release` (AGP 9.4.1, R8 9.4.24) passes 49 checks and skips 3 (the two tile-cache checks that need `run-as`, and the watch) on the Fold emulator as a fresh install, with no crashes or ANRs. The OS logo shows on OS maps. Tapping the map credit or the OS logo opens the source's links (OS terms and the Errors and Omissions Tool; the OpenStreetMap licence and "Report a map issue"), while the map beside them still takes taps. Settings shows the installed version, the Privacy card and the licence links. On that fresh Android 16 install, exact alarms start off: the Safety page's *Allow alarms & reminders* opens the system setting, and the prompt clears once it's allowed.
-- **Not yet verified:** an outdoor walk on the real devices (recording, guidance, off-route, retrace), the GitHub Actions workflow (it runs once pushed), and a Google Play upload and review.
+- **Not yet verified:** an outdoor walk on the real devices (recording, guidance, off-route, retrace), a two-phone trip-group walk (LE Coded range and battery), the GitHub Actions workflow (it runs once pushed), and a Google Play upload and review.
 
 ## Roadmap
 
@@ -170,9 +170,51 @@ The script calls aapt2, `kotlinc` 2.4.0 (downloaded from Maven Central with SHA-
 4. **Detailed OS features:** evaluate the OS Features API and OS NGD data for selectable MasterMap-derived features, paths, access information and other useful trail context. Cache only the data and time periods permitted by the user's licence.
 5. **Safer offline preparation: done.** Route details check saved tiles and Explorer expiry along the route. The download card shows the tile count and estimated storage, refuses oversized areas, and Premium downloads state how many detail tiles they will fetch from your OS plan before starting.
 6. **Offline route planning:** add on-device walking-route calculation and rerouting over a licensed path network; keep the current imported-GPX and straight-line guidance as offline fallbacks.
+7. **Offline place search:** save OS Open Names (OpenData, Open Government Licence) with each offline area, so place and postcode search works with no signal.
+
+### Trip groups next
+
+1. **Two-phone field test (next).**
+   - Walk the Fold 7 and S24 Ultra apart on open ground and in woodland, and read the results from the diagnostics log.
+   - Measure the reliable range on LE Coded and on 1M, how far apart updates come after Android's 10-minute scan downgrade, and battery use per hour.
+   - Tune the radio profiles and the in-app range wording from the results.
+2. **Quick messages and meet points.**
+   - A third frame type for preset messages ("Waiting at the stile", "Turning back", "Go on without me") and a shared meet-point pin.
+   - Each fits in one 30-byte frame and is passed on like a position.
+3. **Keep the group together.**
+   - A leader or sweeper role, and an alert when the party spreads out beyond a set distance or someone hasn't been heard for a set time.
+   - Short trails behind each member's marker, showing which way they're going.
+4. **Group roll call over O2 Satellite.**
+   - When any member's phone is on satellite, one short text tells the emergency contact about the whole party, for example "4 of 5 OK; Sam last heard 12 min ago at SO 6399 0347".
+   - It would use the existing gateway election and group payload.
+5. **Find a member.**
+   - For the last few hundred metres, a "warmer, colder" search from the Bluetooth signal strength, with vibration, like an avalanche transceiver.
+   - On Android 16, the platform `android.ranging` API could add UWB (both test phones have it) or Bluetooth Channel Sounding for distance and direction over the last tens of metres. This still needs testing on the phones.
+6. **The group on the watch.** Members' markers on the watch's dial and map, so the party is visible at a glance.
+7. **Easier joining.** Show the invite as a QR code (a small encoder in `:core`, no library), or join by holding two phones together over Bluetooth and checking a short code.
+8. **Another radio and more phones.**
+   - A Wi-Fi Aware experiment, to compare range and battery with LE Coded.
+   - A connection-based (GATT) option, so older phones and a future iPhone app can join; iOS can't send the current advertisements.
+
+### Safety and wellbeing
+
+- **Triage after a fall.** The alarm asks three questions, one tap each: injury, can you move, bleeding. The one-byte answer goes in the SOS text and the group's frames, which already have a field for it.
+- **Fall detection on the watch.** The wrist sees a fall better than a pocket. The watch would detect it, and the phone would raise the same alarm and SOS.
+- **Turn-back advisor.** One line of advice from what TrailMind already knows: daylight left, pace, climb to go, the pressure trend, the forecast and battery.
+- **Battery forecast and expedition mode.**
+  - Predict the battery left at the finish from how fast it's draining and the time to go.
+  - When that's tight, lower the GPS and Bluetooth rates, dim the map and warn early.
+- **Spoken alerts.** Read out off-route, daylight, weather and group alerts through earbuds, with the platform's text-to-speech.
+- **Check in when signal returns.** If you turn it on, after a long spell without signal TrailMind texts your contact "I'm OK at …" as soon as the phone gets signal.
+
+### Signal and sky
+
+- **Signal memory.** Record where the phone had mobile signal or O2 Satellite along each hike, and show the nearest known signal on the map. A trip group could share it.
+- **Sky-view finder.** Satellite texts need open sky. Use the saved terrain heights to estimate how much of the sky is blocked where you stand, and point to a nearby spot with a clearer view.
 
 ### Other follow-ups
 
 - Real on-device LLM: bundle **LiteRT-LM / MediaPipe LLM Inference** with a user-supplied Gemma model file, instead of the Edge Gallery handoff.
 - Strava API upload via OAuth through **your own backend**, so the client secret stays off the phone.
-- Hinge and tabletop postures with AndroidX WindowManager. Add Robolectric and instrumented UI tests.
+- Flex mode on the Fold: the platform hinge-angle sensor (`Sensor.TYPE_HINGE_ANGLE`, Android 11) can drive a half-folded layout without AndroidX, with the map on the top half and the controls, compass and group on the bottom.
+- Add Robolectric and instrumented UI tests.
