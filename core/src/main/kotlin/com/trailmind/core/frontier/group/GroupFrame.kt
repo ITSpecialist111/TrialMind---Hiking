@@ -88,11 +88,16 @@ object GroupFrames {
     const val NAME_BYTES = 23
     const val TYPE_POSITION = 1
     const val TYPE_PROFILE = 2
+    const val TYPE_RANGE = 3
 
     const val CAP_CODED_TX = 1
     const val CAP_CODED_RX = 2
     const val CAP_RELAY = 4
     const val CAP_SATELLITE = 8
+    /** Can be found with UWB using provisioned STS ([UwbSession.CONFIG_PROVISIONED]). */
+    const val CAP_UWB = 16
+    /** Can be found with UWB using static STS ([UwbSession.CONFIG_STATIC]). */
+    const val CAP_UWB_STATIC = 32
 
     const val FLAG_RECORDING = 1
     const val FLAG_PAUSED = 2
@@ -124,6 +129,18 @@ object GroupFrames {
                 b.put(nameBytes(frame.name))
                 b.position(SIZE - 1)
                 b.put(((frame.hops shl 4) or frame.ttl).toByte())
+            }
+            is RangeFrame -> {
+                b.put(((TYPE_RANGE shl 4) or frame.kind).toByte())
+                b.putInt(frame.memberId)
+                b.putInt(frame.targetId)
+                b.putLong(frame.nonce)
+                b.putInt(frame.timeS.toInt())
+                b.put(frame.configId.toByte())
+                b.put(frame.channel.toByte())
+                b.put(frame.preambleIndex.toByte())
+                b.put(frame.updateRate.toByte())
+                b.put(frame.reason.toByte())
             }
         }
         return b.array()
@@ -159,6 +176,11 @@ object GroupFrames {
                     val end = name.indexOf(0).let { if (it < 0) NAME_BYTES else it }
                     ProfileFrame(memberId, colour, String(name, 0, end, Charsets.UTF_8), hops = route ushr 4, ttl = route and 0xF)
                 }
+                TYPE_RANGE -> RangeFrame(
+                    memberId = memberId, targetId = b.int, kind = head and 0xF, nonce = b.long, timeS = b.int.toLong() and 0xFFFF_FFFFL,
+                    configId = b.get().toInt() and 0xFF, channel = b.get().toInt() and 0xFF, preambleIndex = b.get().toInt() and 0xFF,
+                    updateRate = b.get().toInt() and 0xFF, reason = b.get().toInt() and 0xFF,
+                )
                 else -> null
             }
         }.getOrNull()

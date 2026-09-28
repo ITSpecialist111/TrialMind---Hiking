@@ -7,7 +7,9 @@ import android.os.SystemClock
 import android.view.View
 import com.trailmind.app.Async
 import com.trailmind.app.frontier.group.GroupRadio
+import com.trailmind.app.frontier.group.UwbRadio
 import com.trailmind.app.share.ExportProvider
+import com.trailmind.core.frontier.group.GroupFrames
 import com.trailmind.core.frontier.group.GroupKeys
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,7 +75,32 @@ class GroupDiagnosticsPage(host: MainActivity) : Page(host) {
         if (members.isNotEmpty()) block("Members heard", members.map { peer ->
             val direct = if (peer.lastDirectMs > 0) groupAge((System.currentTimeMillis() - peer.lastDirectMs) / 1_000) + " ago" else "never"
             "${sharing.nameOf(peer).take(14).padEnd(14)} ${peer.rssi ?: "?"} dBm ${if (peer.coded) "coded" else "1M   "} direct $direct" +
-                (peer.position?.let { " · hops ${it.hops}" } ?: "")
+                (peer.position?.let { " · hops ${it.hops}" } ?: "") +
+                (peer.position?.capabilities?.let { if (it and (GroupFrames.CAP_UWB or GroupFrames.CAP_UWB_STATIC) != 0) " · UWB" else "" } ?: "")
+        })
+
+        val finder = sharing.finder
+        val uwb = finder.uwb.capabilities
+        block("UWB", buildList {
+            add("State: ${uwb.state.name.lowercase()}" + if (UwbRadio.supported(host)) "" else " (needs Android 16 and UWB)")
+            if (uwb.configIds.isNotEmpty()) {
+                add("Configs ${uwb.configIds.joinToString()} · channels ${uwb.channels.joinToString()}")
+                add("Preambles ${uwb.preambles.joinToString()} · update rates ${uwb.updateRates.joinToString()}")
+                add("Distance ${yes(uwb.distance)} · azimuth ${yes(uwb.azimuth)} · elevation ${yes(uwb.elevation)}")
+                add("Background ranging ${yes(uwb.background)}" + (uwb.minIntervalMs?.let { " · fastest every $it ms" } ?: ""))
+            }
+            finder.state?.let { s ->
+                val who = members.firstOrNull { it.memberId == s.memberId }?.let(sharing::nameOf) ?: "%08x".format(s.memberId)
+                add("Session: ${s.role.name.lowercase()} $who · ${s.phase.name.lowercase()}" + (s.note?.let { " · $it" } ?: ""))
+                s.measurement?.let { m ->
+                    add("Last: ${m.distanceM?.let { "%.2f m".format(it) } ?: "?"} (confidence ${m.distanceConfidence})" +
+                        (m.azimuthDeg?.let { " · azimuth %.0f°".format(it) } ?: "") + (m.elevationDeg?.let { " · elevation %.0f°".format(it) } ?: ""))
+                }
+            }
+            finder.selfTest?.let { add("Test: $it") }
+        })
+        if (UwbRadio.supported(host)) addView(ui.button("Test UWB on this phone", null, Ui.B.TONAL) {
+            host.withRangingPermission { finder.selfTest() }
         })
 
         addView(ui.row {

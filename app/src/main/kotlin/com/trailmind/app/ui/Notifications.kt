@@ -17,6 +17,7 @@ object Notifications {
     const val CH_FALL = "fall_alarm"
     const val CH_SOS = "sos_status"
     const val CH_GROUP = "trip_group"
+    const val CH_GROUP_FIND = "trip_group_find"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -30,6 +31,7 @@ object Notifications {
     const val ID_RENEW = 10
     const val ID_FALL = 11
     const val ID_GROUP_HELP = 12
+    const val ID_GROUP_FIND = 13
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -66,6 +68,10 @@ object Notifications {
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
+        m.createNotificationChannel(NotificationChannel(CH_GROUP_FIND, "Being found by your group", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Shown while someone in your trip group finds this phone up close with UWB"
+            setShowBadge(false)
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)

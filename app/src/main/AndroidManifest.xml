@@ -26,10 +26,13 @@
          Scan results carry the group's positions, so this is deliberately not declared neverForLocation. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- Android 16 and later: UWB distance and direction to a trip-group member close by. -->
+    <uses-permission android:name="android.permission.RANGING" />
 
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.uwb" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -148,6 +151,12 @@
             android:name=".watch.WatchLinkService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|location" />
+
+        <!-- While a trip-group member is being found with UWB, on either phone, so the screen going off doesn't freeze it. -->
+        <service
+            android:name=".frontier.group.GroupFindService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <provider
             android:name=".share.ExportProvider"

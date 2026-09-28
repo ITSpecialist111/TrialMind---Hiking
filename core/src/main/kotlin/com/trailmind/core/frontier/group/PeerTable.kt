@@ -42,6 +42,11 @@ class PeerTable(private val ownMemberId: Int) {
             coded = if (direct) coded else old.coded,
         )
         return when (frame) {
+            // Only says the member's phone is in range; what it asks is for GroupFinder.
+            is RangeFrame -> {
+                peers[frame.memberId] = heard
+                Result.SAME
+            }
             is ProfileFrame -> {
                 val same = old.name == frame.name && old.colour == frame.colour
                 peers[frame.memberId] = heard.copy(name = frame.name, colour = frame.colour)

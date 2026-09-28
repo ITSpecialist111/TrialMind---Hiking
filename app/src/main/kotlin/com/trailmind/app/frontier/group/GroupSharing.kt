@@ -33,6 +33,7 @@ import com.trailmind.core.frontier.group.PositionFrame
 import com.trailmind.core.frontier.group.ProfileFrame
 import com.trailmind.core.frontier.group.RadioPlan
 import com.trailmind.core.frontier.group.RadioProfile
+import com.trailmind.core.frontier.group.RangeFrame
 import com.trailmind.core.frontier.group.RelayPolicy
 import com.trailmind.core.frontier.group.needsHelp
 import com.trailmind.core.geo.Geo
@@ -78,6 +79,19 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     private val relay = RelayPolicy()
     private var table = PeerTable(0)
 
+    /** Finding a member up close with UWB, over this radio. */
+    val finder = GroupFinder(app, handler, object : GroupFinder.Host {
+        override fun group() = group
+        override fun nowS() = this@GroupSharing.nowS()
+        override fun peer(memberId: Int) = table.peer(memberId)
+        override fun inRange(peer: PeerTable.Peer) = this@GroupSharing.inRange(peer)
+        override fun nameOf(peer: PeerTable.Peer) = this@GroupSharing.nameOf(peer)
+        override fun changed() {
+            reconcile()
+            publishSoon()
+        }
+    })
+
     @Volatile var group: TripGroup? = null; private set
     @Volatile var members: List<PeerTable.Peer> = emptyList(); private set
     @Volatile var plan: RadioPlan? = null; private set
@@ -113,6 +127,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     fun start() {
         handler.post {
             load()
+            finder.uwb.refresh()
             handler.post(tick)
         }
         app.location.addListener(onFix)
@@ -131,7 +146,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     }
 
     fun settingsChanged() {
-        handler.post { reconcile(); publish() }
+        handler.post { finder.uwb.refresh(); reconcile(); publish() }
     }
 
     /** "Find my group": advertise and listen flat out for half an hour. */
@@ -259,6 +274,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         opened++
         if (coded) codedHeardMs = nowMs
         for (frame in result.frames) {
+            if (frame is RangeFrame) finder.onFrame(frame)
             val outcome = table.accept(frame, nowMs, nowS, rssi, coded)
             if (outcome == PeerTable.Result.NEW || outcome == PeerTable.Result.NEWER || outcome == PeerTable.Result.SAME) relay.offer(frame, nowMs)
             if (outcome == PeerTable.Result.NEW || outcome == PeerTable.Result.NEWER) news(frame, nowMs)
@@ -318,6 +334,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     }
 
     private fun leaveNow() {
+        finder.leave()
         group = null
         app.db.deleteTripGroups()
         table = PeerTable(0)
@@ -342,6 +359,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
             return
         }
         if (boostUntilMs in 1..now) boostUntilMs = 0
+        finder.tick()
         val e = GroupKeys.epoch(nowS())
         val rotate = epoch != Long.MIN_VALUE && e != epoch
         epoch = e
@@ -355,27 +373,31 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         val battery = app.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
             ?.takeIf { it in 0..100 }
         val powerSave = app.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
-        val boost = System.currentTimeMillis() < boostUntilMs
-        val p = if (ready) RadioProfile.plan(uiVisible, recording, boost, battery, powerSave, app.prefs.groupRelayEnabled) else null
+        // Finding with UWB needs its asks and answers to cross quickly, and a phone must still hear (and send) Stop with its screen off.
+        val boost = System.currentTimeMillis() < boostUntilMs || finder.needsRadio
+        val p = if (ready) RadioProfile.plan(uiVisible || finder.needsRadio, recording, boost, battery, powerSave, app.prefs.groupRelayEnabled) else null
         plan = p
         if (p == null) {
             radio.update(null, null, false)
             return
         }
         capabilities = radio.capabilities()
-        radio.update(p, if (app.prefs.frontierHeartbeatsEnabled) payload(p) else null, app.prefs.groupLongRange)
+        // With sharing off, adverts carry only a UWB ask or answer, and the name that goes with it.
+        val share = app.prefs.frontierHeartbeatsEnabled
+        radio.update(p, if (share || finder.outgoing() != null) payload(p, share) else null, app.prefs.groupLongRange)
     }
 
-    private fun payload(plan: RadioPlan): ByteArray? {
+    private fun payload(plan: RadioPlan, share: Boolean): ByteArray? {
         val g = group ?: return null
         val max = capabilities?.maxFrames ?: 0
         if (max == 0) return null
         val nowMs = System.currentTimeMillis()
         val nowS = nowS()
         val frames = ArrayList<GroupFrame>(max)
-        ownFrame?.let { frames += it.copy(capabilities = capabilityBits(), flags = flags()) }
+        if (share) ownFrame?.let { frames += it.copy(capabilities = capabilityBits(), flags = flags()) }
+        finder.outgoing()?.let { if (frames.size < max) frames += it }
         val profileDue = frames.isEmpty() || nowMs - profileMs > PROFILE_MS
-        if (plan.relay) frames += relay.pick(nowMs, nowS, max - frames.size - (if (profileDue) 1 else 0), plan.relayHelpOnly)
+        if (share && plan.relay) frames += relay.pick(nowMs, nowS, max - frames.size - (if (profileDue) 1 else 0), plan.relayHelpOnly)
         if (frames.size < max) {
             frames += ProfileFrame(g.memberId, g.colour, g.displayName)
             profileMs = nowMs
@@ -431,7 +453,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         if (System.currentTimeMillis() - codedHeardMs < 10 * 60_000L) bits = bits or GroupFrames.CAP_CODED_RX
         if (app.prefs.groupRelayEnabled) bits = bits or GroupFrames.CAP_RELAY
         if (app.frontier.satelliteState.dataAvailable) bits = bits or GroupFrames.CAP_SATELLITE
-        return bits
+        return bits or finder.capabilityBits()
     }
 
     private fun flags(): Int = when (TrackingState.status) {
@@ -505,7 +527,8 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         val p = frame as? PositionFrame
         val distance = if (p != null && own != null) Geo.distanceM(own.lat, own.lon, p.lat, p.lon).toInt().toString() else ""
         val line = listOf(
-            nowMs, "%08x".format(frame.memberId), if (p != null) "position" else "profile", p?.sequence ?: "", frame.hops, frame.ttl,
+            nowMs, "%08x".format(frame.memberId), when (frame) { is PositionFrame -> "position"; is ProfileFrame -> "profile"; is RangeFrame -> "range" },
+            p?.sequence ?: "", frame.hops, frame.ttl,
             outcome.name.lowercase(), rssi, if (coded) "coded" else "1m", txPower ?: "", p?.lat ?: "", p?.lon ?: "", distance,
             own?.lat ?: "", own?.lon ?: "",
         ).joinToString(",")

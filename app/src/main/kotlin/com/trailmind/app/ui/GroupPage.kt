@@ -10,11 +10,14 @@ import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.trailmind.app.R
+import com.trailmind.app.frontier.group.GroupFinder
 import com.trailmind.app.frontier.group.GroupRadio
 import com.trailmind.app.frontier.group.GroupSharing
+import com.trailmind.app.frontier.group.UwbRadio
 import com.trailmind.app.location.TrackingService
 import com.trailmind.core.format.Units
 import com.trailmind.core.frontier.EmergencyStatus
@@ -215,11 +218,13 @@ class GroupPage(host: MainActivity) : Page(host) {
 
     override fun onShow() {
         app.group.addListener(onGroup)
+        app.group.finder.addListener(onGroup)
         refresh()
     }
 
     override fun onHide() {
         app.group.removeListener(onGroup)
+        app.group.finder.removeListener(onGroup)
     }
 
     override fun refresh() {
@@ -236,10 +241,12 @@ class GroupPage(host: MainActivity) : Page(host) {
             append(g?.id).append(g?.displayName).append(g?.expiresMs).append('|').append(s.statusLine())
             append('|').append((s.boostUntilMs - System.currentTimeMillis()).coerceAtLeast(0) / 60_000)
             append('|').append(app.prefs.frontierHeartbeatsEnabled).append(s.plan == null)
+            append('|').append(app.prefs.groupUwbFindable).append(s.finder.uwb.capabilities.state)
+            s.finder.state?.let { f -> append('|').append(f.role).append(f.memberId).append(f.phase).append(f.nonce) }
             s.ownFrame?.let { append('|').append(age(it.originTimeS)).append(it.status) }
             app.location.latest?.let { append('|').append(Math.round(it.lat * 5_000)).append(',').append(Math.round(it.lon * 5_000)) }
             s.members.forEach { p ->
-                append('|').append(p.memberId).append(p.name).append(p.colour).append(s.inRange(p)).append(p.coded)
+                append('|').append(p.memberId).append(p.name).append(p.colour).append(s.inRange(p)).append(p.coded).append(s.finder.canFind(p))
                 p.position?.let { pos ->
                     append(pos.status).append(pos.hops > 0).append(pos.batteryPercent / 5).append(age(pos.originTimeS))
                     append(Math.round(pos.lat * 5_000)).append(',').append(Math.round(pos.lon * 5_000))
@@ -257,6 +264,16 @@ class GroupPage(host: MainActivity) : Page(host) {
         }
         val prefs = app.prefs
         val now = System.currentTimeMillis()
+        sharing.finder.state?.takeIf { it.active }?.let { f ->
+            val who = sharing.members.firstOrNull { it.memberId == f.memberId }?.let(sharing::nameOf) ?: "A member"
+            addView(ui.card(color = p.primaryContainer, spacing = 8) {
+                addView(ui.text(if (f.role == GroupFinder.Role.FOUND) "$who is finding you with UWB" else "Finding $who with UWB", Ui.T.TITLE))
+                addView(ui.row {
+                    addView(ui.button("Open", null, Ui.B.TONAL) { host.push(GroupFindPage(host, f.memberId)) }, ui.lp(0, weight = 1f))
+                    addView(ui.button("Stop", null, Ui.B.TEXT) { sharing.finder.stop() }, ui.lp(0, weight = 1f))
+                })
+            })
+        }
         addView(ui.card(spacing = 8) {
             addView(ui.text(g.name, Ui.T.TITLE))
             val readiness = sharing.readiness()
@@ -299,8 +316,9 @@ class GroupPage(host: MainActivity) : Page(host) {
             )
             if (peers.isEmpty()) addView(ui.text("No one heard yet. Others appear when their phone is in Bluetooth range with TrailMind open or a hike recording.", Ui.T.CAPTION))
             peers.forEach { peer ->
+                val find = if (sharing.finder.canFind(peer)) ui.button("Find", null, Ui.B.TONAL) { startFind(peer) } else null
                 addView(memberRow(groupInitials(sharing.nameOf(peer)), sharing.colourOf(peer), sharing.nameOf(peer), subtitle(peer),
-                    peer.position?.status?.needsHelp == true) { showGroupMember(host, peer) })
+                    peer.position?.status?.needsHelp == true, find) { showGroupMember(host, peer) })
             }
         })
 
@@ -333,6 +351,24 @@ class GroupPage(host: MainActivity) : Page(host) {
             addView(ui.switch("Show the group on the map", prefs.groupShowOnMap) { prefs.groupShowOnMap = it; sharing.settingsChanged() })
             addView(ui.switch("Long range when the phone supports it", prefs.groupLongRange) { prefs.groupLongRange = it; sharing.settingsChanged() })
             addView(ui.switch("Alert me if someone needs help", prefs.groupHelpAlerts) { prefs.groupHelpAlerts = it })
+            if (UwbRadio.supported(host)) {
+                addView(ui.switch("Let the group find me up close with UWB", prefs.groupUwbFindable) {
+                    prefs.groupUwbFindable = it
+                    if (it) host.withRangingPermission { sharing.settingsChanged() } else sharing.settingsChanged()
+                })
+                val uwb = sharing.finder.uwb.capabilities.state
+                addView(ui.text(when (uwb) {
+                    UwbRadio.State.READY -> "UWB is on. Members close by with UWB show a Find button for distance and direction."
+                    UwbRadio.State.NO_PERMISSION -> "UWB needs the Nearby devices permission."
+                    UwbRadio.State.OFF -> "UWB is off. Turn on Ultra-wideband (UWB) in Settings to find members up close."
+                    UwbRadio.State.BLOCKED -> "UWB isn't available now, for example in flight mode."
+                    UwbRadio.State.CHECKING -> "Checking this phone's UWB…"
+                    UwbRadio.State.UNSUPPORTED -> "This phone's UWB can't be used by apps."
+                }, Ui.T.CAPTION))
+                if (uwb == UwbRadio.State.NO_PERMISSION) addView(ui.button("Allow UWB", null, Ui.B.TONAL) {
+                    host.withRangingPermission { sharing.settingsChanged() }
+                })
+            }
             addView(ui.text("Passing on positions lets the group reach further than one phone: each phone between two hikers adds a hop. " +
                 "Range depends on phones, pockets and ground, from tens of metres in woods to more in the open. Carry the phone high on your body.", Ui.T.CAPTION))
         })
@@ -352,6 +388,13 @@ class GroupPage(host: MainActivity) : Page(host) {
 
     private fun renameMe() {
         askDisplayName(host) { name -> app.group.rename(name) }
+    }
+
+    private fun startFind(peer: PeerTable.Peer) {
+        host.withRangingPermission {
+            app.group.finder.find(peer.memberId)
+            host.push(GroupFindPage(host, peer.memberId))
+        }
     }
 
     private fun ownSubtitle(): String {
@@ -385,7 +428,7 @@ class GroupPage(host: MainActivity) : Page(host) {
         return parts.joinToString(" · ")
     }
 
-    private fun memberRow(initials: String, colour: Int, title: String, subtitle: String, help: Boolean, onClick: () -> Unit): View =
+    private fun memberRow(initials: String, colour: Int, title: String, subtitle: String, help: Boolean, action: View? = null, onClick: () -> Unit): View =
         ui.row(spacing = 12) {
             setPadding(0, ui.dp(6), 0, ui.dp(6))
             isClickable = true
@@ -403,6 +446,7 @@ class GroupPage(host: MainActivity) : Page(host) {
                 addView(ui.text(title, Ui.T.BODY))
                 addView(ui.text(subtitle, Ui.T.CAPTION, if (help) p.danger else p.muted))
             }, ui.lp(0, weight = 1f))
+            action?.let { addView(it, ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT)) }
         }
 }
 

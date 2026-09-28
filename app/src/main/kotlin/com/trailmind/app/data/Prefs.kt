@@ -218,6 +218,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("group_help_alerts", true)
         set(v) = sp.edit().putBoolean("group_help_alerts", v).apply()
 
+    /** Answer when someone in the trip group asks to find this phone up close with UWB. */
+    var groupUwbFindable: Boolean
+        get() = sp.getBoolean("group_uwb_findable", true)
+        set(v) = sp.edit().putBoolean("group_uwb_findable", v).apply()
+
     /** The user accepted the explanation of what trip groups share, shown before Android's Nearby devices prompt. */
     var groupDisclosureAccepted: Boolean
         get() = sp.getBoolean("group_disclosure_v1", false)

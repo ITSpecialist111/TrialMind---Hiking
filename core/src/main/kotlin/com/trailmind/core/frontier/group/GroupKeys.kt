@@ -36,6 +36,7 @@ class GroupKeys(code: GroupCode) {
     /** Identifies the group in this phone's database. Never broadcast. */
     val groupId: String = Hkdf.expand(secret, "id".toByteArray(), 8).joinToString("") { "%02x".format(it) }
     internal val encKey: ByteArray = Hkdf.expand(secret, "enc".toByteArray(), 16)
+    internal val uwbKey: ByteArray = Hkdf.expand(secret, "uwb".toByteArray(), 32)
     private val tagKey: ByteArray = Hkdf.expand(secret, "tag".toByteArray(), 32)
     private val tags = HashMap<Long, ByteArray>()
 

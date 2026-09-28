@@ -31,6 +31,7 @@ import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackStatus
 import com.trailmind.app.frontier.group.GroupRadio
+import com.trailmind.app.frontier.group.UwbRadio
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.ForegroundLocation
 import com.trailmind.app.map.MbTiles
@@ -96,6 +97,7 @@ class MainActivity : Activity() {
     private var pendingPermission: (() -> Unit)? = null
     private var pendingBluetooth: (() -> Unit)? = null
     private var pendingNearby: (() -> Unit)? = null
+    private var pendingRanging: (() -> Unit)? = null
     private var pendingSms: (() -> Unit)? = null
     private var pendingExport: String? = null
     private var backCallback: Any? = null
@@ -496,14 +498,25 @@ class MainActivity : Activity() {
     /** Runs [then] once trip groups may use Bluetooth: precise location, then "Nearby devices" (scan, advertise, connect). */
     fun withNearbyPermission(then: () -> Unit) {
         withLocationPermission {
-            if (GroupRadio.hasPermissions(this)) {
+            if (GroupRadio.hasPermissions(this) && (!UwbRadio.supported(this) || UwbRadio.hasPermission(this))) {
                 then()
             } else {
                 pendingNearby = then
-                requestPermissions(GroupRadio.permissions(), RC_NEARBY)
+                // Ranging (UWB) is in the same Nearby devices group, so Android asks once for both.
+                requestPermissions(GroupRadio.permissions() + rangingPermission(), RC_NEARBY)
             }
         }
     }
+
+    /** Runs [then] once TrailMind may use UWB (Android 16's Ranging permission, part of Nearby devices). */
+    fun withRangingPermission(then: () -> Unit) {
+        if (!UwbRadio.supported(this) || UwbRadio.hasPermission(this)) { then(); return }
+        pendingRanging = then
+        requestPermissions(rangingPermission(), RC_RANGING)
+    }
+
+    @SuppressLint("InlinedApi") // Only asked for on Android 16 and later, where UwbRadio.supported() is true.
+    private fun rangingPermission(): Array<String> = if (UwbRadio.supported(this)) arrayOf(Manifest.permission.RANGING) else emptyArray()
 
     /** Runs [then] once TrailMind may send texts itself (only used for the SOS text the user turned on). */
     fun withSmsPermission(then: () -> Unit) {
@@ -534,6 +547,15 @@ class MainActivity : Activity() {
                 .setNegativeButton("Not now", null).show()
             app.group.settingsChanged()
             app.watch.refresh()
+            stack.lastOrNull()?.refresh()
+            return
+        }
+        if (requestCode == RC_RANGING) {
+            val then = pendingRanging
+            pendingRanging = null
+            app.group.settingsChanged()
+            if (UwbRadio.hasPermission(this)) then?.invoke()
+            else toast("TrailMind needs the Nearby devices permission to use UWB.")
             stack.lastOrNull()?.refresh()
             return
         }
@@ -653,6 +675,12 @@ class MainActivity : Activity() {
             intent.action = null
             showTab(Tab.MAP)
             map.focusMember(intent.getIntExtra(EXTRA_MEMBER, 0))
+            return
+        }
+        if (intent.action == ACTION_GROUP_FIND) {
+            intent.action = null
+            showTab(Tab.SAFETY)
+            push(GroupFindPage(this, intent.getIntExtra(EXTRA_MEMBER, 0)))
             return
         }
         if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == GROUP_LINK_SCHEME) {
@@ -786,6 +814,7 @@ class MainActivity : Activity() {
         const val ACTION_SAFETY = "com.trailmind.app.OPEN_SAFETY"
         const val ACTION_OFFLINE = "com.trailmind.app.OPEN_OFFLINE"
         const val ACTION_GROUP_MEMBER = "com.trailmind.app.GROUP_MEMBER"
+        const val ACTION_GROUP_FIND = "com.trailmind.app.GROUP_FIND"
         const val EXTRA_MEMBER = "member"
         const val GROUP_LINK_SCHEME = "trailmind"
         const val WIDE_DP = 600
@@ -795,6 +824,7 @@ class MainActivity : Activity() {
         private const val RC_BLUETOOTH = 12
         private const val RC_SMS = 13
         private const val RC_NEARBY = 14
+        private const val RC_RANGING = 15
         private const val RC_GPX = 20
         private const val RC_MBTILES = 21
         private const val RC_EXPORT = 22
