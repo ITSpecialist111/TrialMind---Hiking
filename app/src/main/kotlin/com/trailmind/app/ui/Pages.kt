@@ -341,6 +341,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 full -> "No stretch of the line is 35° or steeper over 10 m, and no crag is within 10 m of it."
                 report.coveredM > 0 -> "Where LiDAR covers the route, no stretch of the line is 35° or steeper over 10 m, and no crag " +
                     "is within 10 m of it. The rest of the route wasn't checked."
+                report.lengthM < 1 -> "The route is too short to check."
                 else -> "LiDAR has no heights along this route, so it couldn't be checked. The Environment Agency's survey covers " +
                     "most of England, but not Wales or Scotland."
             }, Ui.T.BODY))

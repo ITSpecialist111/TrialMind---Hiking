@@ -138,9 +138,10 @@ class LidarProvider(private val app: TrailMindApp) {
         wantedAt[square] = now
         if ((retryAt[square] ?: 0L) > now || !pending.add(square)) return
         workers.execute {
+            // Cleared before shading starts, so a neighbour arriving while it runs marks the result stale again.
+            val wasStale = stale.remove(square)
+            var built = false
             try {
-                // Cleared before shading starts, so a neighbour arriving while it runs marks the result stale again.
-                stale.remove(square)
                 // Squares the map has moved away from since they were asked for are not worth a download.
                 val network = allowNetwork && (wantedAt[square] ?: 0L) >= frameMs
                 val bitmap = build(square, network)
@@ -148,6 +149,7 @@ class LidarProvider(private val app: TrailMindApp) {
                     if (network) retryAt[square] = System.currentTimeMillis() + RETRY_MS
                 } else {
                     overlays.put(square, bitmap)
+                    built = true
                     retryAt.remove(square)
                     Async.main.post { listeners.forEach { it() } }
                 }
@@ -155,6 +157,8 @@ class LidarProvider(private val app: TrailMindApp) {
                 Log.w("LidarProvider", "could not shade $square", t)
                 retryAt[square] = System.currentTimeMillis() + RETRY_MS
             } finally {
+                // The old shading on screen still lacks its neighbour's edge until a rebuild succeeds.
+                if (wasStale && !built) stale += square
                 wantedAt.remove(square)
                 pending.remove(square)
             }

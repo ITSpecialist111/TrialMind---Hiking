@@ -236,11 +236,13 @@ class DownloadService : Service() {
                 premiumNote != null || failed > 0 || lidarFailed > 0 -> PackStatus.PARTIAL
                 else -> PackStatus.COMPLETE
             }
-            db.updatePackProgress(packId, done, failed, bytes, status, message ?: when {
+            val lidarNote = if (lidarFailed > 0) "$lidarFailed LiDAR squares failed; tap Resume to retry." else null
+            db.updatePackProgress(packId, done, failed, bytes, status, when {
+                message != null && message == premiumNote && lidarNote != null -> "$message $lidarNote"
+                message != null -> message
                 failed > 0 && lidarFailed > 0 -> "$failed tiles and $lidarFailed LiDAR squares failed; tap Resume to retry."
                 failed > 0 -> "$failed tiles failed; tap Resume to retry."
-                lidarFailed > 0 -> "$lidarFailed LiDAR squares failed; tap Resume to retry."
-                else -> null
+                else -> lidarNote
             })
             meta = db.pack(packId)
             val detailUntil = earliestPremiumMs.takeIf { status == PackStatus.COMPLETE && it != Long.MAX_VALUE }?.plus(TilePolicy.PREMIUM_CACHE_MS)
