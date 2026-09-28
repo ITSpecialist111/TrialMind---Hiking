@@ -28,6 +28,8 @@ data class TileSource(
     /** First zoom of charged Premium data; the provider's terms allow caching those tiles for 24 hours only. */
     val premiumFromZoom: Int? = null,
     val grid: TileGrid = TileGrid.WEB_MERCATOR,
+    /** Ordnance Survey maps, which OS's API branding rules require to show the OS logo on the map. */
+    val showsOsLogo: Boolean = false,
 ) {
     val isOnline: Boolean get() = template != null
 
@@ -46,6 +48,12 @@ object TileSources {
     const val OS_LEISURE = "os_leisure"
     const val CUSTOM = "custom"
 
+    // Where the map credits lead: OSM's licence and error reporting, OS's terms and its Errors and Omissions Tool.
+    const val OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright"
+    const val OSM_FIX_THE_MAP_URL = "https://www.openstreetmap.org/fixthemap"
+    const val OS_TERMS_URL = "https://www.ordnancesurvey.co.uk/legal"
+    const val OS_ERRORS_URL = "https://osdatahub.os.uk/apps/errors-and-omissions"
+
     private fun year() = Calendar.getInstance().get(Calendar.YEAR)
 
     private fun osSource(id: String, layer: String, label: String) = TileSource(
@@ -59,14 +67,16 @@ object TileSources {
         offlineDownloadAllowed = true,
         downloadMaxZoom = 16,
         premiumFromZoom = 17,
+        showsOsLogo = true,
         note = "Needs your OS Data Hub API key. Overview maps (zooms 7–16) stay in your pack. " +
             "Closer detail uses your plan's allowance and is kept for 24 hours. " +
-            "For public rights of way, use OS Maps – Explorer & Landranger.",
+            "For public rights of way, use OS Maps – Explorer® & Landranger®.",
     )
 
     private fun osLeisure() = TileSource(
         id = OS_LEISURE,
-        name = "OS Maps – Explorer & Landranger",
+        // OS's API terms ask for its trade marks to carry ® (OS Explorer and OS Landranger are registered).
+        name = "OS Maps – Explorer® & Landranger®",
         template = "https://api.os.uk/maps/raster/v1/zxy/Leisure_27700/{z}/{x}/{y}.png?key={key}",
         attribution = "Contains OS data © Crown copyright and database rights ${year()}",
         minZoom = 0,
@@ -76,6 +86,7 @@ object TileSources {
         downloadMaxZoom = 5,
         premiumFromZoom = 6,
         grid = TileGrid.BRITISH_NATIONAL_GRID,
+        showsOsLogo = true,
         note = "OS's paper-map style, with public rights of way (footpaths, bridleways and byways) and open access " +
             "land: 1:50,000 Landranger zoomed out, 1:25,000 Explorer zoomed in. Great Britain only. Needs your OS Data " +
             "Hub key. Overview maps (zooms 0–5) stay in your pack. Landranger and Explorer detail at zooms 6–9 " +

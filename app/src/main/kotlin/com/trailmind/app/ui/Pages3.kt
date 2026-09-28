@@ -471,7 +471,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
                 "The briefing below uses the hour you'd reach the high point."
         }, Ui.T.CAPTION))
         if (hp != null && !fetching) addView(ui.button(if (f == null) "Get forecast" else "Update forecast", R.drawable.ic_download, Ui.B.TONAL) { fetchForecast(id, hp) })
-        addView(ui.text(OpenMeteo.ATTRIBUTION, Ui.T.CAPTION))
+        addView(ui.link(OpenMeteo.ATTRIBUTION) { host.openUrl(OpenMeteo.URL) })
     }
 
     private fun fetchForecast(id: Long, hp: HighPoint) {
@@ -717,6 +717,10 @@ class SafetyPage(host: MainActivity) : Page(host) {
                     runCatching { host.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${host.packageName}"))) }
                 })
             }
+            if (CheckIn.delayedAlarm(host)) {
+                addView(ui.banner("Allow alarms & reminders so the fall alarm acts on time when its countdown ends."))
+                addView(ui.button("Allow alarms & reminders", null, Ui.B.TEXT) { requestExactAlarms(host) })
+            }
         }
         if (FallAlert.stage(host) != FallAlert.Stage.NONE) addView(ui.button("Open the fall alarm", R.drawable.ic_warning, Ui.B.DANGER) {
             host.startActivity(Intent(host, FallAlertActivity::class.java))
@@ -900,11 +904,31 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
         addView(ui.card(spacing = 6) {
             addView(ui.text("About", Ui.T.TITLE))
-            addView(ui.text("TrailMind 0.1 · personal offline-first hiking app.\n" +
+            addView(ui.text("TrailMind ${app.versionName} · personal offline-first hiking app.\n" +
                 "Map data: © OpenStreetMap contributors (ODbL); Contains OS data © Crown copyright and database rights (OS OpenData under the Open Government Licence; OS Premium under your OS Data Hub plan).\n" +
+                "Routes found with Waymarked Trails; their heights: ASTER GDEM is a product of METI and NASA.\n" +
+                "Weather data by Open-Meteo.com (CC BY 4.0).\n" +
                 "Icons: Material Symbols (Apache 2.0).\n" +
                 "Estimates use Naismith's rule with Langmuir corrections and Tobler's hiking function; they exclude breaks.", Ui.T.CAPTION))
+            addView(ui.row {
+                addView(ui.button("OS terms", null, Ui.B.TEXT) { host.openUrl(TileSources.OS_TERMS_URL) }, ui.lp(0, weight = 1f))
+                addView(ui.button("Report an OS map error", null, Ui.B.TEXT) { host.openUrl(TileSources.OS_ERRORS_URL) }, ui.lp(0, weight = 1f))
+            })
+            addView(ui.row {
+                addView(ui.button("OpenStreetMap copyright", null, Ui.B.TEXT) { host.openUrl(TileSources.OSM_COPYRIGHT_URL) }, ui.lp(0, weight = 1f))
+                addView(ui.button("Report an OpenStreetMap issue", null, Ui.B.TEXT) { host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }, ui.lp(0, weight = 1f))
+            })
+            addView(ui.button("Weather data licence (CC BY 4.0)", null, Ui.B.TEXT) { host.openUrl(OpenMeteo.LICENCE_URL) })
             addView(ui.button("Show safety introduction", null, Ui.B.TEXT) { host.push(OnboardingPage(host).also { app.prefs.onboardingAccepted = true }) })
+        })
+
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("Privacy", Ui.T.TITLE))
+            addView(ui.text("No accounts, ads or analytics, and no backups: your routes, hikes, emergency contact and OS key stay on this phone. " +
+                "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
+                "Ordnance Survey, OpenStreetMap, Mapzen terrain tiles on Amazon Web Services, Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
+                "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
+                "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
         })
     }
 

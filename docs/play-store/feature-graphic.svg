@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <rect width="1024" height="500" fill="#1F5B45"/>
+  <g transform="translate(-98,-83) scale(6)">
+  <path fill="#F08A24" d="M70,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0"/>
+  <path fill="#FFFFFF" d="M28,74L46,44L55,58L62,49L80,74Z"/>
+  <path fill="#CFE8DC" d="M46,44L51,52.3L47.5,50L44,53.5L41.5,51.5Z"/>
+  <path fill="none" stroke="#F08A24" stroke-width="2.5" stroke-linecap="round" d="M34,80C44,76 50,82 60,78S74,76 78,80"/>  </g>
+  <text x="440" y="228" font-family="Segoe UI" font-weight="700" font-size="96" fill="#FFFFFF">TrailMind</text>
+  <text x="444" y="300" font-family="Segoe UI" font-size="36" fill="#CFE8DC">Hiking maps, routes and safety</text>
+  <text x="444" y="348" font-family="Segoe UI" font-size="36" fill="#CFE8DC">for Great Britain</text>
+</svg>

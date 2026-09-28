@@ -1,5 +1,6 @@
 package com.trailmind.app.location
 
+import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationManager
@@ -122,7 +123,7 @@ object CheckIn {
             .setSmallIcon(R.drawable.ic_stat_hike)
             .setContentTitle(if (!overdue) "Check in: are you OK?" else "Overdue check-in: please respond")
             .setContentText(body).setStyle(Notification.BigTextStyle().bigText(body))
-            .setContentIntent(open).setCategory(Notification.CATEGORY_ALARM).setPriority(Notification.PRIORITY_HIGH)
+            .setContentIntent(open).setCategory(Notification.CATEGORY_ALARM)
             .addAction(Notification.Action.Builder(null, "I'm OK, +30 min", ok).build())
             .addAction(Notification.Action.Builder(null, "I'm back", back).build())
             .apply { if (phone.isNotBlank()) addAction(Notification.Action.Builder(null, "Text ${prefs.emergencyContactName.ifBlank { "contact" }}", sms).build()) }
@@ -130,6 +131,8 @@ object CheckIn {
         runCatching { Notifications.manager(context).notify(Notifications.ID_CHECK_IN, notification) }
     }
 
+    // Location is read only after LocationHub.hasPermission, and runCatching covers a permission revoked meanwhile.
+    @SuppressLint("MissingPermission")
     fun smsText(context: Context): String {
         val app = context.applicationContext as TrailMindApp
         val recent = app.location.latest?.takeIf { System.currentTimeMillis() - it.location.time in 0..15 * 60_000L }

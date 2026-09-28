@@ -1,6 +1,7 @@
 package com.trailmind.app
 
 import android.app.Application
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.UserManager
 import com.trailmind.app.data.Db
@@ -21,6 +22,13 @@ import com.trailmind.app.watch.WatchLink
 
 class TrailMindApp : Application() {
     val planner by lazy { RoutePlanner(db, tiles::networkAllowed) }
+    /** The installed version, from trailmind.versionName in gradle.properties. */
+    val versionName: String by lazy {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33) packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+            else @Suppress("DEPRECATION") packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull() ?: "unknown"
+    }
     lateinit var db: Db
         private set
     lateinit var prefs: Prefs

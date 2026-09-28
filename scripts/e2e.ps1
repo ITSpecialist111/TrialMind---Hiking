@@ -14,16 +14,24 @@
     OS maps are tested when an OS Data Hub key is available: -OsKey, else TRAILMIND_OS_KEY, else
     trailmind.osApiKey in local.properties (which git ignores). The key is typed into the app's Settings.
 
+    -Release tests the minified release build instead (signed with the upload key if one is set, else the debug
+    key), installed fresh as from Google Play. Release builds can't be read with run-as, so OS tiles are checked on
+    screenshots and the two checks that read the tile cache are skipped.
+
 .EXAMPLE
     ./scripts/e2e.ps1
 
 .EXAMPLE
     ./scripts/e2e.ps1 -Phone emulator-5554 -Watch emulator-5556 -SkipBuild
+
+.EXAMPLE
+    ./scripts/e2e.ps1 -Release
 #>
 param(
     [string]$Phone = 'emulator-5554',
     [string]$Watch = '',
     [switch]$SkipBuild,
+    [switch]$Release,
     [string]$Out = '',
     [string]$OsKey = ''
 )
@@ -187,8 +195,9 @@ function Shot([string]$s, [string]$name) {
     Adb $s pull /sdcard/tm-shot.png (Join-Path $Out "$name.png") | Out-Null
 }
 
-# Percentage of a 30 x 30 grid over the map area that is not the map's empty background, rgb(238, 241, 234). The map
-# fills the right of the screen in both layouts; the band sampled avoids the route card, the buttons and the scale bar.
+# Percentage of a 30 x 30 grid over the map area that is neither the map's empty background, rgb(238, 241, 234), nor
+# black (a screen that is off). The map fills the right of the screen in both layouts; the band sampled avoids the
+# route card, the buttons and the scale bar.
 function Get-MapCoverage([string]$png) {
     if (-not (Test-Path $png)) { return 0 }
     Add-Type -AssemblyName System.Drawing
@@ -198,7 +207,9 @@ function Get-MapCoverage([string]$png) {
         for ($i = 0; $i -lt 30; $i++) {
             for ($j = 0; $j -lt 30; $j++) {
                 $c = $img.GetPixel([int]($img.Width * (0.58 + 0.3 * $i / 29)), [int]($img.Height * (0.36 + 0.38 * $j / 29)))
-                if (-not ($c.R -eq 238 -and $c.G -eq 241 -and $c.B -eq 234)) { $drawn++ }
+                $background = $c.R -eq 238 -and $c.G -eq 241 -and $c.B -eq 234
+                $black = $c.R -lt 8 -and $c.G -lt 8 -and $c.B -lt 8
+                if (-not $background -and -not $black) { $drawn++ }
             }
         }
         [int](100 * $drawn / 900)
@@ -231,6 +242,12 @@ function Get-AppNotifications([string]$s) {
 
 function Get-TrackingNotification {
     Get-AppNotifications $Phone | Where-Object { $_.Title -in 'Recording hike', 'Hike paused' } | Select-Object -First 1
+}
+
+# Start hike asks for a check-in time when none is set; these runs don't set one, so close that picker.
+function StartHike {
+    Tap $Phone '^Start hike$' | Out-Null
+    if (Wait-Ui $Phone '^Set check-in for ' 5) { Adb $Phone shell input keyevent KEYCODE_BACK | Out-Null }
 }
 
 function ToMetres([string]$text) {
@@ -349,20 +366,24 @@ try {
     if ($Phone -notmatch '^emulator-') { throw "$Phone is not an emulator. GPS is simulated with 'adb emu geo fix', which needs one." }
     if ($Watch) { Adb $Watch emu sensor set magnetic-field $EarthField | Out-Null }
 
+    $variant = if ($Release) { 'Release' } else { 'Debug' }
     if (-not $SkipBuild) {
         $gradlew = Join-Path $Root $(if ($env:OS -eq 'Windows_NT') { 'gradlew.bat' } else { 'gradlew' })
-        $tasks = @(':app:assembleDebug')
-        if ($Watch) { $tasks += ':wear:assembleDebug' }
+        $tasks = @(":app:assemble$variant")
+        if ($Watch) { $tasks += ":wear:assemble$variant" }
         Write-Host "Building $($tasks -join ' ')"
         & $gradlew -p $Root @tasks --console=plain -q
         if ($LASTEXITCODE -ne 0) { throw 'Gradle build failed.' }
     }
-    $phoneApk = Join-Path $Root 'app/build/outputs/apk/debug/app-debug.apk'
-    $watchApk = Join-Path $Root 'wear/build/outputs/apk/debug/wear-debug.apk'
+    $v = $variant.ToLowerInvariant()
+    $phoneApk = Join-Path $Root "app/build/outputs/apk/$v/app-$v.apk"
+    $watchApk = Join-Path $Root "wear/build/outputs/apk/$v/wear-$v.apk"
 
     Adb $Phone shell input keyevent KEYCODE_WAKEUP | Out-Null
     Adb $Phone shell wm dismiss-keyguard | Out-Null
     $foldable = ((Adb $Phone emu unfold) -join ' ') -match '\bOK\b'
+    # A release build may be signed with another key, and a fresh install matches a Play user's first run.
+    if ($Release) { Adb $Phone uninstall $Pkg | Out-Null }
     $r = (Adb $Phone install -r $phoneApk) -join ' '
     Check 'Install the phone app' ($r -match 'Success') $(if ($r -notmatch 'Success') { $r })
     Adb $Phone shell am force-stop $Pkg | Out-Null
@@ -409,12 +430,14 @@ try {
     Shot $Phone '02-route'
 
     Section 'Route guidance'
+    # The route page's Ready to go? checks come first, so the Follow button can be below the fold.
+    ScrollTo $Phone '^Follow route$' | Out-Null
     Tap $Phone '^Follow route$' | Out-Null
     OpenTab 'Map' | Out-Null
     Check 'Guidance to the first waypoint' (Wait-Ui $Phone '^Next: Hole-in-the-Wall in ' 10)
 
     Section 'Recording'
-    Tap $Phone '^Start hike$' | Out-Null
+    StartHike
     Check 'Pause and Finish controls while recording' ((Wait-Ui $Phone '^Pause$' 10) -and (Wait-Ui $Phone '^Finish$' 2))
     $n = Get-TrackingNotification
     Check 'Tracking notification with Pause and Finish actions' ($n -and $n.Title -eq 'Recording hike' -and $n.Actions -contains 'Pause' -and $n.Actions -contains 'Finish')
@@ -466,7 +489,8 @@ try {
     Adb $Phone shell touch /sdcard/Download/.tm-marker | Out-Null
     Start-Sleep -Seconds 1
     Tap $Phone '^Save GPX$' | Out-Null
-    if (Wait-Ui $Phone '^(SAVE|Save)$' 10) { Tap $Phone '^(SAVE|Save)$' -TextOnly | Out-Null }
+    # The system picker can take a while to settle enough for uiautomator, especially on a fresh install.
+    Tap $Phone '^(SAVE|Save)$' 30 -TextOnly | Out-Null
     $saved = $null
     Wait-Until {
         $script:saved = @(Adb $Phone shell find /sdcard/Download -name '*.gpx' -newer /sdcard/Download/.tm-marker) | Where-Object { $_ -match '\.gpx$' } | Select-Object -First 1
@@ -494,7 +518,7 @@ try {
         Skip 'Fold and unfold' 'the phone emulator is not foldable'
     } else {
         OpenTab 'Map' | Out-Null
-        Tap $Phone '^Start hike$' | Out-Null
+        StartHike
         Walk $Dense[56..60]
         Hold $Dense[60] 3
         $d0 = Get-RecordedMetres
@@ -570,15 +594,27 @@ try {
         Tap $Phone '^Map layers$' | Out-Null
         Tap $Phone '^OS Maps . Outdoor' -TextOnly | Out-Null
         $cachedZooms = { @(Adb $Phone shell run-as $Pkg find cache/tiles/os_outdoor -name '*.tile') | ForEach-Object { if ($_ -match 'os_outdoor/(\d+)/\d+/\d+\.tile$') { [int]$Matches[1] } } }
-        Check 'OS Outdoor OpenData tiles load' (Wait-Until { @(& $cachedZooms | Where-Object { $_ -le 16 }).Count -gt 0 } 20)
-        Shot $Phone '08-os-outdoor'
+        if ($Release) {
+            # A screenshot alone can't tell the map from another screen, so the map and its OS layer must show first.
+            $onMap = (Wait-Ui $Phone '^OS Maps . Outdoor' 10) -and (Wait-Ui $Phone '^Map layers$' 2)
+            Start-Sleep -Seconds 6
+            Shot $Phone '08-os-outdoor'
+            $coverage = Get-MapCoverage (Join-Path $Out '08-os-outdoor.png')
+            Check 'OS Outdoor OpenData tiles load' ($onMap -and $coverage -ge 50) "$coverage% of the map area drawn"
+        } else {
+            Check 'OS Outdoor OpenData tiles load' (Wait-Until { @(& $cachedZooms | Where-Object { $_ -le 16 }).Count -gt 0 } 20)
+            Shot $Phone '08-os-outdoor'
+        }
 
         $premium = $false
         for ($i = 0; $i -lt 4 -and -not $premium; $i++) {
             Tap $Phone '^Zoom in$' 3 | Out-Null
-            $premium = Wait-Until { @(& $cachedZooms | Where-Object { $_ -ge 17 }).Count -gt 0 } 8
+            if ($Release) { Start-Sleep -Seconds 4 }
+            else { $premium = Wait-Until { @(& $cachedZooms | Where-Object { $_ -ge 17 }).Count -gt 0 } 8 }
         }
-        if ($freePlan) {
+        if ($Release) {
+            Skip 'OS Premium tiles (zoom 17+)' 'release build: run-as cannot read the tile cache'
+        } elseif ($freePlan) {
             Check 'Free plan: zoom 17+ enlarges zoom 16 instead of fetching Premium tiles' (-not $premium)
         } else {
             Check 'OS Premium tiles (zoom 17+) load' $premium
@@ -587,23 +623,37 @@ try {
 
         # Rights of way: OS publishes its Leisure style only in British National Grid tiles, warped onto the map.
         Tap $Phone '^Map layers$' | Out-Null
-        Tap $Phone '^OS Maps . Explorer & Landranger' -TextOnly | Out-Null
+        Tap $Phone '^OS Maps . Explorer.? & Landranger' -TextOnly | Out-Null
         $leisure = { @(Adb $Phone shell run-as $Pkg find cache/tiles/os_leisure -name '*.tile') | ForEach-Object { if ($_ -match 'os_leisure/(\d+)/\d+/\d+\.tile$') { [int]$Matches[1] } } }
-        $loaded = Wait-Until { @(& $leisure).Count -gt 0 } 20
-        Check 'OS Explorer & Landranger (rights of way) tiles load' $loaded "zooms $((@(& $leisure) | Sort-Object -Unique) -join ', ')"
-        Shot $Phone '09c-os-leisure'
+        if ($Release) {
+            $onMap = (Wait-Ui $Phone '^OS Maps . Explorer.? & Landranger' 10) -and (Wait-Ui $Phone '^Map layers$' 2)
+            Start-Sleep -Seconds 6
+            Shot $Phone '09c-os-leisure'
+            $coverage = Get-MapCoverage (Join-Path $Out '09c-os-leisure.png')
+            Check 'OS Explorer & Landranger (rights of way) tiles load' ($onMap -and $coverage -ge 50) "$coverage% of the map area drawn"
+        } else {
+            $loaded = Wait-Until { @(& $leisure).Count -gt 0 } 20
+            Check 'OS Explorer & Landranger (rights of way) tiles load' $loaded "zooms $((@(& $leisure) | Sort-Object -Unique) -join ', ')"
+            Shot $Phone '09c-os-leisure'
+        }
         Tap $Phone '^Map layers$' | Out-Null
         Tap $Phone '^OS Maps . Outdoor' -TextOnly | Out-Null
 
         # Plant a 2-day-old tile at a Premium zoom and at an OpenData zoom, then restart so the purge runs.
         $old = (Get-Date).AddDays(-2).ToString('yyyy-MM-ddTHH:mm:ss')
         $p17 = 'cache/tiles/os_outdoor/17/0/0.tile'; $p16 = 'cache/tiles/os_outdoor/16/0/0.tile'
-        Adb $Phone shell run-as $Pkg sh -c "'mkdir -p cache/tiles/os_outdoor/17/0 cache/tiles/os_outdoor/16/0 && echo x > $p17 && echo x > $p16 && touch -d $old $p17 $p16'" | Out-Null
+        if (-not $Release) {
+            Adb $Phone shell run-as $Pkg sh -c "'mkdir -p cache/tiles/os_outdoor/17/0 cache/tiles/os_outdoor/16/0 && echo x > $p17 && echo x > $p16 && touch -d $old $p17 $p16'" | Out-Null
+        }
         Adb $Phone shell am force-stop $Pkg | Out-Null
         Adb $Phone shell am start -W -n "$Pkg/.ui.MainActivity" | Out-Null
         Start-Sleep -Seconds 8
-        $state = (Adb $Phone shell run-as $Pkg sh -c "'for f in $p17 $p16; do if [ -e `$f ]; then echo KEPT:`$f; else echo GONE:`$f; fi; done'") -join ' '
-        Check 'Premium tiles older than 24 h purged, OpenData tiles kept' ($state -match 'GONE:\S*17/0/0' -and $state -match 'KEPT:\S*16/0/0') $state
+        if ($Release) {
+            Skip 'Premium tiles older than 24 h purged, OpenData tiles kept' 'release build: run-as cannot plant test tiles'
+        } else {
+            $state = (Adb $Phone shell run-as $Pkg sh -c "'for f in $p17 $p16; do if [ -e `$f ]; then echo KEPT:`$f; else echo GONE:`$f; fi; done'") -join ' '
+            Check 'Premium tiles older than 24 h purged, OpenData tiles kept' ($state -match 'GONE:\S*17/0/0' -and $state -match 'KEPT:\S*16/0/0') $state
+        }
 
         # Offline, zooming past everything on the phone should enlarge the closest cached zoom, not show a blank map.
         OpenTab 'Settings' | Out-Null
@@ -678,6 +728,7 @@ try {
     if (-not $Watch) {
         Skip 'Watch companion' 'no -Watch serial given'
     } else {
+        if ($Release) { Adb $Watch uninstall $Pkg | Out-Null }
         $r = (Adb $Watch install -r $watchApk) -join ' '
         Check 'Install the watch app' ($r -match 'Success') $(if ($r -notmatch 'Success') { $r })
         Adb $Watch shell am force-stop $Pkg | Out-Null

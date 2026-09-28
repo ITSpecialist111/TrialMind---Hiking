@@ -13,8 +13,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Check-in and fall alarm times. Not USE_EXACT_ALARM: Google Play keeps that for alarm-clock, timer and
+         calendar apps. From Android 14 the user allows this in Alarms & reminders; without it alarms may be late. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Fall alarm: shows over the lock screen, and sends the SOS text only if the user turns that on. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SEND_SMS" />

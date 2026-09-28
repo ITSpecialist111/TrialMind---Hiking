@@ -2,6 +2,11 @@ plugins {
     id("com.android.application")
 }
 
+// The same Google Play upload key as the phone app (see app/build.gradle.kts): both upload to one listing.
+val uploadStoreFile = providers.gradleProperty("trailmind.upload.storeFile").orNull
+fun uploadProperty(name: String): String = providers.gradleProperty("trailmind.upload.$name").orNull
+    ?: throw GradleException("trailmind.upload.storeFile is set, so trailmind.upload.$name is needed too.")
+
 android {
     namespace = "com.trailmind.wear"
     compileSdk = 36
@@ -12,14 +17,27 @@ android {
         // Wear OS 3, the Galaxy Watch4's launch software.
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Every upload to the Play listing needs its own version code, so the watch app has its own series.
+        versionCode = 1_000_000 + providers.gradleProperty("trailmind.versionCode").get().toInt()
+        versionName = providers.gradleProperty("trailmind.versionName").get()
+    }
+
+    signingConfigs {
+        if (uploadStoreFile != null) create("upload") {
+            storeFile = rootProject.file(uploadStoreFile)
+            storePassword = uploadProperty("storePassword")
+            keyAlias = uploadProperty("keyAlias")
+            keyPassword = uploadProperty("keyPassword")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            // Without an upload key, release builds use the debug key so they can be installed and tested.
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
     }
 

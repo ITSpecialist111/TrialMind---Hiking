@@ -82,6 +82,8 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
     private val attrBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(170, 0, 0, 0) }
     private var attrLines: List<String> = emptyList()
     private var attrHalfWidth = 0f
+    private val osLogo = ctx.getDrawable(R.drawable.os_logo_maps)
+    private var showsOsLogo = false
     private val dst = RectF()
     private val src = Rect()
     private val path = Path()
@@ -110,6 +112,8 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
             retryAt.clear()
         }
         this.attribution = attribution
+        // The phone's Ordnance Survey layers have ids starting "os_"; OS branding puts its logo on those maps.
+        showsOsLogo = key.startsWith("os_")
         this.minZoom = minimum
         this.maxZoom = maximum
         zoom = zoom.coerceIn(this.minZoom, this.maxZoom)
@@ -309,14 +313,22 @@ class WatchMapView(ctx: Context, private val requestTile: (TileRequest) -> Unit)
         canvas.drawCircle(x, y, 5.5f * density, dotFill)
     }
 
-    /** Licence attribution, kept inside the round screen's visible chord near the bottom. */
+    /** Licence attribution, kept inside the round screen's visible chord near the bottom; OS maps add the OS logo above it. */
     private fun drawAttribution(canvas: Canvas, w: Float, h: Float) {
-        if (attrLines.isEmpty()) return
-        val lh = attrPaint.textSize * 1.15f
         val bottom = h * 0.9f
-        val top = bottom - lh * attrLines.size - 4 * density
-        canvas.drawRoundRect(w / 2 - attrHalfWidth, top, w / 2 + attrHalfWidth, bottom, 6 * density, 6 * density, attrBg)
-        for (i in attrLines.indices) canvas.drawText(attrLines[i], w / 2, top + 2 * density + lh * (i + 0.82f), attrPaint)
+        var top = bottom
+        if (attrLines.isNotEmpty()) {
+            val lh = attrPaint.textSize * 1.15f
+            top = bottom - lh * attrLines.size - 4 * density
+            canvas.drawRoundRect(w / 2 - attrHalfWidth, top, w / 2 + attrHalfWidth, bottom, 6 * density, 6 * density, attrBg)
+            for (i in attrLines.indices) canvas.drawText(attrLines[i], w / 2, top + 2 * density + lh * (i + 0.82f), attrPaint)
+        }
+        if (showsOsLogo) osLogo?.let { logo ->
+            val logoBottom = (top - 6 * density).toInt()
+            val left = (w / 2 - logo.intrinsicWidth / 2f).toInt()
+            logo.setBounds(left, logoBottom - logo.intrinsicHeight, left + logo.intrinsicWidth, logoBottom)
+            logo.draw(canvas)
+        }
     }
 
     private fun layoutAttribution() {

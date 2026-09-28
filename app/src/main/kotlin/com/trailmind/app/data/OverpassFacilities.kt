@@ -21,12 +21,18 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.locks.ReentrantLock
 
 data class SavedFacilities(val fetchedMs: Long, val items: List<Facility>, val partial: Boolean = false)
 
 object OverpassFacilities {
     const val ATTRIBUTION = "Facilities: © OpenStreetMap contributors"
-    private val servers = listOf("https://overpass-api.de/api/interpreter", "https://overpass.openstreetmap.fr/api/interpreter")
+    // overpass.openstreetmap.fr now answers only whitelisted users (HTTP 403), so the main instance is the only one.
+    private val servers = listOf("https://overpass-api.de/api/interpreter")
+    // Its operators ban clients that retry soon after a 429 or 406: wait at least 30 s, and send one query at a time.
+    private const val BACKOFF_MS = 30_000L
+    @Volatile private var backoffUntilMs = 0L
+    private val requestLock = ReentrantLock()
     private const val MAX_BYTES = 12 * 1024 * 1024
     private const val MAX_ELEMENTS = 900
     private val fetching = HashSet<Long>()
@@ -67,7 +73,7 @@ object OverpassFacilities {
         var lastError: IOException? = null
         for (server in servers) {
             try {
-                val (items, partial) = request(server, query, points)
+                val (items, partial) = oneAtATime { request(server, query, points) }
                 val saved = SavedFacilities(System.currentTimeMillis(), items, partial || RouteFacilities.corridorM(points) < 250)
                 val json = JSONObject().put("fetchedMs", saved.fetchedMs).put("partial", saved.partial).put("items", JSONArray().apply {
                     items.forEach { item -> put(JSONObject()
@@ -222,6 +228,19 @@ object OverpassFacilities {
         }
     }
 
+    /** Runs [block] as the only Overpass query in flight, and not while Overpass has asked TrailMind to wait. */
+    private fun <T> oneAtATime(block: () -> T): T {
+        // Fails at once rather than queueing, so a second search neither follows a 429 nor holds a shared thread.
+        if (!requestLock.tryLock()) throw IOException("Another facilities search is running. Try again when it finishes.")
+        try {
+            val wait = backoffUntilMs - System.currentTimeMillis()
+            if (wait > 0) throw IOException("Overpass is busy. Try again in ${(wait + 999) / 1000} s.")
+            return block()
+        } finally {
+            requestLock.unlock()
+        }
+    }
+
     private fun request(server: String, query: String, points: List<LatLon>): Pair<List<Facility>, Boolean> {
         val conn = URL(server).openConnection() as HttpURLConnection
         try {
@@ -233,6 +252,10 @@ object OverpassFacilities {
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
             conn.outputStream.use { it.write("data=${URLEncoder.encode(query, "UTF-8")}".toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
+            if (code == 429 || code == 406) {
+                val retryAfterS = conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull() ?: 0L
+                backoffUntilMs = System.currentTimeMillis() + maxOf(BACKOFF_MS, retryAfterS * 1000)
+            }
             if (code != 200) throw IOException("Overpass answered HTTP $code.")
             return conn.inputStream.use { parse(it, points) }
         } finally { conn.disconnect() }

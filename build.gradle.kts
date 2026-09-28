@@ -7,8 +7,9 @@ buildscript {
             mavenCentral()
         }
         dependencies {
+            // 9.1+ bundles an R8 (9.1.29 or later) that reads Kotlin 2.4 metadata; 9.0.x warns on every class.
             // If this exact version is unavailable, bump it to the latest stable AGP 9.x.
-            classpath("com.android.tools.build:gradle:9.0.0")
+            classpath("com.android.tools.build:gradle:9.4.1")
         }
     }
 }

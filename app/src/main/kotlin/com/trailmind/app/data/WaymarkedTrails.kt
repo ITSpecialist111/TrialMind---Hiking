@@ -23,7 +23,7 @@ import kotlin.math.abs
  */
 object WaymarkedTrails {
     private const val API = "https://hiking.waymarkedtrails.org/api/v1"
-    const val ATTRIBUTION = "Routes © OpenStreetMap contributors (ODbL), found with Waymarked Trails."
+    const val ATTRIBUTION = "Routes © OpenStreetMap contributors (ODbL), found with Waymarked Trails. Heights: ASTER GDEM is a product of METI and NASA."
 
     /** Height samples come every 2 m (about 30 kB per km), so they are skipped for longer trails. */
     const val ELEVATION_MAX_M = 60_000.0

@@ -319,7 +319,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     val spans = footprint?.spans
                     val inside = tile != null && (spans == null || footprint.zoom != pack.maxZoom ||
                         spans.indices.step(3).any { spans[it] == tile.y && tile.x in spans[it + 1] until spans[it + 2] })
-                    inside && tile != null && runCatching { app.tiles.openPack(pack)?.hasTile(tile) == true }.getOrDefault(false)
+                    inside && runCatching { app.tiles.openPack(pack)?.hasTile(tile) == true }.getOrDefault(false)
                 } && (detailZoom == null || run {
                     val grid = OsGrid.fromWgs84(point)
                     grid != null && app.tiles.hasFreshPremium(source, TileKey(detailZoom,
@@ -419,7 +419,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
             Check("Check-in & contact", "${when { due > now -> "Check-in ${clockTime(host, due)}"; due > 0 -> "Check-in overdue"; else -> "No check-in set" }} · ${if (contact) "contact saved" else "contact missing"}${if (!checkInAlerts) " · notifications off" else ""}${if (due > 0 && CheckIn.delayedAlarm(host)) " · alarm may be late" else ""}",
                 due > now && contact && checkInAlerts && !CheckIn.delayedAlarm(host),
                 if (due > 0 && CheckIn.delayedAlarm(host)) "Allow exact alarms" else if (due > 0) "Edit check-in" else "Set check-in",
-                { if (due > 0 && CheckIn.delayedAlarm(host)) requestExactCheckInAlarm(host) else pickCheckIn(host, route.meta.name, planningMinutes, routeId) { refresh() } }),
+                { if (due > 0 && CheckIn.delayedAlarm(host)) requestExactAlarms(host) else pickCheckIn(host, route.meta.name, planningMinutes, routeId) { refresh() } }),
         )
         if (app.prefs.watchEnabled) checks += Check("Watch", app.watch.statusText(), app.watch.status == com.trailmind.app.watch.WatchLink.Status.CONNECTED,
             "Watch settings", { host.push(SettingsPage(host)) })
@@ -430,7 +430,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
             if (check.fix != null && check.action != null) addView(ui.button(check.fix, null, Ui.B.TEXT) { check.action.invoke() })
         }
         if (!contact) addView(ui.button("Save emergency contact", R.drawable.ic_tune, Ui.B.TEXT) { host.push(SettingsPage(host)) })
-        addView(ui.text(OpenMeteo.ATTRIBUTION, Ui.T.CAPTION))
+        addView(ui.link(OpenMeteo.ATTRIBUTION) { host.openUrl(OpenMeteo.URL) })
     }
 
     override fun render(): View {

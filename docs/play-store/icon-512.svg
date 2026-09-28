@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="18 18 72 72">
+  <!-- The launcher icon (res/mipmap-anydpi/ic_launcher.xml), full-bleed: Google Play adds its own rounded mask. -->
+  <rect x="18" y="18" width="72" height="72" fill="#1F5B45"/>
+  <path fill="#F08A24" d="M70,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0"/>
+  <path fill="#FFFFFF" d="M28,74L46,44L55,58L62,49L80,74Z"/>
+  <path fill="#CFE8DC" d="M46,44L51,52.3L47.5,50L44,53.5L41.5,51.5Z"/>
+  <path fill="none" stroke="#F08A24" stroke-width="2.5" stroke-linecap="round" d="M34,80C44,76 50,82 60,78S74,76 78,80"/></svg>

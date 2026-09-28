@@ -251,7 +251,8 @@ class OnboardingPage(host: MainActivity) : Page(host) {
         })
         addView(ui.banner("Safety: TrailMind is an aid, not a replacement for a paper map, compass and the skills to use them. GPS, batteries and phone signal fail. " +
             "Check the weather, tell someone your plans, and in the UK call 999 or 112 and ask for Police, then Mountain Rescue.", danger = true))
-        addView(ui.text("Privacy: your location, routes and hikes stay on this phone. Nothing is uploaded unless you export or share it. Map tiles are fetched from the provider you choose.", Ui.T.CAPTION))
+        addView(ui.text("Privacy: no accounts, ads or analytics. Your routes, hikes and contacts stay on this phone. Maps, search, weather and route tools send only the area or points they need to their provider. " +
+            "Your location is texted only to your chosen contact: when you send it, or after a fall alarm if you turn that on.", Ui.T.CAPTION))
         addView(ui.button("I understand – continue", R.drawable.ic_play) {
             app.prefs.onboardingAccepted = true
             host.pop()

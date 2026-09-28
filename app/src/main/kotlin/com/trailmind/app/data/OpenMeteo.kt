@@ -15,7 +15,10 @@ import kotlin.math.roundToInt
 
 /** Hourly point forecasts from Open-Meteo (free, no key), saved per route so they can be read offline. */
 object OpenMeteo {
-    const val ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0)"
+    // CC BY 4.0: the credit links to Open-Meteo, and says TrailMind adds its own warnings to their data.
+    const val ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0); warnings worked out by TrailMind"
+    const val URL = "https://open-meteo.com/"
+    const val LICENCE_URL = "https://creativecommons.org/licenses/by/4.0/"
     private const val HOURLY = "temperature_2m,apparent_temperature,wind_speed_10m,wind_gusts_10m,wind_direction_10m," +
         "precipitation_probability,precipitation,cloud_cover_low,visibility,freezing_level_height"
     private const val MAX_BYTES = 512 * 1024

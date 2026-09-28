@@ -41,10 +41,10 @@ internal fun pickCheckIn(host: MainActivity, route: String, planningMinutes: Dou
     }.show()
 }
 
-internal fun requestExactCheckInAlarm(host: MainActivity) {
+internal fun requestExactAlarms(host: MainActivity) {
     if (Build.VERSION.SDK_INT >= 31) runCatching {
         host.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${host.packageName}")))
-    }.onFailure { host.toast("Open Alarms & reminders in system settings to allow exact check-ins") }
+    }.onFailure { host.toast("Open Alarms & reminders in system settings to allow on-time alarms") }
 }
 
 private fun showCheckInStatus(host: MainActivity) {
@@ -60,7 +60,7 @@ private fun showCheckInStatus(host: MainActivity) {
                 .setNegativeButton("Later", null).show()
         CheckIn.delayedAlarm(host) -> host.ui.dialog().setTitle("Check-in may be late")
             .setMessage("Android has not allowed exact alarms. Allow Alarms & reminders for an on-time check-in.")
-            .setPositiveButton("Fix", { _, _ -> requestExactCheckInAlarm(host) })
+            .setPositiveButton("Fix", { _, _ -> requestExactAlarms(host) })
             .setNegativeButton("Later", null).show()
         else -> host.toast("Check-in set for ${clockTime(host, host.app.prefs.checkInDueMs)}")
     }

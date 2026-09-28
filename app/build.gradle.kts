@@ -2,6 +2,12 @@ plugins {
     id("com.android.application")
 }
 
+// Google Play upload key (Play App Signing re-signs the app for users). Set trailmind.upload.storeFile,
+// storePassword, keyAlias and keyPassword in ~/.gradle/gradle.properties or with -P. Never commit them.
+val uploadStoreFile = providers.gradleProperty("trailmind.upload.storeFile").orNull
+fun uploadProperty(name: String): String = providers.gradleProperty("trailmind.upload.$name").orNull
+    ?: throw GradleException("trailmind.upload.storeFile is set, so trailmind.upload.$name is needed too.")
+
 android {
     namespace = "com.trailmind.app"
     compileSdk = 36
@@ -10,14 +16,27 @@ android {
         applicationId = "com.trailmind.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = providers.gradleProperty("trailmind.versionCode").get().toInt()
+        versionName = providers.gradleProperty("trailmind.versionName").get()
+    }
+
+    signingConfigs {
+        if (uploadStoreFile != null) create("upload") {
+            storeFile = rootProject.file(uploadStoreFile)
+            storePassword = uploadProperty("storePassword")
+            keyAlias = uploadProperty("keyAlias")
+            keyPassword = uploadProperty("keyPassword")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Without an upload key, release builds use the debug key so they can be installed and tested.
+            // Google Play refuses debug-signed uploads.
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
     }
 

@@ -202,12 +202,15 @@ class TileProvider(private val app: TrailMindApp) {
         if (premium && f.exists()) f.delete()
         // 3. Network.
         if (allowNetwork && !(premium && source.id in premiumDenied)) {
-            when (val r = fetchNetwork(source, key)) {
+            when (val r = fetchNetwork(source, key, if (!premium && f.exists()) f.lastModified() else 0L)) {
                 is Fetch.Ok -> {
                     if (premium) storePremium(source, key, r.bytes, r.fetchedAtMs) else writeDisk(f, r.bytes)
                     return LoadedTile(r.bytes, r.fetchedAtMs.takeIf { premium })
                 }
-                is Fetch.Http -> if (r.code == 404) retryAfter["${source.id}/${key.z}/${key.x}/${key.y}"] = System.currentTimeMillis() + 3_600_000
+                is Fetch.Http -> when (r.code) {
+                    304 -> if (f.setLastModified(System.currentTimeMillis())) return readDisk(source, key)
+                    404 -> retryAfter["${source.id}/${key.z}/${key.x}/${key.y}"] = System.currentTimeMillis() + 3_600_000
+                }
                 else -> Unit
             }
         }
@@ -374,7 +377,7 @@ class TileProvider(private val app: TrailMindApp) {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && !SatelliteNetworkManager.isSatellite(caps)
     }
 
-    fun fetchNetwork(source: TileSource, key: TileKey): Fetch {
+    fun fetchNetwork(source: TileSource, key: TileKey, ifModifiedSince: Long = 0L): Fetch {
         val template = source.template ?: return Fetch.Error("offline source")
         if (!networkAllowed()) return Fetch.NoNetwork
         val apiKey = if (source.requiresKey) app.prefs.osApiKey else null
@@ -389,6 +392,8 @@ class TileProvider(private val app: TrailMindApp) {
             conn.connectTimeout = 10_000
             conn.readTimeout = 15_000
             conn.setRequestProperty("User-Agent", USER_AGENT)
+            // An expired cached tile is asked for conditionally, as the OSM tile policy expects: 304 means keep it.
+            if (ifModifiedSince > 0) conn.ifModifiedSince = ifModifiedSince
             conn.instanceFollowRedirects = true
             try {
                 val code = conn.responseCode
@@ -396,6 +401,11 @@ class TileProvider(private val app: TrailMindApp) {
                 if (conn.getHeaderField("x-blocked") != null) {
                     setError("${source.name}: the tile server blocked this app. Try another map source.")
                     return Fetch.Http(403)
+                }
+                // Not modified: the cached copy is still current, which is as good as a fresh 200.
+                if (code == 304) {
+                    if (lastError != null) { lastError = null; notifyListeners() }
+                    return Fetch.Http(304)
                 }
                 if (code != 200) {
                     if (code == 403 && source.isPremium(key.z)) {
@@ -475,7 +485,11 @@ class TileProvider(private val app: TrailMindApp) {
     companion object {
         private const val TAG = "TileProvider"
         // OSM's tile policy requires an identifying UA with contact details; it blocks UAs mentioning "offline".
-        const val USER_AGENT = "TrailMind/0.1.0 (Android; +https://github.com/ITSpecialist111/HikingApp101)"
+        // The Google Play listing carries the developer's contact email, and the version is the installed one.
+        val USER_AGENT: String by lazy { TrailMindApp.instance.let { userAgent(it.versionName, it.packageName) } }
+
+        fun userAgent(version: String, packageName: String) =
+            "TrailMind/$version (Android; +https://play.google.com/store/apps/details?id=$packageName)"
         private const val CACHE_FRESH_MS = 7L * 24 * 3600 * 1000
         private const val MAX_DISK_CACHE = 300L * 1024 * 1024
         private const val MAX_TILE_BYTES = 2 * 1024 * 1024

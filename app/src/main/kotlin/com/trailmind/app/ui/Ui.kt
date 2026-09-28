@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -157,6 +158,16 @@ class Ui(val ctx: Context) {
                 T.MONO -> { textSize = 15f; typeface = Typeface.MONOSPACE }
             }
         }
+
+    /** An underlined caption that opens its source, for credits whose licence asks for a link. */
+    fun link(label: CharSequence, onClick: () -> Unit): TextView = text(label, T.CAPTION, p.primary).apply {
+        paintFlags = paintFlags or Paint.UNDERLINE_TEXT_FLAG
+        gravity = Gravity.CENTER_VERTICAL
+        minHeight = dp(48)
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { onClick() }
+    }
 
     fun card(color: Int = p.surface, padding: Int = 16, spacing: Int = 8, block: LinearLayout.() -> Unit = {}): LinearLayout =
         column(padding, spacing, block).apply {

@@ -442,6 +442,23 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         if (app.planner.active) app.planner.add(at)
     }
 
+    override fun onAttributionTap() {
+        val s = currentSource()
+        val credits = listOfNotNull(
+            s.attribution,
+            OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
+            TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
+        ).joinToString("\n\n")
+        val dialog = ui.dialog().setTitle("Map data").setMessage(credits).setNegativeButton("Close", null)
+        when {
+            s.showsOsLogo -> dialog.setPositiveButton("OS terms") { _, _ -> host.openUrl(TileSources.OS_TERMS_URL) }
+                .setNeutralButton("Report an error") { _, _ -> host.openUrl(TileSources.OS_ERRORS_URL) }
+            s.id == TileSources.OSM -> dialog.setPositiveButton("Licence") { _, _ -> host.openUrl(TileSources.OSM_COPYRIGHT_URL) }
+                .setNeutralButton("Report a map issue") { _, _ -> host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }
+        }
+        dialog.show()
+    }
+
     fun startPlan(at: LatLon? = null) {
         mapView.flushPendingTaps()
         if (app.planner.active && app.planner.plan.controlPoints.isNotEmpty()) {

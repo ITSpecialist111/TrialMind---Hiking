@@ -20,8 +20,9 @@ OUT="$ROOT/out-apk"
 KOTLIN_VERSION="2.4.0"
 MIN_SDK=26
 TARGET_SDK=36
-VERSION_CODE=1
-VERSION_NAME="0.1.0"
+prop() { sed -n "s/^$1=//p" "$ROOT/gradle.properties" | tr -d '\r'; }
+VERSION_CODE="$(prop trailmind.versionCode)"
+VERSION_NAME="$(prop trailmind.versionName)"
 PACKAGE="com.trailmind.app"
 
 [ -f "$ANDROID_JAR" ] || { echo "Missing $ANDROID_JAR (set ANDROID_HOME / TRAILMIND_PLATFORM)"; exit 1; }
@@ -62,9 +63,10 @@ rm -rf "$OUT"
 mkdir -p "$OUT/gen" "$OUT/rclasses" "$OUT/classes" "$OUT/dex"
 
 echo "[1/6] Resources (aapt2)"
-# AGP injects the package from `namespace`; do the same for aapt2.
-sed "s|<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">|<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$PACKAGE\">|" \
+# AGP injects the package from `namespace`; do the same for aapt2, whatever namespaces the <manifest> tag declares.
+sed -e "s|<manifest\([[:space:]>]\)|<manifest package=\"$PACKAGE\"\1|" -e "s|<manifest\$|<manifest package=\"$PACKAGE\"|" \
   "$ROOT/app/src/main/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
+grep -q "package=\"$PACKAGE\"" "$OUT/AndroidManifest.xml" || { echo "Could not add package=\"$PACKAGE\" to the manifest"; exit 1; }
 "$BT/aapt2" compile --dir "$ROOT/app/src/main/res" -o "$OUT/res.zip"
 "$BT/aapt2" link -I "$ANDROID_JAR" --manifest "$OUT/AndroidManifest.xml" \
   --min-sdk-version $MIN_SDK --target-sdk-version $TARGET_SDK \
@@ -88,8 +90,15 @@ cat "$OUT/kotlinc.log"
 echo "[4/6] Dex (d8)"
 (cd "$OUT/classes" && zip -qr "$OUT/app-classes.jar" .)
 (cd "$OUT/rclasses" && zip -qr "$OUT/r-classes.jar" .)
-"$BT/d8" --release --min-api $MIN_SDK --lib "$ANDROID_JAR" --output "$OUT/dex" \
-  "$OUT/app-classes.jar" "$OUT/r-classes.jar" "$STDLIB"
+if ! "$BT/d8" --release --min-api $MIN_SDK --lib "$ANDROID_JAR" --output "$OUT/dex" \
+  "$OUT/app-classes.jar" "$OUT/r-classes.jar" "$STDLIB" > "$OUT/d8.log" 2>&1; then
+  cat "$OUT/d8.log"; echo "d8 failed"; exit 1
+fi
+# A build-tools d8 older than Kotlin $KOTLIN_VERSION can't read its metadata and warns for every class. That is
+# harmless here (nothing uses kotlin-reflect), so those lines are counted; anything else d8 says is shown.
+META_WARNINGS="$(grep -cE '[Kk]otlin[ .][Mm]etadata' "$OUT/d8.log" || true)"
+grep -vE '[Kk]otlin[ .][Mm]etadata|^[[:space:]]*at |Should never be called|^[[:space:]]*$' "$OUT/d8.log" || true
+[ "$META_WARNINGS" = 0 ] || echo "d8: $META_WARNINGS Kotlin metadata warnings from a d8 older than Kotlin $KOTLIN_VERSION (see out-apk/d8.log)"
 
 echo "[5/6] Package + align"
 cp "$OUT/base.apk" "$OUT/unsigned.apk"

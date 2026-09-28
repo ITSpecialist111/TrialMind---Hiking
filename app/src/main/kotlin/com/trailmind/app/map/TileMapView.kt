@@ -15,6 +15,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Facility
@@ -77,6 +78,8 @@ class TileMapView(context: Context) : View(context) {
         fun onLongPress(at: LatLon) {}
         fun onSingleTap(at: LatLon) {}
         fun onFollowChanged(follow: Boolean) {}
+        /** The map credit (or the OS logo) was tapped: licences ask for a way to reach their terms from the map. */
+        fun onAttributionTap() {}
     }
 
     private val provider = TrailMindApp.instance.tiles
@@ -206,6 +209,10 @@ class TileMapView(context: Context) : View(context) {
     private val attrPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(40, 40, 40); textSize = 10.5f * density }
     private val attrBg = Paint().apply { color = Color.argb(200, 255, 255, 255) }
     private val scalePaint = strokePaint(Color.rgb(30, 30, 30), 2f).apply { strokeCap = Paint.Cap.SQUARE }
+    private val osLogo = context.getDrawable(R.drawable.os_logo_maps)
+    // Taps on the credit strip or the OS logo open the map's licence links; the map between them stays a map.
+    private val creditBox = RectF()
+    private val logoBox = RectF()
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(60, 60, 60); textSize = 14 * density; textAlign = Paint.Align.CENTER
     }
@@ -359,6 +366,7 @@ class TileMapView(context: Context) : View(context) {
             return true
         }
         override fun onSingleTapUp(e: MotionEvent): Boolean {
+            if (creditBox.contains(e.x, e.y) || logoBox.contains(e.x, e.y)) { listener?.onAttributionTap(); return true }
             val tap = PendingTap(screenToLatLon(e.x, e.y))
             tap.delivery = Runnable { if (pendingTaps.remove(tap)) listener?.onSingleTap(tap.point) }
             pendingTaps += tap
@@ -928,6 +936,7 @@ class TileMapView(context: Context) : View(context) {
         }
         val attrHeight = th + if (credit != null) creditHeight + pad else 0f
         canvas.drawRect(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h, attrBg)
+        creditBox.set(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h)
         attrPaint.textSize = th
         canvas.drawText(attr, pad, h - pad - 1 * density, attrPaint)
         if (credit != null) {
@@ -942,6 +951,15 @@ class TileMapView(context: Context) : View(context) {
         canvas.drawLine(bx, by - 5 * density, bx, by, scalePaint)
         canvas.drawLine(bx + px, by - 5 * density, bx + px, by, scalePaint)
         canvas.drawText(Units.distance(metres, imperial), bx + 2 * density, by - 5 * density, attrPaint)
+        logoBox.setEmpty()
+        if (source.showsOsLogo) osLogo?.let { logo ->
+            // OS branding: the logo sits on the map itself, bottom left, at its fixed size with clear space around it.
+            val bottom = (by - 26 * density).toInt()
+            val left = (8 * density).toInt()
+            logo.setBounds(left, bottom - logo.intrinsicHeight, left + logo.intrinsicWidth, bottom)
+            logo.draw(canvas)
+            logoBox.set(logo.bounds)
+        }
     }
 
     private fun drawHint(canvas: Canvas, text: String, w: Float, h: Float) {

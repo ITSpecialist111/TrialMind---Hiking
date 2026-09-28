@@ -133,7 +133,6 @@ class TerrainProvider(private val app: TrailMindApp) {
             inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
             inPremultiplied = false
             inScaled = false
-            inDither = false
         }
         val bitmap = BitmapFactory.decodeFile(file.absolutePath, options) ?: return null
         return try {

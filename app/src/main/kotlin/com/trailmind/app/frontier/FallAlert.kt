@@ -1,6 +1,7 @@
 package com.trailmind.app.frontier
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.Notification
@@ -329,6 +330,8 @@ object FallAlert {
         runCatching { manager.notify(Notifications.ID_FALL, n) }
     }
 
+    // Location is read only after LocationHub.hasPermission, and runCatching covers a permission revoked meanwhile.
+    @SuppressLint("MissingPermission")
     private fun where(context: Context): Pair<LatLon, Int?>? {
         val now = System.currentTimeMillis()
         (context.applicationContext as TrailMindApp).location.latest?.takeIf { now - it.location.time in 0..FRESH_FIX_MS }

@@ -10,3 +10,4 @@ out-e2e
 captures
 *.keystore
 !debug-sample.keystore
+*.jks
