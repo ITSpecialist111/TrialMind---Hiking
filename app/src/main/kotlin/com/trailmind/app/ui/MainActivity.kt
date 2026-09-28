@@ -30,6 +30,7 @@ import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.data.PackKind
 import com.trailmind.app.data.PackStatus
+import com.trailmind.app.frontier.group.GroupRadio
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.ForegroundLocation
 import com.trailmind.app.map.MbTiles
@@ -94,6 +95,7 @@ class MainActivity : Activity() {
 
     private var pendingPermission: (() -> Unit)? = null
     private var pendingBluetooth: (() -> Unit)? = null
+    private var pendingNearby: (() -> Unit)? = null
     private var pendingSms: (() -> Unit)? = null
     private var pendingExport: String? = null
     private var backCallback: Any? = null
@@ -145,12 +147,14 @@ class MainActivity : Activity() {
         fgLocation.start()
         map.onStart()
         app.watch.setUiVisible(true)
+        app.group.setUiVisible(true)
     }
 
     override fun onStop() {
         fgLocation.stop()
         map.onStop()
         app.watch.setUiVisible(false)
+        app.group.setUiVisible(false)
         app.baro.release()
         super.onStop()
     }
@@ -489,6 +493,18 @@ class MainActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), RC_BLUETOOTH)
     }
 
+    /** Runs [then] once trip groups may use Bluetooth: precise location, then "Nearby devices" (scan, advertise, connect). */
+    fun withNearbyPermission(then: () -> Unit) {
+        withLocationPermission {
+            if (GroupRadio.hasPermissions(this)) {
+                then()
+            } else {
+                pendingNearby = then
+                requestPermissions(GroupRadio.permissions(), RC_NEARBY)
+            }
+        }
+    }
+
     /** Runs [then] once TrailMind may send texts itself (only used for the SOS text the user turned on). */
     fun withSmsPermission(then: () -> Unit) {
         if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) { then(); return }
@@ -503,6 +519,21 @@ class MainActivity : Activity() {
             pendingSms = null
             if (checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) then?.invoke()
             else toast("Without SMS permission TrailMind can only get the SOS text ready for you to send.")
+            stack.lastOrNull()?.refresh()
+            return
+        }
+        if (requestCode == RC_NEARBY) {
+            val then = pendingNearby
+            pendingNearby = null
+            if (GroupRadio.hasPermissions(this)) then?.invoke()
+            else ui.dialog().setTitle("Nearby devices needed")
+                .setMessage("Trip groups share positions directly between phones over Bluetooth, so TrailMind needs the Nearby devices permission. You can allow it in App info → Permissions.")
+                .setPositiveButton("App settings") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                }
+                .setNegativeButton("Not now", null).show()
+            app.group.settingsChanged()
+            app.watch.refresh()
             stack.lastOrNull()?.refresh()
             return
         }
@@ -618,6 +649,18 @@ class MainActivity : Activity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        if (intent.action == ACTION_GROUP_MEMBER) {
+            intent.action = null
+            showTab(Tab.MAP)
+            map.focusMember(intent.getIntExtra(EXTRA_MEMBER, 0))
+            return
+        }
+        if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == GROUP_LINK_SCHEME) {
+            val link = intent.data
+            intent.action = null
+            link?.let { joinGroupFromLink(this, it) }
+            return
+        }
         if (intent.action == ACTION_SAFETY) {
             intent.action = null
             showTab(Tab.SAFETY)
@@ -742,12 +785,16 @@ class MainActivity : Activity() {
     companion object {
         const val ACTION_SAFETY = "com.trailmind.app.OPEN_SAFETY"
         const val ACTION_OFFLINE = "com.trailmind.app.OPEN_OFFLINE"
+        const val ACTION_GROUP_MEMBER = "com.trailmind.app.GROUP_MEMBER"
+        const val EXTRA_MEMBER = "member"
+        const val GROUP_LINK_SCHEME = "trailmind"
         const val WIDE_DP = 600
         const val EDGE_GALLERY = "com.google.aiedge.gallery"
         private const val RC_PERMS = 10
         private const val RC_NOTIF = 11
         private const val RC_BLUETOOTH = 12
         private const val RC_SMS = 13
+        private const val RC_NEARBY = 14
         private const val RC_GPX = 20
         private const val RC_MBTILES = 21
         private const val RC_EXPORT = 22

@@ -32,7 +32,11 @@ class ExportProvider : ContentProvider() {
         return ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
-    override fun getType(uri: Uri): String = if (uri.lastPathSegment?.endsWith(".gpx") == true) GPX_MIME else "application/octet-stream"
+    override fun getType(uri: Uri): String = when {
+        uri.lastPathSegment?.endsWith(".gpx") == true -> GPX_MIME
+        uri.lastPathSegment?.endsWith(".csv") == true -> CSV_MIME
+        else -> "application/octet-stream"
+    }
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
         val f = fileFor(uri)
@@ -54,6 +58,7 @@ class ExportProvider : ContentProvider() {
     companion object {
         const val AUTHORITY = "com.trailmind.app.exports"
         const val GPX_MIME = "application/gpx+xml"
+        const val CSV_MIME = "text/csv"
 
         fun dir(ctx: Context): File = File(ctx.cacheDir, "exports").apply { mkdirs() }
 

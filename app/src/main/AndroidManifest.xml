@@ -19,12 +19,17 @@
     <!-- Fall alarm: shows over the lock screen, and sends the SOS text only if the user turns that on. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SEND_SMS" />
-    <!-- Watch companion link (Bluetooth RFCOMM to an already-paired watch; no scanning, no location). -->
+    <!-- Watch companion link: Bluetooth RFCOMM to an already-paired watch. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Trip groups: broadcast to and listen for the user's own trip group over Bluetooth LE (Android 12 and later only).
+         Scan results carry the group's positions, so this is deliberately not declared neverForLocation. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -84,12 +89,21 @@
                 <data android:mimeType="application/gpx" />
                 <data android:mimeType="application/x-gpx+xml" />
             </intent-filter>
+            <!-- Trip group invites: trailmind://group/join?code=…&name=… (the user confirms before joining). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="trailmind" android:host="group" android:pathPrefix="/join" />
+            </intent-filter>
         </activity>
 
+        <!-- Location for the recording; connected device too while the user is in a trip group, whose phones keep
+             exchanging positions over Bluetooth with the screen off. -->
         <service
             android:name=".location.TrackingService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|connectedDevice" />
 
         <receiver android:name=".location.CheckInReceiver" android:exported="false" />
         <receiver android:name=".location.CheckInEarlyBootReceiver" android:exported="false"

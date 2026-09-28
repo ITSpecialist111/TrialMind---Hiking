@@ -15,6 +15,7 @@ import com.trailmind.app.data.OverpassFacilities
 import com.trailmind.app.location.Fix
 import com.trailmind.app.location.TrackingService
 import com.trailmind.app.location.TrackingState
+import com.trailmind.app.map.HikerMarker
 import com.trailmind.app.map.LidarProvider
 import com.trailmind.app.map.MapMarker
 import com.trailmind.app.map.MercatorLine
@@ -23,6 +24,8 @@ import com.trailmind.app.map.TileSource
 import com.trailmind.app.map.TileSources
 import com.trailmind.app.map.TerrainProvider
 import com.trailmind.core.format.Units
+import com.trailmind.core.frontier.group.PeerTable
+import com.trailmind.core.frontier.group.needsHelp
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
@@ -103,6 +106,11 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var startByLine: String? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
     private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
+    private val groupChip = ui.chip("Group") { fitGroup() }.apply {
+        visibility = View.GONE
+        contentDescription = "Show the trip group on the map"
+    }
+    private val onGroup: () -> Unit = { updateHikers() }
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -144,6 +152,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
         statusRow.addView(gpsChip, ui.lp(-2))
         statusRow.addView(View(host), ui.lp(0, 1, 1f))
+        statusRow.addView(groupChip, ui.lp(-2))
         statusRow.addView(trackChip, ui.lp(-2))
         statusRow.addView(layerChip, ui.lp(-2))
         layerChip.maxWidth = host.dp(200)
@@ -184,9 +193,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         app.tiles.addListener(onTiles)
         app.planner.addListener(onPlan)
         host.addHeadingListener(onHeading)
+        app.group.addListener(onGroup)
         app.location.latest?.let(onFix)
         applySource()
-        updateNav(); updateTarget(); updateTracking(); updateRecover()
+        updateNav(); updateTarget(); updateTracking(); updateRecover(); updateHikers()
         Async.main.removeCallbacks(ticker)
         Async.main.post(ticker)
     }
@@ -198,6 +208,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         app.tiles.removeListener(onTiles)
         app.planner.removeListener(onPlan)
         host.removeHeadingListener(onHeading)
+        app.group.removeListener(onGroup)
         Async.main.removeCallbacks(ticker)
     }
 
@@ -473,6 +484,65 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
 
     override fun onSingleTap(at: LatLon) {
         if (app.planner.active) app.planner.add(at)
+        else mapView.hikerNear(at)?.let { showMember(it.memberId) }
+    }
+
+    // ---------------------------------------------------------------- trip group
+
+    private fun updateHikers() {
+        val sharing = app.group
+        if (sharing.group == null || !app.prefs.groupShowOnMap || !app.prefs.frontierEnabled) {
+            if (mapView.hikers.isNotEmpty()) mapView.hikers = emptyList()
+            groupChip.visibility = View.GONE
+            return
+        }
+        val nowS = sharing.nowS()
+        val peers = sharing.members
+        val markers = peers.mapNotNull { peer ->
+            val pos = peer.position ?: return@mapNotNull null
+            val name = sharing.nameOf(peer)
+            val age = when (PeerTable.freshness(pos, nowS)) {
+                PeerTable.Freshness.FRESH -> HikerMarker.Age.FRESH
+                PeerTable.Freshness.STALE -> HikerMarker.Age.STALE
+                PeerTable.Freshness.LAST_SEEN -> HikerMarker.Age.LAST_SEEN
+            }
+            val label = if (age == HikerMarker.Age.FRESH) name else "$name · ${groupAge(nowS - pos.originTimeS)}"
+            HikerMarker(peer.memberId, LatLon(pos.lat, pos.lon), groupInitials(name), label, sharing.colourOf(peer), age,
+                relayed = pos.hops > 0, help = pos.status.needsHelp)
+        }
+        if (markers != mapView.hikers) mapView.hikers = markers
+        // Setting a TextView's text, even to the same value, announces a change to accessibility services.
+        val chip = sharing.summary() ?: "Group"
+        if (groupChip.text.toString() != chip) groupChip.text = chip
+        groupChip.visibility = View.VISIBLE
+    }
+
+    /** Fits everyone in the group seen in the last 15 minutes, and you, on the map. */
+    private fun fitGroup() {
+        val nowS = app.group.nowS()
+        val points = app.group.members.mapNotNull { peer ->
+            peer.position?.takeIf { PeerTable.freshness(it, nowS) != PeerTable.Freshness.LAST_SEEN }?.let { LatLon(it.lat, it.lon) }
+        } + listOfNotNull(app.location.latest?.let { LatLon(it.lat, it.lon) })
+        when {
+            points.isEmpty() -> host.toast("No one in the group has been heard in the last 15 minutes.")
+            points.size == 1 -> centerOn(points.single(), maxOf(mapView.zoom, 15.0))
+            else -> fit(BoundingBox.of(points)?.expandedByMetres(150.0))
+        }
+    }
+
+    fun showMember(memberId: Int) {
+        app.group.members.firstOrNull { it.memberId == memberId }?.let { showGroupMember(host, it) }
+    }
+
+    /** Centres a member (from their call-for-help notification); the group may still be loading at app start. */
+    fun focusMember(memberId: Int, attempt: Int = 0) {
+        val pos = app.group.members.firstOrNull { it.memberId == memberId }?.position
+        if (pos == null) {
+            if (attempt < 5) Async.main.postDelayed({ focusMember(memberId, attempt + 1) }, 600)
+            return
+        }
+        centerOn(LatLon(pos.lat, pos.lon), maxOf(mapView.zoom, 15.0))
+        showMember(memberId)
     }
 
     override fun onAttributionTap() {
