@@ -185,6 +185,39 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("frontier_satellite_data_enabled", true)
         set(v) = sp.edit().putBoolean("frontier_satellite_data_enabled", v).apply()
 
+    /** Pass on other trip-group members' positions, so the group reaches further than one phone's range. */
+    var groupRelayEnabled: Boolean
+        get() = sp.getBoolean("group_relay", true)
+        set(v) = sp.edit().putBoolean("group_relay", v).apply()
+
+    var groupShowOnMap: Boolean
+        get() = sp.getBoolean("group_show_on_map", true)
+        set(v) = sp.edit().putBoolean("group_show_on_map", v).apply()
+
+    /** Also advertise on LE Coded (long range) when the phone supports it. */
+    var groupLongRange: Boolean
+        get() = sp.getBoolean("group_long_range", true)
+        set(v) = sp.edit().putBoolean("group_long_range", v).apply()
+
+    var groupHelpAlerts: Boolean
+        get() = sp.getBoolean("group_help_alerts", true)
+        set(v) = sp.edit().putBoolean("group_help_alerts", v).apply()
+
+    /** The user accepted the explanation of what trip groups share, shown before Android's Nearby devices prompt. */
+    var groupDisclosureAccepted: Boolean
+        get() = sp.getBoolean("group_disclosure_v1", false)
+        set(v) = sp.edit().putBoolean("group_disclosure_v1", v).apply()
+
+    /** The name last used in a trip group, offered again for the next one. */
+    var groupDisplayName: String
+        get() = sp.getString("group_display_name", "") ?: ""
+        set(v) = sp.edit().putString("group_display_name", v.trim()).apply()
+
+    /** Sequence number of this phone's latest position frame, so members can order them across restarts. */
+    var groupSequence: Long
+        get() = sp.getLong("group_sequence", 0L)
+        set(v) = sp.edit().putLong("group_sequence", v).apply()
+
     var frontierEmergencyStatus: Int
         get() = sp.getInt("frontier_emergency_status", 0)
         set(v) = sp.edit().putInt("frontier_emergency_status", v).apply()

@@ -65,6 +65,20 @@ class MercatorLine(capacity: Int = 256) {
 
 data class MapMarker(val position: LatLon, val label: String)
 
+/** A trip-group member. [age] and [relayed] show how far to trust the position; [help] turns the marker red. */
+data class HikerMarker(
+    val memberId: Int,
+    val position: LatLon,
+    val initials: String,
+    val label: String,
+    val colour: Int,
+    val age: Age,
+    val relayed: Boolean,
+    val help: Boolean,
+) {
+    enum class Age { FRESH, STALE, LAST_SEEN }
+}
+
 /**
  * Framework-only slippy map: raster tiles, pinch/drag/double-tap, route + breadcrumb overlays,
  * position with accuracy and heading, scale bar and attribution. North up, or turned by [bearing] with TrailMind's own
@@ -123,6 +137,9 @@ class TileMapView(context: Context) : View(context) {
     var target: LatLon? = null
         set(v) { if (field != v) { field = v; invalidate() } }
     var searchPin: MapMarker? = null
+        set(v) { field = v; invalidate() }
+    /** Trip-group members, drawn above waypoints and below your own position. */
+    var hikers: List<HikerMarker> = emptyList()
         set(v) { field = v; invalidate() }
     /** Where the base map is on the phone, tinted and outlined under the route. */
     var offlineAreas: List<TileFootprint> = emptyList()
@@ -199,6 +216,16 @@ class TileMapView(context: Context) : View(context) {
         color = Color.rgb(142, 36, 170); textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
     }
     private val targetFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(211, 47, 47) }
+    private val hikerFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val hikerStale = strokePaint(Color.rgb(245, 124, 0), 2.5f)
+    private val hikerLost = strokePaint(Color.rgb(117, 117, 117), 2.5f)
+    private val hikerRelayed = strokePaint(Color.rgb(55, 55, 55), 1.5f).apply {
+        pathEffect = DashPathEffect(floatArrayOf(4 * density, 3 * density), 0f)
+    }
+    private val hikerHelpHalo = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(85, 211, 47, 47) }
+    private val hikerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
+    }
     private val pinFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 121, 107) }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(30, 30, 30); textSize = 12 * density; isFakeBoldText = true
@@ -432,6 +459,7 @@ class TileMapView(context: Context) : View(context) {
         drawDistanceMarks(canvas, w, h)
         drawFacilities(canvas, w, h)
         drawWaypoints(canvas, w, h)
+        drawHikers(canvas, w, h)
         drawTarget(canvas, w, h)
         drawSearchPin(canvas, w, h)
         drawPosition(canvas, w, h)
@@ -834,6 +862,57 @@ class TileMapView(context: Context) : View(context) {
                 }
             }
         }
+    }
+
+    private fun drawHikers(canvas: Canvas, w: Float, h: Float) {
+        if (hikers.isEmpty()) return
+        val r = 11 * density
+        for (m in hikers) {
+            place(m.position, w, h)
+            val x = px
+            val y = py
+            if (x < -60 || y < -60 || x > w + 60 || y > h + 60) continue
+            if (m.help) canvas.drawCircle(x, y, r * 2f, hikerHelpHalo)
+            canvas.drawCircle(x, y, r + 2.5f * density, white)
+            hikerFill.color = if (m.help) Color.rgb(211, 47, 47) else m.colour
+            when (m.age) {
+                HikerMarker.Age.FRESH -> canvas.drawCircle(x, y, r, hikerFill)
+                HikerMarker.Age.STALE -> {
+                    hikerFill.alpha = 150
+                    canvas.drawCircle(x, y, r, hikerFill)
+                    canvas.drawCircle(x, y, r, hikerStale)
+                }
+                HikerMarker.Age.LAST_SEEN -> canvas.drawCircle(x, y, r - 1.25f * density, hikerLost)
+            }
+            if (m.relayed) canvas.drawCircle(x, y, r + 5 * density, hikerRelayed)
+            hikerText.color = if (m.age == HikerMarker.Age.LAST_SEEN) Color.rgb(90, 90, 90) else Color.WHITE
+            canvas.drawText(m.initials, x, y + hikerText.textSize * 0.36f, hikerText)
+            if (zoom >= 11 && m.label.isNotBlank()) {
+                val left = x + r + 6 * density
+                canvas.drawText(m.label, left, y + 4 * density, labelHalo)
+                canvas.drawText(m.label, left, y + 4 * density, labelPaint)
+            }
+        }
+    }
+
+    /** The trip-group member drawn within [radiusDp] of [at], nearest first. */
+    fun hikerNear(at: LatLon, radiusDp: Float = 28f): HikerMarker? {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        place(at, w, h)
+        val tx = px
+        val ty = py
+        var best: HikerMarker? = null
+        var bestPx = radiusDp * density
+        for (m in hikers) {
+            place(m.position, w, h)
+            val d = kotlin.math.hypot(px - tx, py - ty)
+            if (d <= bestPx) {
+                best = m
+                bestPx = d
+            }
+        }
+        return best
     }
 
     private fun drawTarget(canvas: Canvas, w: Float, h: Float) {

@@ -77,7 +77,32 @@ data class PackMeta(
     val premiumMs: Long = 0,
 )
 
-class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 4) {
+/** The trip group this phone is in. [secret] is the group code, wrapped by the Android keystore. */
+class TripGroupRow(
+    val id: String,
+    val name: String,
+    val secret: ByteArray,
+    val memberId: Int,
+    val displayName: String,
+    val colour: Int,
+    val createdMs: Long,
+    val expiresMs: Long,
+)
+
+/** What this phone last knew about another member. [position] is the member's 30-byte position frame. */
+class GroupMemberRow(
+    val memberId: Int,
+    val name: String?,
+    val colour: Int?,
+    val position: ByteArray?,
+    val positionMs: Long,
+    val heardMs: Long,
+    val directMs: Long,
+    val rssi: Int?,
+    val coded: Boolean,
+)
+
+class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 5) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -120,6 +145,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 4) 
                premium_max_zoom INTEGER NOT NULL DEFAULT 0, premium_ms INTEGER NOT NULL DEFAULT 0)""",
         )
         createMeshHeartbeats(db)
+        createTripGroups(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -135,6 +161,21 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 4) 
             if (!hasTerrainColumn) db.execSQL("ALTER TABLE routes ADD COLUMN terrain_derived INTEGER NOT NULL DEFAULT 0")
             createMeshHeartbeats(db)
         }
+        if (oldVersion < 5) createTripGroups(db)
+    }
+
+    private fun createTripGroups(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS trip_groups(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, secret BLOB NOT NULL,
+               member_id INTEGER NOT NULL, display_name TEXT NOT NULL, colour INTEGER NOT NULL, created_ms INTEGER NOT NULL,
+               expires_ms INTEGER NOT NULL)""",
+        )
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS group_members(group_id TEXT NOT NULL REFERENCES trip_groups(id) ON DELETE CASCADE,
+               member_id INTEGER NOT NULL, name TEXT, colour INTEGER, position BLOB, position_ms INTEGER NOT NULL DEFAULT 0,
+               heard_ms INTEGER NOT NULL DEFAULT 0, direct_ms INTEGER NOT NULL DEFAULT 0, rssi INTEGER,
+               coded INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(group_id, member_id))""",
+        )
     }
 
     private fun createMeshHeartbeats(db: SQLiteDatabase) {
@@ -413,6 +454,64 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 4) 
 
     fun pruneMeshHeartbeats(receivedBeforeMs: Long) {
         writableDatabase.delete("mesh_heartbeats", "received_ms < ?", arrayOf(receivedBeforeMs.toString()))
+    }
+
+    // ---------------------------------------------------------------- trip groups
+
+    /** The phone's trip group; there is at most one. */
+    fun tripGroup(): TripGroupRow? = readableDatabase.rawQuery("SELECT * FROM trip_groups ORDER BY created_ms DESC LIMIT 1", null).use { c ->
+        if (!c.moveToFirst()) null else TripGroupRow(
+            id = c.str("id"), name = c.str("name"), secret = c.getBlob(c.getColumnIndexOrThrow("secret")),
+            memberId = c.int("member_id"), displayName = c.str("display_name"), colour = c.int("colour"),
+            createdMs = c.long("created_ms"), expiresMs = c.long("expires_ms"),
+        )
+    }
+
+    /** Replaces any previous group, and everything known about its members. */
+    fun saveTripGroup(g: TripGroupRow) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("trip_groups", "id != ?", arrayOf(g.id))
+            val values = ContentValues().apply {
+                put("id", g.id); put("name", g.name); put("secret", g.secret); put("member_id", g.memberId)
+                put("display_name", g.displayName); put("colour", g.colour); put("created_ms", g.createdMs); put("expires_ms", g.expiresMs)
+            }
+            // Update in place: REPLACE deletes the row first, and the cascade would take the group's members with it.
+            if (db.update("trip_groups", values, "id = ?", arrayOf(g.id)) == 0) db.insertOrThrow("trip_groups", null, values)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun deleteTripGroups() {
+        writableDatabase.delete("trip_groups", null, null)
+    }
+
+    fun groupMembers(groupId: String): List<GroupMemberRow> =
+        readableDatabase.rawQuery("SELECT * FROM group_members WHERE group_id = ?", arrayOf(groupId)).use { c ->
+            c.map {
+                GroupMemberRow(
+                    memberId = it.int("member_id"), name = it.optString(it.getColumnIndexOrThrow("name")),
+                    colour = it.optLong(it.getColumnIndexOrThrow("colour"))?.toInt(),
+                    position = it.getColumnIndexOrThrow("position").let { i -> if (it.isNull(i)) null else it.getBlob(i) },
+                    positionMs = it.long("position_ms"), heardMs = it.long("heard_ms"), directMs = it.long("direct_ms"),
+                    rssi = it.optLong(it.getColumnIndexOrThrow("rssi"))?.toInt(), coded = it.int("coded") != 0,
+                )
+            }
+        }
+
+    fun upsertGroupMember(groupId: String, m: GroupMemberRow) {
+        writableDatabase.insertWithOnConflict("group_members", null, ContentValues().apply {
+            put("group_id", groupId); put("member_id", m.memberId)
+            if (m.name != null) put("name", m.name) else putNull("name")
+            if (m.colour != null) put("colour", m.colour) else putNull("colour")
+            if (m.position != null) put("position", m.position) else putNull("position")
+            put("position_ms", m.positionMs); put("heard_ms", m.heardMs); put("direct_ms", m.directMs)
+            if (m.rssi != null) put("rssi", m.rssi) else putNull("rssi")
+            put("coded", if (m.coded) 1 else 0)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     // ---------------------------------------------------------------- offline packs

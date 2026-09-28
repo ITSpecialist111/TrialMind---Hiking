@@ -89,6 +89,9 @@ Fall alarm and SOS text: Settings > Emergency contact (please use a test number,
 The alarm starts after a drop and 90 seconds lying still.
 "Send SOS text to ..." on the Safety page sends the same text straight away.
 Watch app: needs this phone app on a paired phone; Settings > Watch companion > pick the watch.
+Trip groups need two Android 12+ phones: on one, Safety > Trip group > Create group; on the other, Join with code
+and type the code shown on the first. Each phone then shows the other on the map. "Bluetooth diagnostics" at the
+bottom of the Trip group page shows what the radio is doing.
 ```
 
 ## Data safety
@@ -120,6 +123,15 @@ Why these answers:
 - **Not declared:** the emergency contact's name and number, and the OS key, never leave the phone except as the
   SMS recipient or in the OS request itself. Hikes, sensor data and fall events stay on the phone. There are no
   crash reports, analytics or advertising identifiers.
+- **Trip groups add nothing to declare**, because of Google's end-to-end encryption exemption: "User data that is
+  sent off device, but that is unreadable by you or anyone other than the sender and recipient as a result of
+  end-to-end encryption does not need to be disclosed"
+  ([Data safety help](https://support.google.com/googleplay/android-developer/answer/10787469)). Positions go
+  phone to phone over Bluetooth, sealed with AES-GCM under keys derived from the group code, which only the
+  members hold; the developer never has the code, and no server is involved. Everything in the broadcast
+  (position, name, member id, status) is encrypted, and the only clear field, the group tag, changes every 15
+  minutes. Keep it that way: if group data ever goes through a server, or anything readable is broadcast, declare
+  precise location as shared.
 
 Update these answers and the privacy policy if the app ever sends heartbeats, tracks or other data anywhere.
 
@@ -165,7 +177,8 @@ Declare each type with a short description and a video link (an unlisted YouTube
 
 | Service | Type | Use |
 |---|---|---|
-| `TrackingService` | location | Records the hike the user starts with **Start hike**, with a notification offering Pause and Finish. Stops when the user finishes. |
+| `TrackingService` | location | Records the hike the user starts with **Start hike**, with a notification offering Pause and Finish. Stops when the user finishes. When the user has joined a trip group, it also keeps sharing their position with that group (user-initiated location sharing). |
+| `TrackingService` | connectedDevice | Only while the user is in a trip group they created or joined: keeps the group's Bluetooth LE exchange going during the recording, so members' phones keep seeing each other with the screen off. Stops when the hike finishes or the user leaves the group. |
 | `DownloadService` | dataSync | Downloads the offline map pack the user asks for, with a progress notification. Stops when done or cancelled. |
 | `WatchLinkService` | connectedDevice | Keeps the Bluetooth link to the user's own paired watch, turned on in *Settings > Watch companion*. |
 | `WatchLinkService` | location | Sends the phone's position to the watch for its navigation dial and map while the phone is in a pocket. |
@@ -173,6 +186,11 @@ Declare each type with a short description and a video link (an unlisted YouTube
 
 The watch link's location use outside a recording is the one most likely to be questioned. Say that the user
 turns it on and that the watch has no GPS link of its own in TrailMind.
+
+For the trip-group video: create a group on one phone, join it on a second with the code, start a hike on both,
+turn both screens off, walk a few metres and show that each map still updates. Trip groups also need two more
+things Google checks: the in-app disclosure shown before the Nearby devices prompt ("Share your location with your
+group"), and `BLUETOOTH_SCAN` declared without `neverForLocation`, because the scan results carry positions.
 
 ### Precise location (from November 2026)
 
@@ -186,7 +204,9 @@ precise location. Choose live tracking or navigation, and describe it like this:
 TrailMind records the hiker's GPS track every 2 seconds while they record a hike, in a foreground service that
 the hiker starts and stops. It also shows their position on the map, guides them along a route, and warns when
 they leave it by more than a few tens of metres. Grid references and SOS texts need a position accurate to
-metres. Coarse location (about 3 km²) can't follow a path, and the one-time location button can't record a
+metres. In a trip group the hiker creates or joins, it shares that position, end-to-end encrypted over Bluetooth,
+with the group's phones, so the party can see each other on the map and find someone who has fallen. Coarse
+location (about 3 km²) can't follow a path or find a person, and the one-time location button can't record a
 continuous track.
 ```
 
@@ -216,6 +236,7 @@ TrailMind is a hiking app for Great Britain that keeps working when the signal d
 SAFETY
 • Fall alarm: while you record a hike, TrailMind watches for a hard fall. It sounds an alarm and asks if you're OK. If you don't answer within 60 seconds, it can text your emergency contact your grid reference, a map link and your battery level. You choose the contact and whether it sends by itself.
 • Check-in: set a return time. If you're overdue, TrailMind reminds you and gets a text to your contact ready.
+• Trip groups: see your party on the map with no signal. Phones share positions directly over Bluetooth (long range where the phone supports it), encrypted with the group's code, and pass them on along the group. If someone falls, everyone else gets an alert with a bearing to them.
 • Safety page: your OS grid reference, location sharing, 999-by-text (emergencySMS) help, air pressure and storm warnings.
 • Daylight guard: when to start and when to turn back to finish before sunset.
 

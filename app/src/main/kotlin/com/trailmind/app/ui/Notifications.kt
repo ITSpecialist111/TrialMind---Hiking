@@ -16,6 +16,7 @@ object Notifications {
     const val CH_OFFLINE = "offline_renewal"
     const val CH_FALL = "fall_alarm"
     const val CH_SOS = "sos_status"
+    const val CH_GROUP = "trip_group"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -28,6 +29,7 @@ object Notifications {
     const val ID_CHECK_IN = 9
     const val ID_RENEW = 10
     const val ID_FALL = 11
+    const val ID_GROUP_HELP = 12
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -57,6 +59,12 @@ object Notifications {
         })
         m.createNotificationChannel(NotificationChannel(CH_SOS, "SOS text progress", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Whether your SOS text has been sent"
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
+        m.createNotificationChannel(NotificationChannel(CH_GROUP, "Trip group alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "When someone in your trip group may have fallen or asks for help"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {

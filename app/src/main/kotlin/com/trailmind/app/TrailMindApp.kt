@@ -17,6 +17,7 @@ import com.trailmind.app.nav.NavigationController
 import com.trailmind.app.sensor.Barometer
 import com.trailmind.app.sensor.FallMonitor
 import com.trailmind.app.frontier.FrontierCoordinator
+import com.trailmind.app.frontier.group.GroupSharing
 import com.trailmind.app.ui.Notifications
 import com.trailmind.app.watch.WatchLink
 
@@ -49,6 +50,8 @@ class TrailMindApp : Application() {
         private set
     lateinit var fallMonitor: FallMonitor
         private set
+    lateinit var group: GroupSharing
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -72,6 +75,8 @@ class TrailMindApp : Application() {
         watch = WatchLink(this)
         frontier.start()
         Notifications.createChannels(this)
+        group = GroupSharing(this)
+        group.start()
         CheckIn.arm(this)
         Async.io { tiles.trimDiskCache(); terrain.trimDiskCache(); tiles.reschedulePremiumExpiry(); PremiumRenewal.reschedule(this) }
     }

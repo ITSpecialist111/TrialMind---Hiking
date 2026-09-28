@@ -6,7 +6,7 @@ Keep it in step with the Data safety answers in google-play.md whenever the app'
 
 # TrailMind privacy policy
 
-*Effective 27 September 2026*
+*Effective 28 September 2026*
 
 TrailMind is a hiking app for Android phones and Wear OS watches, published by [Developer name] ("we"). This
 policy explains what TrailMind does with your information. In short: TrailMind has no accounts, no ads, no
@@ -21,9 +21,12 @@ TrailMind stores the following only on your phone (and, for the watch app, on yo
 - your settings, including your Ordnance Survey (OS) Data Hub API key, your emergency contact's name and number,
   and check-in and fall alarm settings
 - fall alarm events and "group heartbeats" (short summaries of your own position, kept for a short time)
+- if you are in a trip group: its name and code (encrypted by Android's keystore), your name in the group, and
+  the last positions heard from its members
 
 We never receive this information. TrailMind turns off Android backup, so it is not copied to cloud backups. It
-is deleted when you delete it in the app, clear the app's storage, or uninstall TrailMind.
+is deleted when you delete it in the app, clear the app's storage, or uninstall TrailMind. A trip group and
+everything heard from its members are deleted when you leave it or the trip ends.
 
 ## What TrailMind sends, and to whom
 
@@ -47,6 +50,22 @@ Ordnance Survey with your OS requests.
 When the map follows your position, the map tiles it asks for show roughly where you are. TrailMind does not
 upload your GPS track or position history anywhere. Services may keep request logs for a limited time: for
 example, Open-Meteo deletes its logs after 90 days and BRouter after two weeks.
+
+## Trip groups (Bluetooth)
+
+If you create or join a trip group, TrailMind shares your precise position, height, battery level, safety status
+(for example after a fall alarm) and the name you choose with the other members of that group, directly between
+phones over Bluetooth. It does this while TrailMind is open and while you record a hike, including with the screen
+off. Members' phones may pass your position on to other members who are out of your range.
+
+Everything is encrypted with a key made from the group's code, which only the people you give it to have. Nothing
+is sent to us or to any server, and the broadcast carries no name, phone number or fixed identifier. Positions
+from the group stay on your phone until the trip ends (after a day, unless you extend it) or you leave, and are
+then deleted.
+
+Anyone with the code can see the group while their phone is in Bluetooth range, so share it only with your
+party; to remove someone, start a new group. If you send the code by text message, your mobile network could see
+it. You can stop sharing your position at any time on the Safety page.
 
 ## Texts to your emergency contact
 
@@ -76,10 +95,12 @@ website such as Strava, the data goes to the app or site you pick, and its priva
 TrailMind asks for each permission when you first use the feature that needs it, and keeps working without the
 ones you refuse.
 
-- **Location (while using the app):** shows your position, records hikes and guides you along a route. While a
-  hike is recording, or the watch link is on, a notification shows that TrailMind is using location.
-- **Notifications, alarms & reminders, full-screen alerts:** check-in reminders, off-route alerts and the fall alarm.
-- **Nearby devices (Bluetooth):** the link to your own paired watch.
+- **Location (while using the app):** shows your position, records hikes and guides you along a route, and shares
+  your position with your trip group if you are in one. While a hike is recording, or the watch link is on, a
+  notification shows that TrailMind is using location.
+- **Notifications, alarms & reminders, full-screen alerts:** check-in reminders, off-route alerts, the fall alarm,
+  and alerts when someone in your trip group needs help.
+- **Nearby devices (Bluetooth):** the link to your own paired watch, and trip groups.
 - **SMS (send only):** only if you turn on automatic SOS texts. TrailMind cannot read your messages.
 - **Motion sensors:** detecting a possible fall while you record a hike, on the phone only.
 

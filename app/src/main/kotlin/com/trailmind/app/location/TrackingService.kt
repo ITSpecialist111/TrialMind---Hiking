@@ -50,6 +50,7 @@ class TrackingService : Service(), LocationListener {
     private var lastNotifyMs = 0L
     private var updatesActive = false
     private var weatherAlertMs = 0L
+    @Volatile private var notificationText = "Starting GPS…"
     // TrackingState is updated asynchronously on the main thread, so the service keeps its own copy.
     @Volatile private var paused = false
 
@@ -65,6 +66,7 @@ class TrackingService : Service(), LocationListener {
         stopUpdates()
         thread.quitSafely()
         running = false
+        app.group.setRecording(false)
         super.onDestroy()
     }
 
@@ -73,13 +75,18 @@ class TrackingService : Service(), LocationListener {
         if (!running) {
             if (!goForeground(buildNotification("Starting GPS…"))) return START_NOT_STICKY
             running = true
+            app.group.setRecording(true)
         }
         when (intent?.action) {
             ACTION_START -> handler.post { startNew(intent.getStringExtra(EXTRA_NAME)) }
             ACTION_RESUME_HIKE -> handler.post { resumeExisting(intent.getLongExtra(EXTRA_HIKE, -1)) }
             ACTION_PAUSE -> handler.post { pause() }
             ACTION_RESUME -> handler.post { resume() }
-            ACTION_REFRESH_FRONTIER -> handler.post { refreshFallMonitoring() }
+            ACTION_REFRESH_FRONTIER -> {
+                // A trip group joined mid-hike adds the connected-device type; the user is in the app, so this is allowed.
+                runCatching { startForegroundTyped(buildNotification(notificationText)) }
+                handler.post { refreshFallMonitoring() }
+            }
             ACTION_STOP -> handler.post { finish() }
             null -> {
                 // Restarted by the system after the process was killed: continue the unfinished hike.
@@ -93,11 +100,7 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun goForeground(n: Notification): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(Notifications.ID_TRACKING, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(Notifications.ID_TRACKING, n)
-        }
+        startForegroundTyped(n)
         true
     } catch (e: Exception) {
         // e.g. ForegroundServiceStartNotAllowedException / missing permission when restarted from background.
@@ -108,6 +111,27 @@ class TrackingService : Service(), LocationListener {
         }
         stopSelf()
         false
+    }
+
+    /**
+     * Location always; connected device too while the user is in a trip group, because the recording then also keeps
+     * the group's Bluetooth exchange going. If Android refuses the extra type, recording carries on without it.
+     */
+    private fun startForegroundTyped(n: Notification) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(Notifications.ID_TRACKING, n)
+            return
+        }
+        val location = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        if (app.group.needsConnectedDeviceType()) {
+            try {
+                startForeground(Notifications.ID_TRACKING, n, location or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+                return
+            } catch (e: SecurityException) {
+                Log.w(TAG, "connected-device foreground type refused", e)
+            }
+        }
+        startForeground(Notifications.ID_TRACKING, n, location)
     }
 
     private fun startNew(name: String?) {
@@ -232,7 +256,8 @@ class TrackingService : Service(), LocationListener {
             Async.main.post {
                 val imperial = app.prefs.imperial
                 val text = "${Units.distance(TrackingState.distanceM, imperial)} · ${Units.duration(TrackingState.activeMs())} · " +
-                    "↑${Units.elevation(TrackingState.ascentM, imperial)} · ±${Units.distance(fix.accuracyM.toDouble(), imperial)}"
+                    "↑${Units.elevation(TrackingState.ascentM, imperial)} · ±${Units.distance(fix.accuracyM.toDouble(), imperial)}" +
+                    (app.group.summary()?.let { " · $it" } ?: "")
                 Notifications.manager(this).notify(Notifications.ID_TRACKING, buildNotification(text))
             }
         }
@@ -277,6 +302,7 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun buildNotification(text: String): Notification {
+        notificationText = text
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val toggle = PendingIntent.getService(this, 2, Intent(this, TrackingService::class.java)

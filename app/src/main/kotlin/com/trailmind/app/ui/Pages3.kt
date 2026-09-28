@@ -35,6 +35,7 @@ import com.trailmind.app.map.TileGrid
 import com.trailmind.core.ai.Briefing
 import com.trailmind.core.ai.BriefingInput
 import com.trailmind.core.format.Units
+import com.trailmind.core.frontier.group.needsHelp
 import com.trailmind.core.frontier.SosText
 import com.trailmind.core.geo.BoundingBox
 import com.trailmind.core.geo.LatLon
@@ -562,6 +563,9 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
 class SafetyPage(host: MainActivity) : Page(host) {
     private val onFix: (Fix) -> Unit = { update() }
     private val onFrontier: () -> Unit = { refresh() }
+    // The group reports often; re-render only when what this page shows about it changes.
+    private val onGroup: () -> Unit = { if (groupShown != groupSignature()) refresh() }
+    private var groupShown: String? = null
     private var grid: TextView? = null
     private var detail: TextView? = null
 
@@ -569,6 +573,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
         app.location.addListener(onFix)
         app.frontier.addListener(onFrontier)
         FallAlert.addListener(onFrontier)
+        app.group.addListener(onGroup)
         update()
         refresh()
     }
@@ -577,6 +582,11 @@ class SafetyPage(host: MainActivity) : Page(host) {
         app.location.removeListener(onFix)
         app.frontier.removeListener(onFrontier)
         FallAlert.removeListener(onFrontier)
+        app.group.removeListener(onGroup)
+    }
+
+    private fun groupSignature(): String = app.group.let { s ->
+        "${s.group?.id}|${s.statusLine()}|${s.members.filter { it.position?.status?.needsHelp == true }.joinToString { s.nameOf(it) }}"
     }
 
     private fun locationText(f: Fix?): String? {
@@ -605,6 +615,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
             }, ui.lp(0, weight = 1f))
         })
         addView(frontierCard())
+        addView(groupCard())
         addView(sosCard())
         val due = app.prefs.checkInDueMs
         addView(ui.card(spacing = 6) {
@@ -665,7 +676,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
             prefs.frontierEnabled = it
             applyFrontierSettings()
         })
-        addView(ui.switch("Share 30-second group heartbeats", prefs.frontierHeartbeatsEnabled) {
+        addView(ui.switch("Share my position with my trip group", prefs.frontierHeartbeatsEnabled) {
             prefs.frontierHeartbeatsEnabled = it
             applyFrontierSettings()
         }.apply { isEnabled = enabled })
@@ -696,8 +707,24 @@ class SafetyPage(host: MainActivity) : Page(host) {
 
     private fun applyFrontierSettings() {
         app.frontier.applySettings()
+        app.group.settingsChanged()
         TrackingService.send(host, TrackingService.ACTION_REFRESH_FRONTIER)
         refresh()
+    }
+
+    private fun groupCard(): View {
+        groupShown = groupSignature()
+        val sharing = app.group
+        val g = sharing.group ?: return groupIntroCard(host) { host.push(GroupPage(host)) }
+        return ui.card(spacing = 8) {
+            addView(ui.text("Trip group · ${g.name}", Ui.T.TITLE))
+            addView(ui.text(sharing.statusLine(), Ui.T.BODY,
+                if (sharing.readiness() == com.trailmind.app.frontier.group.GroupSharing.Readiness.READY) p.primary else p.danger))
+            sharing.members.filter { it.position?.status?.needsHelp == true }.forEach {
+                addView(ui.banner("${sharing.nameOf(it)} needs help. Open the trip group to see where.", danger = true))
+            }
+            addView(ui.button("Open trip group", null, Ui.B.TONAL) { host.push(GroupPage(host)) })
+        }
     }
 
     private fun sosCard(): View = ui.card(spacing = 8) {
@@ -928,6 +955,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
                 "Ordnance Survey, OpenStreetMap, Mapzen terrain tiles on Amazon Web Services, Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
                 "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
+                "In a trip group it also goes, encrypted with the group's code, straight to the group's phones over Bluetooth, never to a server. " +
                 "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
         })
     }
