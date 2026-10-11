@@ -854,6 +854,35 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(status)
         })
 
+        addView(ui.card(spacing = 10) {
+            addView(ui.text("Old maps (MapTiler key)", Ui.T.TITLE))
+            addView(ui.text("Scanned Ordnance Survey maps of Great Britain from 1885–1961, including every sheet of the Forest of Dean and the lower Wye, " +
+                "are served free by MapTiler Cloud with your own key. Create a free MapTiler account, copy a key from your account page and paste it here: " +
+                "the free plan is for personal, non-commercial use. The key is stored only on this phone. " +
+                "Then open Map layers → Old maps.", Ui.T.CAPTION))
+            val key = ui.input("MapTiler key", prefs.mapTilerKey, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
+            addView(key, ui.lp())
+            val status = ui.text("", Ui.T.CAPTION)
+            addView(ui.row {
+                addView(ui.button("Save & test", null) {
+                    prefs.mapTilerKey = key.text.toString().trim()
+                    app.tiles.clearErrors()
+                    status.text = "Testing…"
+                    testMapTilerKey(status)
+                }, ui.lp(0, weight = 1f))
+                addView(ui.button("Get a key", null, Ui.B.TONAL) { host.openUrl(TileSources.MAPTILER_CLOUD_URL) }, ui.lp(0, weight = 1f))
+            })
+            addView(status)
+        })
+
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("Recording", Ui.T.TITLE))
+            addView(ui.switch("Pause the hike when I get in a vehicle", prefs.autoPauseInVehicle) { prefs.autoPauseInVehicle = it })
+            addView(ui.text("If the phone keeps moving faster than about 22 km/h (14 mph) for half a minute, TrailMind pauses the hike, " +
+                "leaves the drive out of your track and time, switches the GPS off and tells you. Tap Resume when you are back on foot. " +
+                "Turn it off if you cycle or ski.", Ui.T.CAPTION))
+        })
+
         addView(ui.card(spacing = 6) {
             addView(ui.text("Units & pace", Ui.T.TITLE))
             addView(ui.switch("Miles and feet", prefs.imperial) { prefs.imperial = it; app.nav.settingsChanged(); host.map.refreshPlannerDisplay(); refresh() })
@@ -954,6 +983,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("TrailMind ${app.versionName} · personal offline-first hiking app.\n" +
                 "Map data: © OpenStreetMap contributors (ODbL); Contains OS data © Crown copyright and database rights (OS OpenData under the Open Government Licence; OS Premium under your OS Data Hub plan).\n" +
                 "Japan map: 出典：国土地理院 (Geospatial Information Authority of Japan, GSI Tiles).\n" +
+                "Old maps: Ordnance Survey, scanned by the National Library of Scotland (maps.nls.uk), CC BY 3.0, hosted by MapTiler.\n" +
                 "Routes found with Waymarked Trails; their heights: ASTER GDEM is a product of METI and NASA.\n" +
                 "Weather data by Open-Meteo.com (CC BY 4.0).\n" +
                 "1 m LiDAR terrain for England, under the Open Government Licence: © Environment Agency copyright and/or database right 2022. All rights reserved.\n" +
@@ -969,6 +999,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             })
             addView(ui.button("Weather data licence (CC BY 4.0)", null, Ui.B.TEXT) { host.openUrl(OpenMeteo.LICENCE_URL) })
             addView(ui.button("GSI Tiles (Japan) terms", null, Ui.B.TEXT) { host.openUrl(TileSources.GSI_TILES_URL) })
+            addView(ui.button("Old maps: National Library of Scotland", null, Ui.B.TEXT) { host.openUrl(TileSources.NLS_MAPS_URL) })
             addView(ui.button("LiDAR licence (Open Government Licence)", null, Ui.B.TEXT) { host.openUrl(LidarProvider.LICENCE_URL) })
             addView(ui.button("Show safety introduction", null, Ui.B.TEXT) { host.push(OnboardingPage(host).also { app.prefs.onboardingAccepted = true }) })
         })
@@ -977,7 +1008,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("Privacy", Ui.T.TITLE))
             addView(ui.text("No accounts, ads or analytics, and no backups: your routes, hikes, emergency contact and OS key stay on this phone. " +
                 "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
-                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), Mapzen terrain tiles on Amazon Web Services, the Environment Agency (LiDAR), Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
+                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), MapTiler (old maps, with your own key), Mapzen terrain tiles on Amazon Web Services, the Environment Agency (LiDAR), Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
                 "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
                 "In a trip group it also goes, encrypted with the group's code, straight to the group's phones over Bluetooth, never to a server. " +
                 "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
@@ -986,6 +1017,25 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
     private fun chips(items: List<Pair<String, Double>>, selected: Double, onPick: (Double) -> Unit): View =
         ui.flow { items.forEach { (label, v) -> addView(ui.chip(label, kotlin.math.abs(v - selected) < 1e-6) { onPick(v) }) } }
+
+    private fun testMapTilerKey(status: TextView) {
+        val source = TileSources.historic().first { it.id == TileSources.NLS_1900S }
+        Async.run({ app.tiles.fetchNetwork(source, TileKey(6, 31, 20)) }) { r ->
+            status.text = when (val result = r.getOrNull()) {
+                is TileProvider.Fetch.Ok -> "✓ Key works. Choose an old map under Map layers → Old maps."
+                is TileProvider.Fetch.Http -> when (result.code) {
+                    401, 403 -> "✗ Key rejected (HTTP ${result.code}). Check you copied the whole key from MapTiler Cloud."
+                    429 -> "✗ Over MapTiler's free allowance (HTTP 429). Try again later."
+                    else -> "✗ MapTiler returned HTTP ${result.code}."
+                }
+                TileProvider.Fetch.NoKey -> "No key entered."
+                TileProvider.Fetch.NoNetwork -> "No internet connection (or offline-only mode is on)."
+                is TileProvider.Fetch.Error -> "✗ ${result.message}"
+                null -> "✗ ${r.exceptionOrNull()?.message}"
+            }
+            host.map.setSource(app.prefs.baseSourceId)
+        }
+    }
 
     private fun testKey(status: TextView) {
         val source = TileSources.builtIns().first { it.id == TileSources.OS_OUTDOOR }

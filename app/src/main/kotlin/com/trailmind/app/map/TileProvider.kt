@@ -262,6 +262,11 @@ class TileProvider(private val app: TrailMindApp) {
 
     @Synchronized private fun readDisk(source: TileSource, key: TileKey): LoadedTile? {
         val file = diskFile(source, key)
+        // MapTiler's terms don't allow keeping its tiles: browsed ones are reused for a week at most, never served stale.
+        if (source.historic && System.currentTimeMillis() - file.lastModified() > CACHE_FRESH_MS) {
+            file.delete()
+            return null
+        }
         val time = file.lastModified().takeIf { source.isPremium(key.z) }
         if (time != null && !TilePolicy.premiumCacheFresh(time, System.currentTimeMillis())) return null
         return runCatching { LoadedTile(file.readBytes(), time) }.getOrNull()
@@ -380,9 +385,9 @@ class TileProvider(private val app: TrailMindApp) {
     fun fetchNetwork(source: TileSource, key: TileKey, ifModifiedSince: Long = 0L): Fetch {
         val template = source.template ?: return Fetch.Error("offline source")
         if (!networkAllowed()) return Fetch.NoNetwork
-        val apiKey = if (source.requiresKey) app.prefs.osApiKey else null
+        val apiKey = if (source.requiresKey) TileSources.keyFor(source, app.prefs) else null
         if (source.requiresKey && apiKey.isNullOrBlank()) {
-            setError("Add your OS Data Hub API key in Settings to load ${source.name}.")
+            setError("Add your ${source.keyKind.label} in Settings to load ${source.name}.")
             return Fetch.NoKey
         }
         val url = TilePolicy.fillTemplate(template, key, apiKey)
@@ -469,9 +474,18 @@ class TileProvider(private val app: TrailMindApp) {
         reschedulePremiumExpiry()
     }
 
+    /** Old-map tiles are browse-cache only (MapTiler's terms): anything older than a week is deleted at start-up. */
+    private fun purgeStaleHistoric() {
+        val cutoff = System.currentTimeMillis() - CACHE_FRESH_MS
+        for (s in TileSources.historic()) {
+            File(cacheRoot, s.id).walkTopDown().filter { it.isFile && it.lastModified() < cutoff }.forEach { it.delete() }
+        }
+    }
+
     /** Keeps the browse cache under [MAX_DISK_CACHE] by deleting least-recently-fetched tiles. */
     fun trimDiskCache() {
         purgeExpiredPremium()
+        purgeStaleHistoric()
         val files = cacheRoot.walkBottomUp().filter { it.isFile }.toList()
         var total = files.sumOf { it.length() }
         if (total <= MAX_DISK_CACHE) return

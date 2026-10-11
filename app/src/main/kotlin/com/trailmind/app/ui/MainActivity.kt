@@ -34,6 +34,8 @@ import com.trailmind.app.frontier.group.GroupRadio
 import com.trailmind.app.frontier.group.UwbRadio
 import com.trailmind.app.location.CheckIn
 import com.trailmind.app.location.ForegroundLocation
+import com.trailmind.app.location.TrackingService
+import com.trailmind.app.location.TrackingState
 import com.trailmind.app.map.MbTiles
 import com.trailmind.app.map.TileProvider
 import com.trailmind.app.sensor.Compass
@@ -150,9 +152,11 @@ class MainActivity : Activity() {
         map.onStart()
         app.watch.setUiVisible(true)
         app.group.setUiVisible(true)
+        app.group.groupHikeHandler = ::offerGroupHike
     }
 
     override fun onStop() {
+        app.group.groupHikeHandler = null
         fgLocation.stop()
         map.onStop()
         app.watch.setUiVisible(false)
@@ -464,6 +468,38 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (canGoBack()) goBack() else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    // ------------------------------------------------------------------ group hikes
+
+    private var groupHikeDialog: android.app.AlertDialog? = null
+
+    /**
+     * [who] in the trip group is recording a group hike and this phone isn't. Starts recording straight away when
+     * that needs nothing from the user, otherwise (or if they chose to be asked) asks first.
+     */
+    private fun offerGroupHike(who: String) {
+        if (!app.prefs.onboardingAccepted || !app.prefs.groupHikes ||
+            TrackingState.status != TrackingState.Status.IDLE || TrackingService.running) return
+        val join = {
+            withLocationPermission {
+                ensureGpsEnabled {
+                    requestNotificationPermissionIfNeeded()
+                    // Android can refuse to start location recording from a stopped activity; the user can still tap Start hike.
+                    runCatching { TrackingService.start(this) }
+                        .onSuccess { toast("$who started a group hike, so TrailMind is recording yours too.") }
+                        .onFailure { toast("Couldn't start recording. Tap Start hike on the map to join $who.") }
+                }
+            }
+        }
+        if (isFinishing || isDestroyed) return
+        if (!app.prefs.groupHikesAsk && hasFineLocation() && isGpsEnabled()) { join(); return }
+        if (groupHikeDialog?.isShowing == true) return
+        groupHikeDialog = ui.dialog().setTitle("$who started a group hike")
+            .setMessage("Record your own copy of it? It is saved on this phone, with your own track, time and distance.")
+            .setPositiveButton("Start my hike") { _, _ -> join() }
+            .setNegativeButton("Not now", null)
+            .show()
     }
 
     // ------------------------------------------------------------------ permissions

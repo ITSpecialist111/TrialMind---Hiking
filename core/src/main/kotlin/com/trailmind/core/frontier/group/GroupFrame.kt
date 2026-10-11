@@ -101,6 +101,8 @@ object GroupFrames {
 
     const val FLAG_RECORDING = 1
     const val FLAG_PAUSED = 2
+    /** The hike being recorded is one the whole trip group is invited to record (see [GroupHikeWatch]). */
+    const val FLAG_GROUP_HIKE = 4
 
     private const val UNKNOWN_ALTITUDE = Short.MIN_VALUE.toInt()
 

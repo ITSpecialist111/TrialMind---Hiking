@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import com.trailmind.app.Async
 import com.trailmind.app.R
 import com.trailmind.app.data.HikeStatus
@@ -106,6 +107,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var startByLine: String? = null
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
     private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
+    private val oldMapChip = ui.chip("Old map") { chooseOldMap() }.apply {
+        visibility = View.GONE
+        contentDescription = "Old map settings"
+    }
     private val groupChip = ui.chip("Group") { fitGroup() }.apply {
         visibility = View.GONE
         contentDescription = "Show the trip group on the map"
@@ -158,6 +163,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         layerChip.maxWidth = host.dp(200)
         topColumn.addView(statusRow)
         topColumn.addView(pinChip)
+        topColumn.addView(oldMapChip)
         topColumn.addView(recoverCard)
         topColumn.addView(navCard)
         topColumn.addView(targetCard)
@@ -354,8 +360,109 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.showLidar = app.prefs.showLidar
         mapView.hillshade = if (app.prefs.showGsiHillshade) TileSources.hillshade() else null
         layerChip.text = s.name
+        applyHistoric()
         updateHint()
         updateOfflineAreas()
+    }
+
+    private fun applyHistoric() {
+        val s = TileSources.historicOverlay(app.prefs)
+        mapView.historic = s
+        mapView.historicAlpha = app.prefs.historicOverlayPercent / 100f
+        oldMapChip.visibility = if (s != null) View.VISIBLE else View.GONE
+        if (s != null) oldMapChip.text = "${s.name.removePrefix(TileSources.OLD_MAP_PREFIX)} · ${app.prefs.historicOverlayPercent}%"
+    }
+
+    /** Which old map to fade over today's, and how much: all the controls for the time-travel overlay. */
+    private fun chooseOldMap() {
+        val layers = TileSources.historic()
+        val labels = (listOf("Off: today's map only") + layers.map { it.name.removePrefix(TileSources.OLD_MAP_PREFIX) }).toTypedArray()
+        val note = ui.text("", Ui.T.CAPTION)
+        val percentLabel = ui.text("", Ui.T.LABEL)
+        fun showNote() {
+            val s = TileSources.historicOverlay(app.prefs)
+            note.text = s?.let { "${it.note}\nAppears from zoom ${it.minZoom}." } ?: "Pick a map to fade over the current one."
+            percentLabel.text = "Old map showing: ${app.prefs.historicOverlayPercent}%"
+        }
+        val bar = SeekBar(host).apply {
+            max = 90
+            progress = app.prefs.historicOverlayPercent - 10
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    app.prefs.historicOverlayPercent = value + 10
+                    applyHistoric()
+                    showNote()
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) = Unit
+                override fun onStopTrackingTouch(bar: SeekBar) = Unit
+            })
+        }
+        val title = ui.column(padding = 20, spacing = 6) {
+            addView(ui.text("Old maps", Ui.T.TITLE))
+            addView(ui.text("Fade a scanned Ordnance Survey map over today's to find what has gone from the Forest of Dean: " +
+                "mines and scowles, tramroads, quarries, forges and lost railways. They cover all of Great Britain.", Ui.T.CAPTION))
+            if (app.prefs.mapTilerKey.isBlank()) {
+                addView(ui.text("No MapTiler key yet. The maps are free to use with your own key.", Ui.T.CAPTION, p.danger))
+                addView(ui.button("Add MapTiler key", null, Ui.B.TONAL) { host.push(SettingsPage(host)) })
+            }
+            addView(note)
+            addView(percentLabel)
+            addView(bar, ui.lp())
+        }
+        showNote()
+        val current = layers.indexOfFirst { it.id == app.prefs.historicOverlayId } + 1
+        ui.dialog().setCustomTitle(title)
+            .setSingleChoiceItems(labels, current) { d, which ->
+                if (which == 0) {
+                    app.prefs.historicOverlayId = ""
+                } else {
+                    val s = layers[which - 1]
+                    if (TileSources.missingKey(s, app.prefs)) {
+                        d.dismiss()
+                        askForMapTilerKey(s)
+                        return@setSingleChoiceItems
+                    }
+                    app.prefs.historicOverlayId = s.id
+                    app.tiles.clearErrors()
+                }
+                applyHistoric()
+                updateHint()
+                showNote()
+            }
+            .setPositiveButton("Done", null)
+            .setNeutralButton("Forest of Dean") { _, _ -> showOldMap(at = LatLon(TileSources.FOREST_OF_DEAN_LAT, TileSources.FOREST_OF_DEAN_LON)) }
+            .show()
+    }
+
+    private fun askForMapTilerKey(s: TileSource) {
+        ui.dialog().setTitle("MapTiler key needed")
+            .setMessage("${s.note}\n\nThe old maps are served by MapTiler Cloud. Create a free account, copy a key from " +
+                "your account page, and paste it in Settings.")
+            .setPositiveButton("Add key") { _, _ -> host.push(SettingsPage(host)) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    /**
+     * Fades an old map over the current one and moves the map there: the Forest of Dean by default, or [box] (a route).
+     * Uses the old map already chosen, else the six-inch, which is the one for the Forest's mines, scowles and tramroads.
+     */
+    fun showOldMap(box: BoundingBox? = null, at: LatLon? = null) {
+        val s = TileSources.historicOverlay(app.prefs) ?: TileSources.historic().first { it.id == TileSources.NLS_SIX_INCH }
+        if (TileSources.missingKey(s, app.prefs)) {
+            askForMapTilerKey(s)
+            return
+        }
+        app.prefs.historicOverlayId = s.id
+        app.tiles.clearErrors()
+        applyHistoric()
+        updateHint()
+        when {
+            box != null -> fit(box)
+            at != null -> centerOn(at, TileSources.FOREST_OF_DEAN_ZOOM)
+            else -> host.showMap()
+        }
+        host.toast("${s.name.removePrefix(TileSources.OLD_MAP_PREFIX)} over today's map. Drag the slider under Map layers → Old maps to fade it.")
     }
 
     /** Outlines the base map's offline packs; the tile listener calls this often, so it only reloads when they change. */
@@ -377,9 +484,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             host.toast("${s.name}: your OS plan does not include closer detail, so the map enlarges the last available overview tile.")
         }
         mapView.hint = when {
-            s.requiresKey && app.prefs.osApiKey.isBlank() ->
-                "Add your free OS Data Hub API key in Settings to show OS maps"
-            app.tiles.lastError != null && s.isOnline -> app.tiles.lastError
+            TileSources.missingKey(s, app.prefs) ->
+                "Add your free ${s.keyKind.label} in Settings to show this map"
+            app.tiles.lastError != null && (s.isOnline || mapView.historic != null) -> app.tiles.lastError
             else -> null
         }
     }
@@ -390,7 +497,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val labels = sources.map { s ->
             buildString {
                 append(s.name)
-                if (s.requiresKey && app.prefs.osApiKey.isBlank()) append("  (needs API key)")
+                if (TileSources.missingKey(s, app.prefs)) append("  (needs API key)")
                 val packs = app.tiles.packsFor(s).size
                 if (s.packId == null && packs > 0) append("  · $packs offline pack${if (packs > 1) "s" else ""}")
             }
@@ -399,7 +506,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             .setSingleChoiceItems(labels, sources.indexOfFirst { it.id == current }) { d, which ->
                 val s = sources[which]
                 d.dismiss()
-                if (s.requiresKey && app.prefs.osApiKey.isBlank()) {
+                if (TileSources.missingKey(s, app.prefs)) {
                     ui.dialog().setTitle(s.name).setMessage(s.note)
                         .setPositiveButton("Add key") { _, _ -> host.push(SettingsPage(host)) }
                         .setNegativeButton("Cancel", null).show()
@@ -416,6 +523,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                     .show()
             }
             .setPositiveButton("Overlays") { _, _ -> chooseOverlays() }
+            .setNegativeButton("Old maps") { _, _ -> chooseOldMap() }
             .show()
     }
 
@@ -549,6 +657,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val s = currentSource()
         val credits = listOfNotNull(
             s.attribution,
+            mapView.historic?.let { "${it.attribution}\n${TileSources.NLS_MAPS_URL}\nScanned and georeferenced: features may sit a little off their true position." },
             OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
             TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
             LidarProvider.CREDIT.takeIf { app.prefs.showLidar },
@@ -562,6 +671,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 .setNeutralButton("Report a map issue") { _, _ -> host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }
             s.attribution == TileSources.GSI_ATTRIBUTION || app.prefs.showGsiHillshade ->
                 dialog.setPositiveButton("GSI tiles") { _, _ -> host.openUrl(TileSources.GSI_TILES_URL) }
+            mapView.historic != null ->
+                dialog.setPositiveButton("National Library of Scotland") { _, _ -> host.openUrl(TileSources.NLS_MAPS_URL) }
+                    .setNeutralButton("MapTiler") { _, _ -> host.openUrl(TileSources.MAPTILER_COPYRIGHT_URL) }
         }
         dialog.show()
     }

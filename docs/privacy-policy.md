@@ -34,13 +34,14 @@ TrailMind contacts third-party services directly from your phone, over encrypted
 provide the feature you are using. Each request contains only what that service needs, as listed below. Like any
 website, these services see your phone's IP address and the request, and handle them under their own privacy
 policies. TrailMind sends them no name, account or device identifier, apart from your own OS key, which goes to
-Ordnance Survey with your OS requests.
+Ordnance Survey with your OS requests, and your own MapTiler key, which goes to MapTiler with old-map requests.
 
 | Service | Used for | What it receives |
 |---|---|---|
 | [Ordnance Survey](https://www.ordnancesurvey.co.uk/legal) (OS Maps API, OS Names API) | OS maps, place and postcode search, names for offline areas | The map tiles for the area on screen or being downloaded, what you type into search, or the area being named; your OS API key |
 | [OpenStreetMap Foundation](https://osmfoundation.org/wiki/Privacy_Policy) tile servers | OpenStreetMap map | The map tiles for the area on screen |
 | [Geospatial Information Authority of Japan](https://maps.gsi.go.jp/development/ichiran.html) (GSI Tiles, cyberjapandata.gsi.go.jp) | Japan maps: GSI Standard Map, Aerial Photo and Hill shading | The map tiles for the area on screen or being downloaded |
+| [MapTiler](https://www.maptiler.com/privacy-policy/) (MapTiler Cloud, api.maptiler.com), serving the National Library of Scotland's old Ordnance Survey maps | Old maps faded over the map | The map tiles for the area on screen; your MapTiler key |
 | Mapzen Terrain Tiles on [Amazon Web Services](https://aws.amazon.com/privacy/) | Heights, steep-ground shading, elevation profiles | The terrain tiles for the area involved |
 | [Environment Agency](https://environment.data.gov.uk/support/faqs/275811163/275811229) (Defra Data Services Platform) | 1 m LiDAR hill shading, crags, ground heights and route terrain checks in England | The 256 m grid squares for the area on screen, along a route being checked, or along a route's offline map |
 | [Open-Meteo](https://open-meteo.com/en/terms) | Mountain forecast for a route | The position and height of the route's high point |
@@ -64,6 +65,11 @@ Everything is encrypted with a key made from the group's code, which only the pe
 is sent to us or to any server, and the broadcast carries no name, phone number or fixed identifier. Positions
 from the group stay on your phone until the trip ends (after a day, unless you extend it) or you leave, and are
 then deleted.
+
+The broadcast also says whether you are recording a hike. By default, when you start one, the other members'
+TrailMind starts recording its own copy (or asks them), and yours does the same when they start one; turn this off
+under *Trip group → Group hikes*. Only the fact that you are recording is shared: each phone saves its own track,
+which is never uploaded.
 
 Anyone with the code can see the group while their phone is in Bluetooth range, so share it only with your
 party; to remove someone, start a new group. If you send the code by text message, your mobile network could see

@@ -75,9 +75,9 @@ object TrackingState {
         line.add(p.latLon())
     }
 
-    fun pause() = Async.ui {
+    fun pause(rewindMs: Long = 0L) = Async.ui {
         if (status != Status.RECORDING) return@ui
-        activeSinceMs?.let { activeAccumMs += System.currentTimeMillis() - it }
+        activeSinceMs?.let { activeAccumMs += (System.currentTimeMillis() - it - rewindMs).coerceAtLeast(0L) }
         activeSinceMs = null
         status = Status.PAUSED
         changed()

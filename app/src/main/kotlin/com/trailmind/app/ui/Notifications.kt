@@ -32,6 +32,7 @@ object Notifications {
     const val ID_FALL = 11
     const val ID_GROUP_HELP = 12
     const val ID_GROUP_FIND = 13
+    const val ID_AUTO_PAUSE = 14
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 

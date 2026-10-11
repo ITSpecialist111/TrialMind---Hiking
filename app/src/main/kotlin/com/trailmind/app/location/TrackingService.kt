@@ -25,6 +25,7 @@ import com.trailmind.app.ui.Notifications
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.TrackPoint
 import com.trailmind.core.nav.TrackFilter
+import com.trailmind.core.nav.VehicleDetector
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,6 +36,8 @@ import java.util.Locale
  * needs "while in use" location permission, not background location.
  *
  * Every accepted fix is written to SQLite immediately, so a crash or reboot loses at most one fix.
+ * The exception is a fix taken while the phone is moving faster than anyone walks: those are held back
+ * until it is clear whether it was a brief burst or a drive, and a drive pauses the hike (see [VehicleDetector]).
  */
 class TrackingService : Service(), LocationListener {
     private lateinit var thread: HandlerThread
@@ -46,6 +49,8 @@ class TrackingService : Service(), LocationListener {
     private var seq = 0
     private var segment = 0
     private val filter = TrackFilter()
+    private val vehicle = VehicleDetector()
+    private val held = ArrayList<TrackPoint>()
     private var lastCheckpointMs = 0L
     private var lastNotifyMs = 0L
     private var updatesActive = false
@@ -137,14 +142,16 @@ class TrackingService : Service(), LocationListener {
     private fun startNew(name: String?) {
         if (hikeId > 0) return
         val now = System.currentTimeMillis()
-        val title = name?.takeIf { it.isNotBlank() }
-            ?: "Hike " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(now))
+        val stamp = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(now))
+        val group = app.group.group?.takeIf { app.prefs.groupHikes }
+        val title = name?.takeIf { it.isNotBlank() } ?: if (group != null) "${group.name} · $stamp" else "Hike $stamp"
         val routeId = app.prefs.activeRouteId.takeIf { it > 0 }
         hikeId = app.db.createHike(title, now, routeId)
         seq = 0
         segment = 0
         paused = false
         filter.reset()
+        resetVehicleWatch()
         TrackingState.begin(hikeId, title, now, emptyList(), 0)
         startUpdates()
     }
@@ -158,27 +165,32 @@ class TrackingService : Service(), LocationListener {
         segment = (last?.second ?: -1) + 1
         val segments = app.db.hikeSegments(id)
         filter.reset()
+        resetVehicleWatch()
         paused = false
         app.db.setHikeStatus(id, HikeStatus.RECORDING)
         TrackingState.begin(id, h.name, h.startMs, segments, h.durationMs)
         startUpdates()
     }
 
-    private fun pause() {
+    /** [rewindMs] is time already counted as hiking that turned out to be a drive; [note] is the notification's text. */
+    private fun pause(rewindMs: Long = 0L, note: String = "Paused") {
         if (hikeId < 0) return
+        flushHeld()
         stopUpdates()
         paused = true
         app.db.setHikeStatus(hikeId, HikeStatus.PAUSED)
-        TrackingState.pause()
+        TrackingState.pause(rewindMs)
         checkpoint(force = true)
-        Notifications.manager(this).notify(Notifications.ID_TRACKING, buildNotification("Paused"))
+        Notifications.manager(this).notify(Notifications.ID_TRACKING, buildNotification(note))
     }
 
     private fun resume() {
         if (hikeId < 0) return
         segment++
         filter.reset()
+        resetVehicleWatch()
         paused = false
+        runCatching { Notifications.manager(this).cancel(Notifications.ID_AUTO_PAUSE) }
         app.db.setHikeStatus(hikeId, HikeStatus.RECORDING)
         TrackingState.resume()
         startUpdates()
@@ -187,11 +199,15 @@ class TrackingService : Service(), LocationListener {
     private fun finish() {
         stopUpdates()
         CheckIn.clear(this)
+        runCatching { Notifications.manager(this).cancel(Notifications.ID_AUTO_PAUSE) }
         if (hikeId > 0) {
             val id = hikeId
+            flushHeld()
             val active = TrackingState.activeMs()
             app.db.finalizeHike(id, System.currentTimeMillis(), active)
             finishedHikeId = id
+            // The group hikes still going on were this hike's invitation too; finishing first shouldn't draw you back in.
+            app.group.hikeFinished()
         }
         hikeId = -1
         TrackingState.end()
@@ -240,13 +256,16 @@ class TrackingService : Service(), LocationListener {
         CheckIn.check(this)
         if (hikeId < 0 || paused) return
         val p = TrackPoint(location.latitude, location.longitude, fix.altitudeM, location.time, fix.accuracyM)
-        if (filter.accept(p)) {
-            try {
-                app.db.appendHikePoint(hikeId, seq++, segment, p)
-            } catch (e: Exception) {
-                Log.e(TAG, "failed to store point", e)
+        when (vehicleVerdict(location)) {
+            VehicleDetector.Verdict.VEHICLE -> {
+                autoPause(location)
+                return
             }
-            TrackingState.add(p)
+            VehicleDetector.Verdict.MAYBE -> if (filter.accept(p)) held += p
+            VehicleDetector.Verdict.ON_FOOT -> {
+                flushHeld()
+                if (filter.accept(p)) store(p)
+            }
         }
         checkpoint(force = false)
         checkWeather()
@@ -261,6 +280,74 @@ class TrackingService : Service(), LocationListener {
                 Notifications.manager(this).notify(Notifications.ID_TRACKING, buildNotification(text))
             }
         }
+    }
+
+    private fun store(p: TrackPoint) {
+        try {
+            app.db.appendHikePoint(hikeId, seq++, segment, p)
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to store point", e)
+        }
+        TrackingState.add(p)
+    }
+
+    /** Writes the fixes held back during a fast stretch that turned out not to be a drive. */
+    private fun flushHeld() {
+        if (held.isEmpty()) return
+        val points = ArrayList(held)
+        held.clear()
+        points.forEach(::store)
+    }
+
+    private fun resetVehicleWatch() {
+        vehicle.reset()
+        held.clear()
+    }
+
+    private fun vehicleVerdict(location: Location): VehicleDetector.Verdict {
+        if (!app.prefs.autoPauseInVehicle) {
+            resetVehicleWatch()
+            return VehicleDetector.Verdict.ON_FOOT
+        }
+        return vehicle.onFix(
+            location.elapsedRealtimeNanos / 1_000_000, location.latitude, location.longitude,
+            if (location.hasAccuracy()) location.accuracy else null,
+            if (location.hasSpeed()) location.speed.toDouble() else null,
+        )
+    }
+
+    /**
+     * The hiker is in a vehicle (they forgot to pause at the car park): drop the fixes held back from the drive,
+     * take the drive's first half minute off the hiking time, and pause, which also switches the GPS off.
+     */
+    private fun autoPause(location: Location) {
+        val rewind = vehicle.runStartedMs?.let { location.elapsedRealtimeNanos / 1_000_000 - it } ?: 0L
+        held.clear()
+        vehicle.reset()
+        pause(rewind.coerceAtLeast(0L), "Paused: you seem to be in a vehicle")
+        notifyAutoPaused()
+    }
+
+    private fun notifyAutoPaused() {
+        val open = PendingIntent.getActivity(this, 12, Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
+        val resume = PendingIntent.getService(this, 2, Intent(this, TrackingService::class.java).setAction(ACTION_RESUME),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val finish = PendingIntent.getService(this, 3, Intent(this, TrackingService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val text = "You were moving faster than walking pace, so TrailMind paused your hike and switched the GPS off. " +
+            "Tap Resume when you are back on foot, or Finish to save it."
+        val n = Notification.Builder(this, Notifications.CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat_hike)
+            .setContentTitle("Hike paused: looks like you're in a vehicle")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, "Resume", resume).build())
+            .addAction(Notification.Action.Builder(null, "Finish", finish).build())
+            .build()
+        runCatching { Notifications.manager(this).notify(Notifications.ID_AUTO_PAUSE, n) }
     }
 
     private fun checkpoint(force: Boolean) {

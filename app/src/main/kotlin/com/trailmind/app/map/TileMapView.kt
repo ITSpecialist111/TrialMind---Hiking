@@ -35,6 +35,7 @@ import com.trailmind.core.nav.DistanceMarks
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /** Growable polyline stored in normalised Web Mercator coordinates (0..1) for fast drawing. */
 class MercatorLine(capacity: Int = 256) {
@@ -160,6 +161,13 @@ class TileMapView(context: Context) : View(context) {
     var hillshade: TileSource? = null
         set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
     private var hillshadeDrawn = false
+    /** A scanned historic map (Great Britain) drawn over the base map, or null when off. */
+    var historic: TileSource? = null
+        set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
+    /** How opaque the historic map is over the base map, 0–1. */
+    var historicAlpha = 0.55f
+        set(v) { val a = v.coerceIn(0.1f, 1f); if (field != a) { field = a; invalidate() } }
+    private var historicDrawn = false
     private val lidarCorners = HashMap<Long, LatLon>()
     private val bngFootprintVertices = HashMap<TileFootprint, MutableMap<Long, LatLon>>()
 
@@ -201,6 +209,7 @@ class TileMapView(context: Context) : View(context) {
 
     // --- paints (allocated once)
     private val tilePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val historicPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val hillshadePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         alpha = 150
         if (Build.VERSION.SDK_INT >= 29) blendMode = BlendMode.MULTIPLY
@@ -466,6 +475,7 @@ class TileMapView(context: Context) : View(context) {
         canvas.save()
         canvas.rotate(-bearing, w / 2, h / 2)
         drawTiles(canvas, w, h)
+        drawHistoric(canvas, w, h)
         drawHillshade(canvas, w, h)
         drawOfflineAreas(canvas, w, h)
         drawLidar(canvas, w, h)
@@ -565,6 +575,16 @@ class TileMapView(context: Context) : View(context) {
             }
         }
         return drawn
+    }
+
+    /** An old Ordnance Survey map faded over the base map, so what has gone shows through what is there now. */
+    private fun drawHistoric(canvas: Canvas, w: Float, h: Float) {
+        historicDrawn = false
+        val s = historic ?: return
+        val zf = floor(zoom).toInt()
+        if (zf < s.minZoom || !TileSources.overlapsBritain(visibleBounds())) return
+        historicPaint.alpha = (historicAlpha * 255).roundToInt()
+        historicDrawn = drawMercatorTiles(canvas, w, h, s, zf.coerceAtMost(s.maxZoom), historicPaint, gridLines = false)
     }
 
     /** GSI hill shading of Japan, multiplied into whatever base map is showing. */
@@ -1095,6 +1115,7 @@ class TileMapView(context: Context) : View(context) {
         val metres = nice.lastOrNull { it / mpp <= maxPx } ?: nice.first()
         val px = (metres / mpp).toFloat()
         val credits = listOfNotNull(
+            historic?.attribution.takeIf { historicDrawn },
             TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM },
             LidarProvider.CREDIT.takeIf { lidarDrawn },
             "Hill shading: ${TileSources.GSI_ATTRIBUTION}".takeIf { hillshadeDrawn && source.attribution != TileSources.GSI_ATTRIBUTION },

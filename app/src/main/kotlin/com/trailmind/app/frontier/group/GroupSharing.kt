@@ -27,6 +27,7 @@ import com.trailmind.core.frontier.group.GroupAdvert
 import com.trailmind.core.frontier.group.GroupCode
 import com.trailmind.core.frontier.group.GroupFrame
 import com.trailmind.core.frontier.group.GroupFrames
+import com.trailmind.core.frontier.group.GroupHikeWatch
 import com.trailmind.core.frontier.group.GroupKeys
 import com.trailmind.core.frontier.group.PeerTable
 import com.trailmind.core.frontier.group.PositionFrame
@@ -77,7 +78,14 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     private val random = SecureRandom()
     private val listeners = CopyOnWriteArraySet<() -> Unit>()
     private val relay = RelayPolicy()
+    private val hikeWatch = GroupHikeWatch()
     private var table = PeerTable(0)
+
+    /**
+     * Told (on the main thread, with the member's name) that someone in the group is recording a group hike that this
+     * phone isn't. Set while TrailMind is on screen, which is the only time an idle phone listens to the group.
+     */
+    @Volatile var groupHikeHandler: ((String) -> Unit)? = null
 
     /** Finding a member up close with UWB, over this radio. */
     val finder = GroupFinder(app, handler, object : GroupFinder.Host {
@@ -143,6 +151,16 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
 
     fun setRecording(on: Boolean) {
         handler.post { recording = on; reconcile() }
+    }
+
+    /** This phone's hike has ended: the group hikes still going on were its invitation too, so they aren't offered back. */
+    fun hikeFinished() {
+        handler.post { hikeWatch.handleAll(table.peers(), System.currentTimeMillis()) }
+    }
+
+    /** The offer for [memberId] couldn't be shown (the screen went off first), so it may be made again. */
+    private fun offerLost(memberId: Int) {
+        handler.post { hikeWatch.forget(memberId) }
     }
 
     fun settingsChanged() {
@@ -315,6 +333,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         saveGroup(g)
         table = PeerTable(g.memberId)
         relay.clear()
+        hikeWatch.clear()
         helpAlerted.clear()
         savedMs.clear()
         ownFrame = null
@@ -339,6 +358,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         app.db.deleteTripGroups()
         table = PeerTable(0)
         relay.clear()
+        hikeWatch.clear()
         helpAlerted.clear()
         savedMs.clear()
         ownFrame = null
@@ -360,6 +380,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         }
         if (boostUntilMs in 1..now) boostUntilMs = 0
         finder.tick()
+        checkGroupHike()
         val e = GroupKeys.epoch(nowS())
         val rotate = epoch != Long.MIN_VALUE && e != epoch
         epoch = e
@@ -457,15 +478,26 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
     }
 
     private fun flags(): Int = when (TrackingState.status) {
-        TrackingState.Status.RECORDING -> GroupFrames.FLAG_RECORDING
-        TrackingState.Status.PAUSED -> GroupFrames.FLAG_PAUSED
+        TrackingState.Status.RECORDING ->
+            GroupFrames.FLAG_RECORDING or if (app.prefs.groupHikes) GroupFrames.FLAG_GROUP_HIKE else 0
+        TrackingState.Status.PAUSED -> GroupFrames.FLAG_PAUSED or if (app.prefs.groupHikes) GroupFrames.FLAG_GROUP_HIKE else 0
         TrackingState.Status.IDLE -> 0
+    }
+
+    /** Offers this phone's user the group hike another member is recording, once, when it isn't recording itself. */
+    private fun checkGroupHike() {
+        val sink = groupHikeHandler ?: return
+        if (!app.prefs.groupHikes || !uiVisible || recording || TrackingState.status != TrackingState.Status.IDLE) return
+        val peer = hikeWatch.next(table.peers(), nowS(), System.currentTimeMillis()) ?: return
+        val who = nameOf(peer)
+        Async.ui { if (groupHikeHandler === sink) sink(who) else offerLost(peer.memberId) }
     }
 
     private fun news(frame: GroupFrame, nowMs: Long) {
         val peer = table.peer(frame.memberId) ?: return
         var important = frame is ProfileFrame
         if (frame is PositionFrame) {
+            checkGroupHike()
             if (frame.status.needsHelp) {
                 alertHelp(peer, frame)
                 important = true

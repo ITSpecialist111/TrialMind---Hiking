@@ -600,6 +600,10 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Offline map", R.drawable.ic_download, Ui.B.TONAL) { host.push(OfflinePage(host, routeId)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.TONAL) { host.push(AssistantPage(host, routeId)) }, ui.lp(0, weight = 1f))
             })
+            addView(ui.button("See it on an old map", R.drawable.ic_layers, Ui.B.TONAL) {
+                if (!following) app.nav.follow(routeId)
+                host.map.showOldMap(box = BoundingBox.of(d.points.map { it.latLon() }))
+            })
             addView(ui.card(spacing = 8) {
                 addView(ui.text("Facilities along the way", Ui.T.TITLE))
                 val saved = facilities

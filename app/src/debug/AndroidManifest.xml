@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:usesCleartextTraffic="true">
+        <!-- Debug builds only: lets adb stand in for the Bluetooth radio when testing trip groups on an emulator,
+             and lets the old-maps tests use a plain-HTTP mock tile server on the host. -->
+        <receiver
+            android:name="com.trailmind.app.debug.DebugReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

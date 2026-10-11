@@ -238,6 +238,39 @@ class Prefs(context: Context) {
         get() = sp.getLong("group_sequence", 0L)
         set(v) = sp.edit().putLong("group_sequence", v).apply()
 
+    /**
+     * Hikes are logged for the whole trip group: starting one invites the others to record theirs, and
+     * another member's group hike is joined on this phone too.
+     */
+    var groupHikes: Boolean
+        get() = sp.getBoolean("group_hikes", true)
+        set(v) = sp.edit().putBoolean("group_hikes", v).apply()
+
+    /** Ask before recording because a member started a group hike, instead of starting straight away. */
+    var groupHikesAsk: Boolean
+        get() = sp.getBoolean("group_hikes_ask", false)
+        set(v) = sp.edit().putBoolean("group_hikes_ask", v).apply()
+
+    /** Pause the hike when the phone is moving at vehicle speed for half a minute. */
+    var autoPauseInVehicle: Boolean
+        get() = sp.getBoolean("auto_pause_vehicle", true)
+        set(v) = sp.edit().putBoolean("auto_pause_vehicle", v).apply()
+
+    /** The user's own MapTiler Cloud key, which serves the National Library of Scotland's old maps. Never bundled. */
+    var mapTilerKey: String
+        get() = sp.getString("maptiler_key", "") ?: ""
+        set(v) = sp.edit().putString("maptiler_key", v.trim()).apply()
+
+    /** An old map drawn over the base map (a [com.trailmind.app.map.TileSource] id), or empty for none. */
+    var historicOverlayId: String
+        get() = sp.getString("historic_overlay", "") ?: ""
+        set(v) = sp.edit().putString("historic_overlay", v).apply()
+
+    /** How much of the old map shows through over the base map, 10–100 %. */
+    var historicOverlayPercent: Int
+        get() = sp.getInt("historic_overlay_percent", 55).coerceIn(10, 100)
+        set(v) = sp.edit().putInt("historic_overlay_percent", v.coerceIn(10, 100)).apply()
+
     var frontierEmergencyStatus: Int
         get() = sp.getInt("frontier_emergency_status", 0)
         set(v) = sp.edit().putInt("frontier_emergency_status", v).apply()

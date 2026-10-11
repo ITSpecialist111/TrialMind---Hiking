@@ -188,7 +188,8 @@ fun showGroupMember(host: MainActivity, peer: PeerTable.Peer) {
         lines += "Accuracy ±${pos.accuracyM} m · battery ${pos.batteryPercent}%"
         when {
             pos.flags and GroupFrames.FLAG_PAUSED != 0 -> lines += "Hike paused"
-            pos.flags and GroupFrames.FLAG_RECORDING != 0 -> lines += "Recording a hike"
+            pos.flags and GroupFrames.FLAG_RECORDING != 0 ->
+                lines += if (pos.flags and GroupFrames.FLAG_GROUP_HIKE != 0) "Recording a group hike" else "Recording a hike"
         }
     }
     val now = System.currentTimeMillis()
@@ -340,6 +341,17 @@ class GroupPage(host: MainActivity) : Page(host) {
             addView(ui.text("Trip ends " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(g.expiresMs)), Ui.T.BODY))
             addView(ui.text("Then this phone stops sharing and deletes the group. A hike that's still recording keeps it going.", Ui.T.CAPTION))
             addView(ui.button("Add a day", R.drawable.ic_add, Ui.B.TONAL) { sharing.extend(); host.toast("The trip now ends a day later.") })
+        })
+
+        addView(ui.card(spacing = 4) {
+            addView(ui.text("Group hikes", Ui.T.TITLE))
+            addView(ui.switch("Log hikes for everyone in the group", prefs.groupHikes) { on ->
+                prefs.groupHikes = on; sharing.settingsChanged(); refresh()
+            })
+            if (prefs.groupHikes) addView(ui.switch("Ask me before recording a group hike", prefs.groupHikesAsk) { prefs.groupHikesAsk = it })
+            addView(ui.text("When someone in the group starts a hike, everyone else's TrailMind records its own copy, with its own track, time and distance. " +
+                "Your phone does the same when you start one. It only reaches members whose TrailMind is open or recording, and it never uploads anything: " +
+                "each hike is saved on the phone that recorded it. You still finish yours yourself.", Ui.T.CAPTION))
         })
 
         addView(ui.card(spacing = 4) {
