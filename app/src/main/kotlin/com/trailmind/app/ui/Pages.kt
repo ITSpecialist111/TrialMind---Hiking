@@ -25,6 +25,7 @@ import com.trailmind.app.data.RouteData
 import com.trailmind.app.data.RouteMeta
 import com.trailmind.app.data.SavedFacilities
 import com.trailmind.app.data.SavedLidarCheck
+import com.trailmind.app.data.StravaPostRow
 import com.trailmind.app.data.WaymarkedTrails
 import com.trailmind.app.location.TrackingState
 import com.trailmind.app.location.CheckIn
@@ -48,6 +49,8 @@ import com.trailmind.core.map.BngTiles
 import com.trailmind.core.gpx.GpxWriter
 import com.trailmind.core.stats.HikeEstimator
 import com.trailmind.core.stats.TrackStats
+import com.trailmind.core.strava.StravaPolicy
+import com.trailmind.core.strava.StravaPostState
 import java.io.StringWriter
 import java.text.DateFormat
 import java.util.Date
@@ -600,6 +603,10 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 addView(ui.button("Offline map", R.drawable.ic_download, Ui.B.TONAL) { host.push(OfflinePage(host, routeId)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.TONAL) { host.push(AssistantPage(host, routeId)) }, ui.lp(0, weight = 1f))
             })
+            addView(ui.button("See it on an old map", R.drawable.ic_layers, Ui.B.TONAL) {
+                if (!following) app.nav.follow(routeId)
+                host.map.showOldMap(box = BoundingBox.of(d.points.map { it.latLon() }))
+            })
             addView(ui.card(spacing = 8) {
                 addView(ui.text("Facilities along the way", Ui.T.TITLE))
                 val saved = facilities
@@ -753,15 +760,20 @@ class HikesPage(host: MainActivity) : Page(host) {
 class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) {
     private var meta: HikeMeta? = null
     private var segments: List<List<TrackPoint>> = emptyList()
+    private var post: StravaPostRow? = null
     private var loaded = false
+    private val onStrava: () -> Unit = { load() }
 
     override fun onShow() {
+        app.strava.addListener(onStrava)
         if (!loaded) load()
     }
 
-    private fun load() = Async.run({ app.db.hike(hikeId) to app.db.hikeSegments(hikeId) }) { r ->
+    override fun onHide() { app.strava.removeListener(onStrava) }
+
+    private fun load() = Async.run({ Triple(app.db.hike(hikeId), app.db.hikeSegments(hikeId), app.db.stravaPost(hikeId)) }) { r ->
         loaded = true
-        r.getOrNull()?.let { meta = it.first; segments = it.second }
+        r.getOrNull()?.let { meta = it.first; segments = it.second; post = it.third }
         refresh()
     }
 
@@ -802,8 +814,8 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
                     addView(ui.button("Save GPX", R.drawable.ic_folder) { host.saveGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                     addView(ui.button("Share GPX", R.drawable.ic_share, Ui.B.TONAL) { host.shareGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                 })
-                addView(ui.button("Upload to Strava…", R.drawable.ic_upload, Ui.B.OUTLINED) { stravaHelp(h) })
             })
+            addView(stravaCard(h, live))
             addView(ui.row {
                 addView(ui.button("Rename", null, Ui.B.TEXT) {
                     ui.prompt("Rename hike", h.name, type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES) { n ->
@@ -825,17 +837,72 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
         GpxWriter.writeTrack(it, h.name, segments, description = "Recorded with TrailMind", activityType = "hiking")
     }.toString()
 
+    /** Where this hike is with Strava, and what the user can do about it. */
+    private fun stravaCard(h: HikeMeta, live: Boolean): View = ui.card(spacing = 8) {
+        val strava = app.strava
+        val row = post
+        addView(ui.text("Strava", Ui.T.LABEL))
+        fun connect(label: String) = addView(ui.button(label, R.drawable.ic_upload, Ui.B.TEXT) { host.push(StravaPage(host)) })
+        // The way in that works for everyone: Strava's own upload page, with the GPX already in Downloads.
+        fun byHand() {
+            if (live) { addView(ui.text("You can upload it to Strava once it's finished.", Ui.T.CAPTION)); return }
+            addView(ui.text("Saves the GPX to your Downloads and opens Strava's upload page. Tap Choose file, pick it, then Save.", Ui.T.CAPTION))
+            addView(ui.button("Upload to Strava", R.drawable.ic_upload, Ui.B.TONAL) { uploadByHand(h) })
+        }
+        when {
+            strava.needsReconnect -> {
+                addView(ui.text("Strava stopped accepting TrailMind, so this hike can't be posted by itself.", Ui.T.CAPTION, p.danger))
+                connect("Connect to Strava again")
+                byHand()
+            }
+            !strava.linked -> {
+                byHand()
+                addView(ui.text("Automatic posting needs a Strava subscription: Strava only lets subscribers create the app that posting uses.", Ui.T.CAPTION))
+                connect("Set up automatic posting…")
+            }
+            row == null -> {
+                addView(ui.text(if (live) "You can post it once it's finished." else "Not posted to Strava.", Ui.T.CAPTION))
+                if (!live) addView(ui.button("Post to Strava", R.drawable.ic_upload, Ui.B.TONAL) { strava.postNow(h.id) })
+            }
+            row.state == StravaPostState.QUEUED -> {
+                addView(ui.text("Waiting to post. ${row.message ?: "It goes as soon as the phone has signal."}", Ui.T.CAPTION))
+                addView(ui.button("Post now", R.drawable.ic_upload, Ui.B.TONAL) { strava.postNow(h.id) })
+            }
+            row.state == StravaPostState.PROCESSING -> addView(ui.text("Strava is processing this hike…", Ui.T.CAPTION))
+            row.state == StravaPostState.POSTED -> {
+                val id = row.activityId
+                addView(ui.text(if (id != null) "Posted to Strava ✓" else row.message ?: "On Strava ✓", Ui.T.BODY, p.primary))
+                if (id != null) addView(ui.button("View on Strava", null, Ui.B.TONAL) { host.openUrl(StravaPolicy.activityUrl(id)) })
+            }
+            row.state == StravaPostState.FAILED -> {
+                addView(ui.text("Couldn't post this hike. ${row.message.orEmpty()}", Ui.T.CAPTION, p.danger))
+                addView(ui.button("Try again", R.drawable.ic_upload, Ui.B.TONAL) { strava.postNow(h.id) })
+            }
+            else -> {
+                addView(ui.text(row.message ?: "Not posted to Strava.", Ui.T.CAPTION))
+                if (!live) addView(ui.button("Post anyway", R.drawable.ic_upload, Ui.B.TONAL) { strava.postNow(h.id) })
+            }
+        }
+    }
+
+    /** Saves the GPX to Downloads and opens Strava's upload page, where the file is the first one offered. */
+    private fun uploadByHand(h: HikeMeta) {
+        val saved = host.saveGpxToDownloads(fileBase(h), gpx(h))
+        if (saved == null) { stravaHelp(h); return }
+        host.toast("Saved $saved to Downloads. On Strava, tap Choose file and pick it.")
+        host.openInBrowser(StravaPolicy.UPLOAD_PAGE_URL)
+    }
+
+    // Older phones can't be saved to quietly, so the user chooses where the file goes.
     private fun stravaHelp(h: HikeMeta) {
-        val msg = "TrailMind has no direct Strava connection. Strava's API requires OAuth with a registered app and a client secret that must stay on a server, " +
-            "and embedding one in an app would be insecure.\n\n" +
-            "Reliable manual upload:\n" +
-            "1. Save the GPX (e.g. to Downloads or Drive).\n" +
-            "2. Open strava.com/upload/select in a browser (use 'Desktop site' on a phone) and choose the file.\n\n" +
+        val msg = "To upload this hike to Strava:\n" +
+            "1. Save the GPX (to Downloads, say).\n" +
+            "2. Open Strava's upload page in your browser and choose the file.\n\n" +
             "The GPX includes timestamps, elevation and the activity type 'hiking'."
         ui.dialog().setTitle("Upload to Strava")
             .setMessage(msg)
             .setPositiveButton("Save GPX") { _, _ -> host.saveGpx(fileBase(h), gpx(h)) }
-            .setNeutralButton("Open upload page") { _, _ -> host.openUrl("https://www.strava.com/upload/select") }
+            .setNeutralButton("Open upload page") { _, _ -> host.openInBrowser(StravaPolicy.UPLOAD_PAGE_URL) }
             .setNegativeButton("Close", null)
             .show()
     }

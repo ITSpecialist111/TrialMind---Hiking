@@ -26,6 +26,7 @@ abstract class Page(val host: MainActivity) {
         val scrollY = pendingScroll?.second ?: firstScroll(root)?.scrollY ?: 0
         root.removeAllViews()
         root.addView(render(), FrameLayout.LayoutParams(-1, -1))
+        applyBottomInset()
         pendingScroll = null
         if (scrollY > 0) firstScroll(root)?.let { s ->
             pendingScroll = s to scrollY
@@ -39,7 +40,25 @@ abstract class Page(val host: MainActivity) {
         else -> null
     }
 
-    fun setBottomInset(px: Int) = root.setPadding(0, 0, 0, px)
+    private var bottomInset = 0
+
+    /**
+     * Keeps the page's last content clear of the floating navigation. The padding goes on the scrolling list, not the
+     * page, so content scrolls under the capsule instead of stopping short of it.
+     */
+    fun setBottomInset(px: Int) {
+        bottomInset = px
+        applyBottomInset()
+    }
+
+    private fun applyBottomInset() {
+        val scroll = firstScroll(root)
+        if (scroll != null) {
+            root.setPadding(0, 0, 0, 0)
+            scroll.clipToPadding = false
+            scroll.setPadding(scroll.paddingLeft, scroll.paddingTop, scroll.paddingRight, bottomInset)
+        } else root.setPadding(0, 0, 0, bottomInset)
+    }
 
     open fun onShow() {}
     open fun onHide() {}

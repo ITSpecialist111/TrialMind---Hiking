@@ -9,6 +9,12 @@ import java.util.Calendar
 /** How a source's z/x/y tiles are laid out. */
 enum class TileGrid { WEB_MERCATOR, BRITISH_NATIONAL_GRID }
 
+/** Whose key a source's `{key}` is: the user brings their own for each, and neither is ever bundled. */
+enum class KeyKind(val label: String) {
+    OS("OS Data Hub API key"),
+    MAPTILER("MapTiler key"),
+}
+
 /**
  * A raster tile source, in Web Mercator (EPSG:3857) unless [grid] says otherwise. Either online (URL
  * template) or an imported MBTiles pack ([packId]).
@@ -33,6 +39,10 @@ data class TileSource(
     val showsOsLogo: Boolean = false,
     /** Drawn over the base map (from the Overlays menu), never picked as the base map itself. */
     val overlay: Boolean = false,
+    /** Which key [requiresKey] means. */
+    val keyKind: KeyKind = KeyKind.OS,
+    /** A scanned historic map, drawn over the base map with an adjustable fade. */
+    val historic: Boolean = false,
 ) {
     val isOnline: Boolean get() = template != null
 
@@ -55,12 +65,29 @@ object TileSources {
     const val CUSTOM = "custom"
     const val GSI_ATTRIBUTION = "出典：国土地理院 (Geospatial Information Authority of Japan)"
 
+    const val NLS_1900S = "nls_1900s"
+    const val NLS_SIX_INCH = "nls_six_inch"
+    const val NLS_1920S = "nls_1920s"
+    const val NLS_25K = "nls_25k"
+    const val NLS_ONE_INCH_7TH = "nls_one_inch_7th"
+    const val NLS_ONE_INCH_HILLS = "nls_one_inch_hills"
+    const val NLS_ATTRIBUTION = "Old map: Ordnance Survey via National Library of Scotland (CC BY 3.0), MapTiler"
+    const val OLD_MAP_PREFIX = "Old map – "
+
+    /** Where the old maps open: the middle of the Forest of Dean and the lower Wye, around Coleford and Parkend. */
+    const val FOREST_OF_DEAN_LAT = 51.78
+    const val FOREST_OF_DEAN_LON = -2.55
+    const val FOREST_OF_DEAN_ZOOM = 14.0
+
     // Where the map credits lead: OSM's licence and error reporting, OS's terms and its Errors and Omissions Tool.
     const val OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright"
     const val OSM_FIX_THE_MAP_URL = "https://www.openstreetmap.org/fixthemap"
     const val OS_TERMS_URL = "https://www.ordnancesurvey.co.uk/legal"
     const val OS_ERRORS_URL = "https://osdatahub.os.uk/apps/errors-and-omissions"
     const val GSI_TILES_URL = "https://maps.gsi.go.jp/development/ichiran.html"
+    const val NLS_MAPS_URL = "https://maps.nls.uk/projects/api/"
+    const val MAPTILER_CLOUD_URL = "https://cloud.maptiler.com/account/keys/"
+    const val MAPTILER_COPYRIGHT_URL = "https://www.maptiler.com/copyright/"
 
     private fun year() = Calendar.getInstance().get(Calendar.YEAR)
 
@@ -159,6 +186,60 @@ object TileSources {
     /** GSI's Japan-only overlay tiles exist only around Japan; elsewhere they are not requested. */
     fun overlapsJapan(b: BoundingBox) = b.maxLat >= 20.0 && b.minLat <= 46.0 && b.maxLon >= 122.0 && b.minLon <= 154.0
 
+    /** The old Ordnance Survey series cover Great Britain only; elsewhere their tiles are not requested. */
+    fun overlapsBritain(b: BoundingBox) = b.maxLat >= 49.8 && b.minLat <= 61.0 && b.maxLon >= -8.7 && b.minLon <= 2.0
+
+    /** The old maps' tile service. Only tests change this, to point at a server of their own. */
+    @Volatile var historicBaseUrl = "https://api.maptiler.com/tiles"
+
+    private fun nls(id: String, tileset: String, label: String, minZoom: Int, maxZoom: Int, note: String) = TileSource(
+        id = id,
+        name = "$OLD_MAP_PREFIX$label",
+        template = "$historicBaseUrl/$tileset/{z}/{x}/{y}.jpg?key={key}",
+        attribution = NLS_ATTRIBUTION,
+        minZoom = minZoom,
+        maxZoom = maxZoom,
+        requiresKey = true,
+        keyKind = KeyKind.MAPTILER,
+        overlay = true,
+        historic = true,
+        // MapTiler's terms forbid bulk downloads, so these are browsed live and only cached briefly, like OpenStreetMap.
+        note = "$note Covers the Forest of Dean and the rest of Great Britain. Needs your own free MapTiler key (Settings). " +
+            "Online only: MapTiler's terms don't allow saving these maps for offline use. Zoomed in past the original scale, " +
+            "the last tiles are enlarged.",
+    )
+
+    /**
+     * Scanned Ordnance Survey maps of Great Britain, from 1885 to 1961, served by MapTiler Cloud with the user's own
+     * key. They are the National Library of Scotland's scans, but cover England and Wales as fully as Scotland: every
+     * sheet around the Forest of Dean is in them. Drawn over the current map with a fade, so what has gone shows
+     * through what is there now. Kept apart from [builtIns] because these need a different key and are never downloaded.
+     * Best first: the six-inch is the one for the Forest's mines, scowles, tramroads and quarries.
+     */
+    fun historic(): List<TileSource> = listOf(
+        nls(NLS_SIX_INCH, "uk-osgb10k1888", "OS six-inch 1888–1913", 10, 17,
+            "The most detailed old map, and the one for the Forest of Dean: its coal and iron workings, levels and scowles, " +
+                "tramroads and railways, quarries, kilns, forges and mills as they were around 1900, many of them gone from today's maps."),
+        nls(NLS_25K, "uk-osgb25k1937", "OS 1:25,000 1937–61", 10, 16,
+            "The first 1:25,000 maps, between the wars and just after, with old routeways, earthworks, cairns and standing stones marked."),
+        nls(NLS_1900S, "uk-osgb1888", "OS around 1900, all scales", 5, 17,
+            "The Ordnance Survey of the 1880s–1910s at every scale, so it reads from the whole country down to individual farms."),
+        nls(NLS_ONE_INCH_7TH, "uk-osgb63k1955", "OS one-inch 1955–61", 7, 15,
+            "The last one-inch series, forerunner of Landranger: paths, woods, old railways and land use after the war."),
+        nls(NLS_ONE_INCH_HILLS, "uk-osgb63k1885", "OS one-inch 1885–1903", 7, 16,
+            "Victorian one-inch with hill hachures: settlement, roads, parkland and woodland at the end of the 1800s."),
+        nls(NLS_1920S, "uk-osgb1919", "OS 1920s–40s, all scales", 5, 14,
+            "Between the wars: railways at their peak and the tracks used before the motor car took over, at several scales."),
+    )
+
+    /** The user's key for [s], empty when they haven't entered it. */
+    fun keyFor(s: TileSource, prefs: Prefs): String = when (s.keyKind) {
+        KeyKind.OS -> prefs.osApiKey
+        KeyKind.MAPTILER -> prefs.mapTilerKey
+    }
+
+    fun missingKey(s: TileSource, prefs: Prefs): Boolean = s.requiresKey && keyFor(s, prefs).isBlank()
+
     fun custom(prefs: Prefs): TileSource? {
         val t = prefs.customTemplate
         if (t.isBlank() || TilePolicy.validateTemplate(t) != null) return null
@@ -188,12 +269,15 @@ object TileSources {
     )
 
     fun all(prefs: Prefs, packs: List<PackMeta>): List<TileSource> =
-        builtIns() + listOfNotNull(custom(prefs)) +
+        builtIns() + historic() + listOfNotNull(custom(prefs)) +
             packs.filter { it.kind == com.trailmind.app.data.PackKind.IMPORT }.map { fromPack(it) }
 
     fun baseLayers(prefs: Prefs, packs: List<PackMeta>): List<TileSource> = all(prefs, packs).filterNot { it.overlay }
 
     fun hillshade(): TileSource = builtIns().single { it.id == GSI_HILLSHADE }
+
+    /** The old map the user chose to draw over the base map, or null for none. */
+    fun historicOverlay(prefs: Prefs): TileSource? = historic().firstOrNull { it.id == prefs.historicOverlayId }
 
     fun byId(id: String, prefs: Prefs, packs: List<PackMeta>): TileSource =
         all(prefs, packs).firstOrNull { it.id == id } ?: builtIns().first()

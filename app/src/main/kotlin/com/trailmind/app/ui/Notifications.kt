@@ -18,6 +18,7 @@ object Notifications {
     const val CH_SOS = "sos_status"
     const val CH_GROUP = "trip_group"
     const val CH_GROUP_FIND = "trip_group_find"
+    const val CH_STRAVA = "strava"
 
     const val ID_TRACKING = 1
     const val ID_OFF_ROUTE = 2
@@ -32,6 +33,9 @@ object Notifications {
     const val ID_FALL = 11
     const val ID_GROUP_HELP = 12
     const val ID_GROUP_FIND = 13
+    const val ID_AUTO_PAUSE = 14
+    const val ID_STRAVA = 15
+    const val ID_STRAVA_POSTED = 16
 
     fun manager(ctx: Context): NotificationManager = ctx.getSystemService(NotificationManager::class.java)
 
@@ -71,6 +75,10 @@ object Notifications {
         })
         m.createNotificationChannel(NotificationChannel(CH_GROUP_FIND, "Being found by your group", NotificationManager.IMPORTANCE_LOW).apply {
             description = "Shown while someone in your trip group finds this phone up close with UWB"
+            setShowBadge(false)
+        })
+        m.createNotificationChannel(NotificationChannel(CH_STRAVA, "Strava", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "When a hike has been posted to Strava, or Strava needs you to connect again"
             setShowBadge(false)
         })
         m.createNotificationChannel(NotificationChannel(CH_DOWNLOADS, "Offline map downloads", NotificationManager.IMPORTANCE_LOW).apply {

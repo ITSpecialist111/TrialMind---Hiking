@@ -22,6 +22,8 @@ object TilePolicy {
         "googleapis.com",
         "bing.com",
         "virtualearth.net",
+        // MapTiler Cloud's terms: no batch or bulk downloading of tiles.
+        "maptiler.com",
     )
 
     const val MAX_TILES_PER_DOWNLOAD = 25_000

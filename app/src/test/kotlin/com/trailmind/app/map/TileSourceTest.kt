@@ -115,4 +115,60 @@ class TileSourceTest {
         assertTrue(TileSources.overlapsJapan(BoundingBox(35.3, 138.6, 35.5, 138.9)))
         assertFalse(TileSources.overlapsJapan(BoundingBox(51.7, -2.6, 51.8, -2.5)))
     }
+
+    @Test
+    fun oldMapsAreMapTilerOverlaysThatAreNeverSavedOffline() {
+        val old = TileSources.historic()
+        assertEquals(6, old.size)
+        assertEquals(old.size, old.map { it.id }.toSet().size)
+        old.forEach { s ->
+            assertTrue(s.historic && s.overlay && s.requiresKey, s.id)
+            assertEquals(KeyKind.MAPTILER, s.keyKind, s.id)
+            assertEquals(null, TilePolicy.validateTemplate(s.template!!), s.id)
+            assertTrue(s.template!!.startsWith("https://api.maptiler.com/tiles/") && s.template!!.contains("{key}"), s.id)
+            // MapTiler's terms forbid bulk downloads, so even a pasted copy of the template can't be downloaded.
+            assertTrue(TilePolicy.isBulkDownloadForbidden(s.template!!), s.id)
+            assertFalse(s.offlineDownloadAllowed, s.id)
+            (0..TilePolicy.MAX_ZOOM).forEach { assertFalse(s.canStoreInPack(it), "${s.id} zoom $it must not enter MBTiles") }
+            assertEquals(null, s.premiumFromZoom, s.id)
+            assertTrue(s.attribution.contains("National Library of Scotland"), s.id)
+            assertTrue(s.minZoom in 5..10 && s.maxZoom in 14..17, s.id)
+        }
+    }
+
+    @Test
+    fun eachOldMapStopsAtTheZoomMapTilerServesIt() {
+        // Read from MapTiler's tiles.json and confirmed with real tiles: one level further is HTTP 400.
+        val served = mapOf(
+            TileSources.NLS_SIX_INCH to 17, TileSources.NLS_25K to 16, TileSources.NLS_1900S to 17,
+            TileSources.NLS_ONE_INCH_7TH to 15, TileSources.NLS_ONE_INCH_HILLS to 16, TileSources.NLS_1920S to 14,
+        )
+        served.forEach { (id, zoom) -> assertEquals(zoom, TileSources.historic().first { it.id == id }.maxZoom, id) }
+    }
+
+    @Test
+    fun oldMapsStayOutOfTheBuiltInsTheOsLicenceTestsLookAt() {
+        assertTrue(TileSources.builtIns().none { it.historic || it.keyKind != KeyKind.OS })
+        assertEquals(listOf(TileSources.GSI_HILLSHADE), TileSources.builtIns().filter { it.overlay }.map { it.id })
+    }
+
+    @Test
+    fun oldMapsOpenOnTheForestOfDeanWithTheSixInchFirst() {
+        assertEquals(TileSources.NLS_SIX_INCH, TileSources.historic().first().id)
+        val d = 0.05
+        assertTrue(TileSources.overlapsBritain(BoundingBox(
+            TileSources.FOREST_OF_DEAN_LAT - d, TileSources.FOREST_OF_DEAN_LON - d,
+            TileSources.FOREST_OF_DEAN_LAT + d, TileSources.FOREST_OF_DEAN_LON + d)))
+        TileSources.historic().forEach { s ->
+            assertTrue(TileSources.FOREST_OF_DEAN_ZOOM >= s.minZoom && TileSources.FOREST_OF_DEAN_ZOOM <= s.maxZoom + 4, s.id)
+        }
+    }
+
+    @Test
+    fun oldMapsAreOnlyRequestedOverBritain() {
+        assertTrue(TileSources.overlapsBritain(BoundingBox(51.7, -2.6, 51.8, -2.5)))
+        assertTrue(TileSources.overlapsBritain(BoundingBox(57.0, -6.5, 58.0, -5.0)))
+        assertFalse(TileSources.overlapsBritain(BoundingBox(35.3, 138.6, 35.5, 138.9)))
+        assertFalse(TileSources.overlapsBritain(BoundingBox(48.0, 2.0, 48.9, 2.6)))
+    }
 }
