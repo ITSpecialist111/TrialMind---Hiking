@@ -132,8 +132,18 @@ class TileSourceTest {
             (0..TilePolicy.MAX_ZOOM).forEach { assertFalse(s.canStoreInPack(it), "${s.id} zoom $it must not enter MBTiles") }
             assertEquals(null, s.premiumFromZoom, s.id)
             assertTrue(s.attribution.contains("National Library of Scotland"), s.id)
-            assertTrue(s.minZoom in 5..10 && s.maxZoom in 15..17, s.id)
+            assertTrue(s.minZoom in 5..10 && s.maxZoom in 14..17, s.id)
         }
+    }
+
+    @Test
+    fun eachOldMapStopsAtTheZoomMapTilerServesIt() {
+        // Read from MapTiler's tiles.json and confirmed with real tiles: one level further is HTTP 400.
+        val served = mapOf(
+            TileSources.NLS_SIX_INCH to 17, TileSources.NLS_25K to 16, TileSources.NLS_1900S to 17,
+            TileSources.NLS_ONE_INCH_7TH to 15, TileSources.NLS_ONE_INCH_HILLS to 16, TileSources.NLS_1920S to 14,
+        )
+        served.forEach { (id, zoom) -> assertEquals(zoom, TileSources.historic().first { it.id == id }.maxZoom, id) }
     }
 
     @Test

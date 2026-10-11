@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import com.trailmind.app.TrailMindApp
 import com.trailmind.app.map.TileSources
+import com.trailmind.app.strava.StravaApi
 import com.trailmind.core.frontier.EmergencyStatus
 import com.trailmind.core.frontier.group.GroupAdvert
 import com.trailmind.core.frontier.group.PositionFrame
@@ -34,6 +35,16 @@ class DebugReceiver : BroadcastReceiver() {
                 TileSources.historicBaseUrl = intent.getStringExtra("url") ?: "https://api.maptiler.com/tiles"
                 app.tiles.clearErrors()
                 Log.i(TAG, "old maps now come from ${TileSources.historicBaseUrl}")
+            }
+            ACTION_STRAVA_URL -> {
+                StravaApi.baseUrl = intent.getStringExtra("url") ?: "https://www.strava.com"
+                Log.i(TAG, "Strava now at ${StravaApi.baseUrl}")
+            }
+            ACTION_STRAVA_STATE -> {
+                val p = app.prefs
+                Log.i(TAG, "strava linked=${app.strava.linked} reconnect=${app.strava.needsReconnect} athlete=${app.strava.athlete()?.display} " +
+                    "auto=${p.stravaAuto} kind=${p.stravaKind} pendingState=${p.stravaPendingState} client=${p.stravaClientId} " +
+                    "waiting=${app.db.stravaWaitingCount()}")
             }
             ACTION_GROUP_STATE -> {
                 val own = app.group.ownFrame
@@ -66,5 +77,7 @@ class DebugReceiver : BroadcastReceiver() {
         const val ACTION_GROUP_PEER = "com.trailmind.app.debug.GROUP_PEER"
         const val ACTION_GROUP_STATE = "com.trailmind.app.debug.GROUP_STATE"
         const val ACTION_OLD_MAPS_URL = "com.trailmind.app.debug.OLD_MAPS_URL"
+        const val ACTION_STRAVA_URL = "com.trailmind.app.debug.STRAVA_URL"
+        const val ACTION_STRAVA_STATE = "com.trailmind.app.debug.STRAVA_STATE"
     }
 }

@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -12,6 +14,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.Gravity
@@ -41,6 +44,7 @@ import com.trailmind.app.map.TileProvider
 import com.trailmind.app.sensor.Compass
 import com.trailmind.app.share.ExportProvider
 import com.trailmind.core.gpx.GpxParser
+import com.trailmind.core.strava.StravaOAuth
 
 /**
  * Single activity. Layout adapts to window width rather than device model, so it works on the
@@ -683,6 +687,45 @@ class MainActivity : Activity() {
             .onFailure { toast("No app can open $url") }
     }
 
+    /** Opens [url] in the web browser even when an installed app (Strava's) has claimed that address. */
+    fun openInBrowser(url: String) {
+        val intent = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER).apply { data = Uri.parse(url) }
+        runCatching { startActivity(intent) }.onFailure { openUrl(url) }
+    }
+
+    /**
+     * Saves a GPX into the phone's Downloads without asking where, so a file chooser lists it first. Saving it again
+     * replaces the earlier copy. Returns the file name, or null where that needs a permission this app doesn't ask for
+     * (Android 9 and older) or the save failed.
+     */
+    fun saveGpxToDownloads(fileName: String, content: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val name = safeFileName(fileName) + ".gpx"
+        val downloads = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val earlier = runCatching {
+            contentResolver.query(downloads, arrayOf(MediaStore.MediaColumns._ID), "${MediaStore.MediaColumns.DISPLAY_NAME} = ?", arrayOf(name), null)?.use { c ->
+                if (c.moveToFirst()) ContentUris.withAppendedId(downloads, c.getLong(0)) else null
+            }
+        }.getOrNull()
+        val uri = earlier ?: runCatching {
+            contentResolver.insert(downloads, ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, ExportProvider.GPX_MIME)
+            })
+        }.getOrNull() ?: return null
+        val written = runCatching {
+            (contentResolver.openOutputStream(uri, "wt") ?: error("no stream")).use { it.write(content.toByteArray()) }
+        }.isSuccess
+        if (!written) {
+            if (earlier == null) runCatching { contentResolver.delete(uri, null, null) }
+            return null
+        }
+        // MediaStore renames on a clash ("name (1).gpx"), so say the name it really used.
+        return runCatching {
+            contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull() ?: name
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
@@ -717,6 +760,19 @@ class MainActivity : Activity() {
             intent.action = null
             showTab(Tab.SAFETY)
             push(GroupFindPage(this, intent.getIntExtra(EXTRA_MEMBER, 0)))
+            return
+        }
+        if (intent.action == ACTION_STRAVA) {
+            intent.action = null
+            push(StravaPage(this))
+            return
+        }
+        // Strava's sign-in coming back. Checked before the group invites, which share the trailmind:// scheme.
+        if (intent.action == Intent.ACTION_VIEW && intent.dataString?.let { StravaOAuth.isRedirect(it) } == true) {
+            val url = intent.dataString.orEmpty()
+            intent.action = null
+            app.strava.handleRedirect(url) { message -> toast(message); (stack.lastOrNull() as? StravaPage)?.refresh() }
+            if (stack.lastOrNull() !is StravaPage) push(StravaPage(this))
             return
         }
         if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == GROUP_LINK_SCHEME) {
@@ -851,6 +907,7 @@ class MainActivity : Activity() {
         const val ACTION_OFFLINE = "com.trailmind.app.OPEN_OFFLINE"
         const val ACTION_GROUP_MEMBER = "com.trailmind.app.GROUP_MEMBER"
         const val ACTION_GROUP_FIND = "com.trailmind.app.GROUP_FIND"
+        const val ACTION_STRAVA = "com.trailmind.app.STRAVA"
         const val EXTRA_MEMBER = "member"
         const val GROUP_LINK_SCHEME = "trailmind"
         const val WIDE_DP = 600

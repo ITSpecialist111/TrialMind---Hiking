@@ -946,7 +946,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 addView(ui.button("Finish", R.drawable.ic_stop, Ui.B.TONAL) {
                     Async.run({ app.db.finalizeHike(h.id, System.currentTimeMillis(), null) }) { res ->
                         recoverCard.visibility = View.GONE
-                        res.getOrNull()?.let { host.showTab(MainActivity.Tab.HIKES); host.push(HikeDetailPage(host, it.id)) }
+                        res.getOrNull()?.let {
+                            app.strava.onHikeFinished(it.id)
+                            host.showTab(MainActivity.Tab.HIKES); host.push(HikeDetailPage(host, it.id))
+                        }
                     }
                 })
             })

@@ -226,9 +226,9 @@ object TileSources {
             "The Ordnance Survey of the 1880s–1910s at every scale, so it reads from the whole country down to individual farms."),
         nls(NLS_ONE_INCH_7TH, "uk-osgb63k1955", "OS one-inch 1955–61", 7, 15,
             "The last one-inch series, forerunner of Landranger: paths, woods, old railways and land use after the war."),
-        nls(NLS_ONE_INCH_HILLS, "uk-osgb63k1885", "OS one-inch 1885–1903", 7, 15,
+        nls(NLS_ONE_INCH_HILLS, "uk-osgb63k1885", "OS one-inch 1885–1903", 7, 16,
             "Victorian one-inch with hill hachures: settlement, roads, parkland and woodland at the end of the 1800s."),
-        nls(NLS_1920S, "uk-osgb1919", "OS 1920s–40s, all scales", 5, 16,
+        nls(NLS_1920S, "uk-osgb1919", "OS 1920s–40s, all scales", 5, 14,
             "Between the wars: railways at their peak and the tracks used before the motor car took over, at several scales."),
     )
 

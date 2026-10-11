@@ -206,6 +206,8 @@ class TrackingService : Service(), LocationListener {
             val active = TrackingState.activeMs()
             app.db.finalizeHike(id, System.currentTimeMillis(), active)
             finishedHikeId = id
+            // Posting to Strava (when linked) waits for the stats finalised just above.
+            app.strava.onHikeFinished(id)
             // The group hikes still going on were this hike's invitation too; finishing first shouldn't draw you back in.
             app.group.hikeFinished()
         }

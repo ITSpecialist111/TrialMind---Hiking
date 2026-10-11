@@ -1,6 +1,8 @@
 package com.trailmind.app.data
 
 import android.content.Context
+import android.util.Base64
+import com.trailmind.app.frontier.group.GroupKeyStore
 import org.json.JSONArray
 import org.json.JSONObject
 import com.trailmind.core.stats.PaceSettings
@@ -270,6 +272,89 @@ class Prefs(context: Context) {
     var historicOverlayPercent: Int
         get() = sp.getInt("historic_overlay_percent", 55).coerceIn(10, 100)
         set(v) = sp.edit().putInt("historic_overlay_percent", v.coerceIn(10, 100)).apply()
+
+    // ---------------------------------------------------------------- Strava
+
+    /** The Client ID of the user's own Strava API application (not a secret). */
+    var stravaClientId: String
+        get() = sp.getString("strava_client_id", "") ?: ""
+        set(v) = sp.edit().putString("strava_client_id", v.trim()).apply()
+
+    /** The application's secret, the access token and the refresh token: encrypted with a key that stays in Android's keystore. */
+    var stravaClientSecret: String
+        get() = secret("strava_client_secret")
+        set(v) = putSecret("strava_client_secret", v.trim())
+
+    var stravaAccessToken: String
+        get() = secret("strava_access_token")
+        set(v) = putSecret("strava_access_token", v)
+
+    var stravaRefreshToken: String
+        get() = secret("strava_refresh_token")
+        set(v) = putSecret("strava_refresh_token", v)
+
+    /** When the access token lapses, seconds since 1970. */
+    var stravaExpiresAtS: Long
+        get() = sp.getLong("strava_expires_at", 0L)
+        set(v) = sp.edit().putLong("strava_expires_at", v).apply()
+
+    var stravaScope: String
+        get() = sp.getString("strava_scope", "") ?: ""
+        set(v) = sp.edit().putString("strava_scope", v).apply()
+
+    /** Who is linked, for "Linked as …". */
+    var stravaAthleteId: Long
+        get() = sp.getLong("strava_athlete_id", 0L)
+        set(v) = sp.edit().putLong("strava_athlete_id", v).apply()
+
+    var stravaAthleteUsername: String
+        get() = sp.getString("strava_athlete_username", "") ?: ""
+        set(v) = sp.edit().putString("strava_athlete_username", v).apply()
+
+    var stravaAthleteFirstName: String
+        get() = sp.getString("strava_athlete_first", "") ?: ""
+        set(v) = sp.edit().putString("strava_athlete_first", v).apply()
+
+    var stravaAthleteLastName: String
+        get() = sp.getString("strava_athlete_last", "") ?: ""
+        set(v) = sp.edit().putString("strava_athlete_last", v).apply()
+
+    /** Strava refused the saved link (revoked, or uploading wasn't allowed): the user has to connect again. */
+    var stravaNeedsReconnect: Boolean
+        get() = sp.getBoolean("strava_needs_reconnect", false)
+        set(v) = sp.edit().putBoolean("strava_needs_reconnect", v).apply()
+
+    /** The random value sent with the sign-in, which Strava must send back. Cleared once used. */
+    var stravaPendingState: String
+        get() = sp.getString("strava_pending_state", "") ?: ""
+        set(v) = sp.edit().putString("strava_pending_state", v).apply()
+
+    /** Post each finished hike to Strava without asking. */
+    var stravaAuto: Boolean
+        get() = sp.getBoolean("strava_auto", true)
+        set(v) = sp.edit().putBoolean("strava_auto", v).apply()
+
+    /** What hikes are posted as: a [com.trailmind.core.strava.StravaActivityKind] code. */
+    var stravaKind: String
+        get() = sp.getString("strava_kind", "hike") ?: "hike"
+        set(v) = sp.edit().putString("strava_kind", v).apply()
+
+    private fun secret(key: String): String {
+        val encoded = sp.getString(key, null) ?: return ""
+        val bytes = runCatching { Base64.decode(encoded, Base64.NO_WRAP) }.getOrNull() ?: return ""
+        // Null once the keystore has lost its key (a restore to a new phone): the user connects again.
+        return GroupKeyStore.unwrap(bytes)?.toString(Charsets.UTF_8) ?: ""
+    }
+
+    private fun putSecret(key: String, value: String) {
+        if (value.isEmpty()) sp.edit().remove(key).apply()
+        else sp.edit().putString(key, Base64.encodeToString(GroupKeyStore.wrap(value.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)).apply()
+    }
+
+    // Reading or writing a secret goes through Android's keystore, which can take seconds the first time (it makes the key),
+    // so screens ask these plain questions instead and leave the secrets to background threads.
+    val hasStravaSecret: Boolean get() = sp.contains("strava_client_secret")
+    val hasStravaRefreshToken: Boolean get() = sp.contains("strava_refresh_token")
 
     var frontierEmergencyStatus: Int
         get() = sp.getInt("frontier_emergency_status", 0)

@@ -876,6 +876,18 @@ class SettingsPage(host: MainActivity) : Page(host) {
         })
 
         addView(ui.card(spacing = 6) {
+            addView(ui.text("Strava", Ui.T.TITLE))
+            val who = app.strava.athlete()
+            addView(ui.text(when {
+                app.strava.linked -> "Linked as ${who?.display ?: "your account"}. " +
+                    if (prefs.stravaAuto) "Finished hikes are posted automatically." else "Automatic posting is off."
+                app.strava.needsReconnect -> "Strava stopped accepting TrailMind. Connect again to carry on posting."
+                else -> "Post each finished hike to your Strava account automatically. This needs a Strava subscription; without one, every hike's page has Upload to Strava."
+            }, Ui.T.CAPTION))
+            addView(ui.button(if (app.strava.linked) "Manage Strava" else "Set up Strava", R.drawable.ic_upload, Ui.B.TONAL) { host.push(StravaPage(host)) })
+        })
+
+        addView(ui.card(spacing = 6) {
             addView(ui.text("Recording", Ui.T.TITLE))
             addView(ui.switch("Pause the hike when I get in a vehicle", prefs.autoPauseInVehicle) { prefs.autoPauseInVehicle = it })
             addView(ui.text("If the phone keeps moving faster than about 22 km/h (14 mph) for half a minute, TrailMind pauses the hike, " +

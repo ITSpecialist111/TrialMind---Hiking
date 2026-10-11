@@ -12,6 +12,7 @@ import com.trailmind.core.frontier.EmergencyStatus
 import com.trailmind.core.frontier.HikerTelemetry
 import com.trailmind.core.stats.TrackStats
 import com.trailmind.core.stats.TrackSummary
+import com.trailmind.core.strava.StravaPostState
 
 data class RouteMeta(
     val id: Long,
@@ -102,7 +103,22 @@ class GroupMemberRow(
     val coded: Boolean,
 )
 
-class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 5) {
+/** Where one hike's post to Strava has got to. There is at most one row per hike, so a retry can never post it twice. */
+data class StravaPostRow(
+    val hikeId: Long,
+    val state: StravaPostState,
+    /** Strava's id for the upload while it is processing it. */
+    val uploadId: Long?,
+    /** The activity on Strava, once it exists. */
+    val activityId: Long?,
+    /** Why it failed, or a note such as "Already on Strava". */
+    val message: String?,
+    val attempts: Int,
+    val nextTryMs: Long,
+    val updatedMs: Long,
+)
+
+class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 6) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -146,6 +162,7 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 5) 
         )
         createMeshHeartbeats(db)
         createTripGroups(db)
+        createStravaPosts(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -156,12 +173,22 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 5) 
         // Test builds shipped two different version 3 schemas (terrain or Frontier), so version 4 adds whichever is missing.
         if (oldVersion < 4) ensureVersion4(db)
         if (oldVersion < 5) createTripGroups(db)
+        if (oldVersion < 6) createStravaPosts(db)
     }
 
     // Newer test builds only add tables, which this build ignores, so keep the user's data instead of crashing.
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         ensureVersion4(db)
         createTripGroups(db)
+        createStravaPosts(db)
+    }
+
+    private fun createStravaPosts(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS strava_posts(hike_id INTEGER PRIMARY KEY NOT NULL REFERENCES hikes(id) ON DELETE CASCADE,
+               state TEXT NOT NULL, upload_id INTEGER, activity_id INTEGER, message TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+               next_try_ms INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER NOT NULL)""",
+        )
     }
 
     private fun ensureVersion4(db: SQLiteDatabase) {
@@ -417,6 +444,57 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 5) 
         movingMs = c.long("moving_ms"), durationMs = c.long("duration_ms"),
         maxEleM = c.optDouble(c.getColumnIndexOrThrow("max_ele")), minEleM = c.optDouble(c.getColumnIndexOrThrow("min_ele")),
         routeId = c.optLong(c.getColumnIndexOrThrow("route_id")), pointCount = c.int("point_count"),
+    )
+
+    // ---------------------------------------------------------------- Strava posts
+
+    fun stravaPost(hikeId: Long): StravaPostRow? =
+        readableDatabase.rawQuery("SELECT * FROM strava_posts WHERE hike_id=?", arrayOf(hikeId.toString())).use { c ->
+            if (c.moveToFirst()) stravaRow(c) else null
+        }
+
+    fun saveStravaPost(row: StravaPostRow) {
+        writableDatabase.insertWithOnConflict("strava_posts", null, ContentValues().apply {
+            put("hike_id", row.hikeId); put("state", row.state.name)
+            row.uploadId?.let { put("upload_id", it) } ?: putNull("upload_id")
+            row.activityId?.let { put("activity_id", it) } ?: putNull("activity_id")
+            row.message?.let { put("message", it) } ?: putNull("message")
+            put("attempts", row.attempts); put("next_try_ms", row.nextTryMs); put("updated_ms", row.updatedMs)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Posts waiting to be sent, or to be checked on, whose time has come. */
+    fun stravaDue(nowMs: Long): List<StravaPostRow> =
+        readableDatabase.rawQuery(
+            "SELECT * FROM strava_posts WHERE state IN (?, ?) AND next_try_ms <= ? ORDER BY updated_ms",
+            arrayOf(StravaPostState.QUEUED.name, StravaPostState.PROCESSING.name, nowMs.toString()),
+        ).use { c -> c.map { stravaRow(it) } }
+
+    /** When the next waiting post is due, or null if none is waiting. */
+    fun stravaNextTry(): Long? =
+        readableDatabase.rawQuery(
+            "SELECT MIN(next_try_ms) FROM strava_posts WHERE state IN (?, ?)",
+            arrayOf(StravaPostState.QUEUED.name, StravaPostState.PROCESSING.name),
+        ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+
+    fun stravaWaitingCount(): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM strava_posts WHERE state IN (?, ?)",
+            arrayOf(StravaPostState.QUEUED.name, StravaPostState.PROCESSING.name),
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** Posts still waiting belong to the account that was just disconnected; those hikes can be posted again after linking. */
+    fun dropWaitingStravaPosts() {
+        writableDatabase.delete("strava_posts", "state IN (?, ?)", arrayOf(StravaPostState.QUEUED.name, StravaPostState.PROCESSING.name))
+    }
+
+    private fun stravaRow(c: Cursor) = StravaPostRow(
+        hikeId = c.long("hike_id"),
+        state = runCatching { StravaPostState.valueOf(c.str("state")) }.getOrDefault(StravaPostState.FAILED),
+        uploadId = c.optLong(c.getColumnIndexOrThrow("upload_id")),
+        activityId = c.optLong(c.getColumnIndexOrThrow("activity_id")),
+        message = c.optString(c.getColumnIndexOrThrow("message")),
+        attempts = c.int("attempts"), nextTryMs = c.long("next_try_ms"), updatedMs = c.long("updated_ms"),
     )
 
     // ---------------------------------------------------------------- frontier mesh

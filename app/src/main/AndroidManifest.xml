@@ -99,6 +99,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="trailmind" android:host="group" android:pathPrefix="/join" />
             </intent-filter>
+            <!-- Strava's sign-in coming back: trailmind://localhost/strava?code=…&state=… (localhost is the callback domain Strava always accepts). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="trailmind" android:host="localhost" android:pathPrefix="/strava" />
+            </intent-filter>
         </activity>
 
         <!-- Location for the recording; connected device too while the user is in a trip group, whose phones keep
@@ -129,6 +136,11 @@
             android:foregroundServiceType="dataSync" />
 
         <service android:name=".map.PremiumPurgeJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+
+        <!-- Posts finished hikes to Strava once there is a network. -->
+        <service android:name=".strava.StravaUploadJob"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 

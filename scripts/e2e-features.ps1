@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Emulator test for TrailMind's auto-pause in a vehicle, group hikes and old maps. Needs a DEBUG build.
+    Emulator test for TrailMind's auto-pause in a vehicle, group hikes, old maps and Strava. Needs a DEBUG build.
 
 .DESCRIPTION
     Drives the real UI with adb and uiautomator on a phone emulator and prints PASS, FAIL or SKIP per check.
@@ -14,6 +14,10 @@
     - Old maps: a small local tile server (python with Pillow) stands in for MapTiler, so the key flow, a rejected
       key, the fade overlay and the credit can be checked without a real key. Skipped when python or Pillow is
       missing.
+    - Strava: scripts/e2e-mocks/strava_server.py (python) stands in for Strava's sign-in and upload API. Checks the
+      Connect flow through the real browser (including a wrong secret and a forged redirect), the automatic post when
+      a hike is finished (token refresh, GPX with times, activity type), rate-limit and outage handling with Post
+      now, a hike too short to post, and Disconnect. Skipped when python is missing.
 
     The run clears TrailMind's data on the emulator.
 
@@ -149,6 +153,116 @@ function To-Metres([string]$text) {
     $null
 }
 
+# A free port, so a server left over from an earlier run can't answer instead.
+function Free-Port {
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Any, 0)
+    $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+    $port
+}
+
+function Wait-Log([string]$path, [string]$pattern, [int]$timeout = 30) {
+    $end = (Get-Date).AddSeconds($timeout)
+    do {
+        if ((Test-Path $path) -and (Select-String -Path $path -Pattern $pattern -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 700
+    } while ((Get-Date) -lt $end)
+    $false
+}
+
+function Hide-Keyboard {
+    if (((Adb shell dumpsys input_method) -join ' ') -match 'mInputShown=true') {
+        Adb shell input keyevent KEYCODE_BACK | Out-Null
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+# Brings [pattern] on screen by scrolling down, then up if it was above.
+function Reveal([string]$pattern) {
+    if (Has $pattern) { return $true }
+    if (Scroll-To $pattern 6) { return $true }
+    Scroll-To $pattern 10 -Up
+}
+
+function Tap-Scrolling([string]$pattern) {
+    Reveal $pattern | Out-Null
+    Tap $pattern 4
+}
+
+# Types [text] into the box under the capitalised label [label].
+function Type-Under([string]$label, [string]$text) {
+    if (-not (Reveal "^$label$")) { return $false }
+    $l = Find-Nodes "^$label$" | Select-Object -First 1
+    Adb shell input tap ([int]$l.X) ([int]($l.Y + 100)) | Out-Null
+    Start-Sleep -Milliseconds 500
+    Adb shell input text $text | Out-Null
+    Hide-Keyboard
+    $true
+}
+
+# Walks [steps] steps of 6 m north at walking pace, from the running position in $lat.
+function Walk([int]$steps) {
+    for ($i = 0; $i -lt $steps; $i++) { $script:lat += 6 / 111320.0; Fix $script:lat $lon 1.5; Start-Sleep -Milliseconds 1250 }
+}
+
+# Brings TrailMind back to the front if something (a stray Back press) took it away.
+function Ensure-App {
+    if (((Adb shell dumpsys activity activities) -join ' ') -notmatch 'topResumedActivity=[^}]*com\.trailmind\.app') {
+        Adb shell am start -n "$Pkg/.ui.MainActivity" | Out-Null
+        Start-Sleep 2
+    }
+}
+
+# Starts a hike from the Map tab and walks [steps] steps. Returns whether it was recording.
+function Record-Walk([int]$steps) {
+    Ensure-App
+    Open-Tab 'Map'
+    Fix $lat $lon; Start-Sleep 1; Fix $lat $lon
+    Tap '^Start hike$' | Out-Null
+    # Starting offers a check-in; dismiss it only when it is there, since Back on the map itself leaves the app.
+    if (Wait-Ui 'Set check-in for' 6) { Adb shell input keyevent KEYCODE_BACK | Out-Null; Start-Sleep -Milliseconds 800 }
+    Ensure-App
+    $recording = Wait-Ui '^Pause$' 8
+    Walk $steps
+    $recording
+}
+
+# Finishes the recording and stays on the hike summary that opens.
+function Finish-To-Summary {
+    Ensure-App
+    Open-Tab 'Map'
+    if (-not (Has '^Pause$|^Resume$')) { return $false }
+    Tap '^Finish$' 5 | Out-Null
+    if (Wait-Ui '^Finish hike\?$' 5) { Tap '^Finish$' 5 -Last | Out-Null }
+    Wait-Ui '^POINTS$' 10
+}
+
+function Leave-Summary {
+    Adb shell input keyevent KEYCODE_BACK | Out-Null
+    Start-Sleep -Milliseconds 1000
+    Open-Tab 'Map'
+}
+
+# Chrome's first run asks a few questions before it shows anything; then taps Authorize on the stand-in sign-in page.
+function Authorize-In-Browser {
+    for ($i = 0; $i -lt 14; $i++) {
+        Start-Sleep -Milliseconds 1500
+        $ui = Get-Ui
+        if (Has '^Authorize$' $ui) { Tap '^Authorize$' 3 | Out-Null; return $true }
+        if (Has 'oauth/mobile/authorize' $ui) { Adb shell input tap 55 366 | Out-Null; return $true }
+        foreach ($p in '^Use without an account$', '^No thanks$', '^Got it$') {
+            if (Has $p $ui) { Tap $p 3 | Out-Null; break }
+        }
+    }
+    $false
+}
+
+# Types the Client ID and secret on the Strava page (a blank argument leaves that box alone) and taps Connect.
+function Connect-To-Strava([string]$id, [string]$secret) {
+    if ($id) { Type-Under 'CLIENT ID' $id | Out-Null }
+    if ($secret) { Type-Under 'CLIENT SECRET' $secret | Out-Null }
+    Tap-Scrolling '^Connect with Strava$' | Out-Null
+}
+
 # ---------------------------------------------------------------- run
 
 try {
@@ -175,7 +289,7 @@ try {
     $lat = 51.7890; $lon = -2.5500
     Fix $lat $lon
     Adb shell am start -W -n "$Pkg/.ui.MainActivity" | Out-Null
-    Check 'Onboarding shown' (Wait-Ui '^Welcome to TrailMind$' 20)
+    Check 'Onboarding shown' (Wait-Ui '^Welcome to TrailMind$' 45)
     Scroll-To '^I understand' | Out-Null
     Tap '^I understand' | Out-Null
     Check 'Map with Start hike' (Wait-Ui '^Start hike$' 10)
@@ -383,13 +497,134 @@ ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), H).serve_forever()
         Shot 'old-map-100'
         Check 'Chip shows 100 %' (Has 'OS six-inch 1888.* 100%')
     }
+
+    # ------------------------------------------------------------ Strava
+    Section 'Strava'
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) {
+        Skip 'Strava' 'python is needed for the stand-in Strava server'
+    } else {
+        $stravaLog = Join-Path $Out 'strava.log'
+        $stravaPy = Join-Path $Root 'scripts/e2e-mocks/strava_server.py'
+        $stravaPort = Free-Port
+        $script:StravaServer = Start-Process python -ArgumentList "`"$stravaPy`"", "`"$stravaLog`"", $stravaPort -WindowStyle Hidden -PassThru
+        Start-Sleep 2
+        Debug-Broadcast 'STRAVA_URL' @('--es', 'url', "http://10.0.2.2:$stravaPort")
+        $stravaApi = "http://localhost:$stravaPort"
+
+        Open-Tab 'More'
+        Tap '^Settings$' | Out-Null
+        Start-Sleep -Milliseconds 1500
+        Check 'Settings offers Set up Strava' (Scroll-To '^Set up Strava$' 20)
+        Tap '^Set up Strava$' | Out-Null
+        Check 'Setup page explains how to link' (Wait-Ui '^Post your hikes to Strava$' 6)
+        Check 'It says a Strava subscription is needed, and what to do without one' ((Has 'needs a Strava subscription') -and (Has 'Upload to Strava'))
+        Shot 'strava-setup'
+        Tap-Scrolling '^Connect with Strava$' | Out-Null
+        Check 'Blank boxes are refused before anything is sent' ((Wait-Ui 'Client ID is the number' 5) -and -not (Test-Path $stravaLog))
+
+        # A wrong secret: the sign-in works, the code exchange is refused, and the page says so.
+        Connect-To-Strava '12345' 'WRONGSECRET1234567890'
+        Check 'Connect opens the Strava sign-in in the browser' (Authorize-In-Browser)
+        Check 'A wrong secret is reported, not linked' (Wait-Ui "didn.t accept the Client ID and secret" 20)
+        Shot 'strava-wrong-secret'
+
+        Connect-To-Strava '' 'mocksecret1234567890'
+        Check 'Second attempt opens the browser again' (Authorize-In-Browser)
+        Check 'Returning from Strava links the account' (Wait-Ui '^Linked to Strava$' 20)
+        Check 'The Strava username is shown' (Has 'forest_walker')
+        Shot 'strava-linked'
+        $log = @(Get-Content $stravaLog)
+        Check 'Sign-in asks for read + activity:write with the callback and a random state' (@($log | Where-Object { $_ -match 'GET authorize client_id=12345 redirect_uri=trailmind://localhost/strava scope=read,activity:write response_type=code state=[0-9a-f]{32}$' }).Count -eq 2)
+        Check 'Wrong secret was refused, right secret accepted' (($log -match 'secret_ok=False').Count -eq 1 -and ($log -match 'authorization_code client_id=12345 secret_ok=True code=MOCKCODE').Count -eq 1)
+
+        # A redirect nobody asked for (wrong state) must not reach Strava.
+        Adb shell "am start -a android.intent.action.VIEW -d 'trailmind://localhost/strava?state=forged&code=EVIL&scope=read,activity:write' $Pkg" | Out-Null
+        Start-Sleep 3
+        Check 'A redirect with the wrong state is ignored' (-not (Select-String -Path $stravaLog -Pattern 'code=EVIL' -Quiet))
+        Check 'Still linked afterwards' (Has '^Linked to Strava$')
+
+        # Hike 1: finished, then posted by itself.
+        Check 'Recording the first Strava hike' (Record-Walk 50)
+        Check 'Hike finished' (Finish-To-Summary)
+        Check 'Finishing posts it to Strava by itself' (Wait-Log $stravaLog 'POST upload auth=ok .*activity_type=hike data_type=gpx' 45)
+        $log = @(Get-Content $stravaLog)
+        $refresh = -1; $upload = -1
+        for ($k = 0; $k -lt $log.Count; $k++) {
+            if ($refresh -lt 0 -and $log[$k] -match 'grant_type=refresh_token .*secret_ok=True') { $refresh = $k }
+            if ($upload -lt 0 -and $log[$k] -match 'POST upload') { $upload = $k }
+        }
+        Check 'The short-lived token is refreshed before the upload' ($refresh -ge 0 -and $refresh -lt $upload)
+        $up = $log | Where-Object { $_ -match 'POST upload' } | Select-Object -First 1
+        $pts = if ($up -match 'trkpts=(\d+) times=(\d+)') { [int]$Matches[1], [int]$Matches[2] } else { 0, 0 }
+        Check 'The GPX has a track with a time on every point' ($pts[0] -ge 10 -and $pts[1] -ge $pts[0]) $up
+        Check 'Named after the hike, with the TrailMind note' ($up -match "name='[^']*\d{4} \d+:\d\d" -and $up -match "description='Recorded with TrailMind'") $up
+        Check 'The hike page says Posted to Strava' ((Scroll-To '^Posted to Strava' 8) -and (Has '^View on Strava$'))
+        Shot 'strava-posted'
+        Check 'A notification says it was posted' (((Adb shell dumpsys notification --noredact) -join "`n") -match 'Posted to Strava')
+        Leave-Summary
+
+        # Hike 2: Strava's rate limit, then an outage, then success by hand.
+        Invoke-RestMethod "$stravaApi/__fail?n=1&code=429" | Out-Null
+        Check 'Recording the second Strava hike' (Record-Walk 50)
+        Check 'Second hike finished' (Finish-To-Summary)
+        Check 'Rate limit: the hike waits and says why' ((Scroll-To '^Post now$' 12) -and (Has 'limit was reached'))
+        Shot 'strava-rate-limited'
+        Invoke-RestMethod "$stravaApi/__fail?n=1&code=503" | Out-Null
+        Tap-Scrolling '^Post now$' | Out-Null
+        Check 'An outage: still waiting, and says so' (Wait-Ui 'Strava had a problem \(HTTP 503\)' 25)
+        Tap-Scrolling '^Post now$' | Out-Null
+        Check 'Post now succeeds once Strava is back' (Wait-Ui '^Posted to Strava' 30)
+        $log = @(Get-Content $stravaLog)
+        $byId = $log | Where-Object { $_ -match 'POST upload' } | ForEach-Object { if ($_ -match 'external_id=(\S+)') { $Matches[1] } } | Group-Object
+        Check 'Retries reuse one external id, so Strava can drop a duplicate' (@($byId | Where-Object { $_.Count -ge 3 }).Count -eq 1)
+        Leave-Summary
+
+        # Hike 3: too short to post.
+        $before = @($log | Where-Object { $_ -match 'POST upload' }).Count
+        Check 'Recording a very short hike' (Record-Walk 4)
+        Check 'Short hike finished' (Finish-To-Summary)
+        Check 'A short recording is not posted, and can be posted anyway' ((Scroll-To '^Post anyway$' 12) -and (Has 'Too short to be a hike'))
+        Start-Sleep 3
+        Check 'Nothing was uploaded for it' (@(Get-Content $stravaLog | Where-Object { $_ -match 'POST upload' }).Count -eq $before)
+        Leave-Summary
+
+        # Disconnect: Strava is told, and the page goes back to setup with the application kept.
+        Open-Tab 'More'
+        Tap '^Settings$' | Out-Null
+        Start-Sleep -Milliseconds 1500
+        Scroll-To '^Manage Strava$' 20 | Out-Null
+        Tap '^Manage Strava$' | Out-Null
+        Tap-Scrolling '^Disconnect from Strava$' | Out-Null
+        Check 'Disconnect asks first' (Wait-Ui '^Disconnect from Strava\?$' 5)
+        Tap '^Disconnect$' | Out-Null
+        Check 'Strava is told to forget TrailMind' (Wait-Log $stravaLog 'POST deauthorize auth=ok' 20)
+        Check 'The page is back to setup, with the secret kept' ((Wait-Ui '^Post your hikes to Strava$' 8) -and (Reveal 'saved: leave blank to keep it'))
+        Shot 'strava-disconnected'
+
+        # No subscription needed: Upload to Strava on the hike page saves the GPX to Downloads and opens Strava's page.
+        Open-Tab 'Hikes'
+        Tap '^Hike \w{3} \d+, ' | Out-Null
+        Check 'Hike page offers Upload to Strava when not linked' ((Wait-Ui '^POINTS$' 8) -and (Scroll-To '^Upload to Strava$' 10) -and (Has 'needs a Strava subscription'))
+        Shot 'strava-upload-by-hand'
+        Adb shell "rm -f /sdcard/Download/Hike*.gpx" | Out-Null
+        Tap '^Upload to Strava$' | Out-Null
+        Start-Sleep 4
+        $saved = (Adb shell "ls /sdcard/Download") -join ' '
+        Check 'The GPX is saved straight to Downloads' ($saved -match 'Hike.*\.gpx') $saved
+        Check 'Strava upload page opens in the browser' (((Adb shell dumpsys activity activities) -join ' ') -match 'topResumedActivity=.*com\.android\.chrome')
+        Adb shell "rm -f /sdcard/Download/Hike*.gpx" | Out-Null
+        Adb shell am start -n "$Pkg/.ui.MainActivity" | Out-Null
+        Start-Sleep 2
+        Leave-Summary
+    }
 } catch {
     $script:Failures++
     Write-Host "FAIL  Test run aborted: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     # The python on PATH can be a launcher that starts the real interpreter, so find the server by its script.
     Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match 'tile-server\.py' } |
+        Where-Object { $_.CommandLine -match 'tile-server\.py|strava_server\.py' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
