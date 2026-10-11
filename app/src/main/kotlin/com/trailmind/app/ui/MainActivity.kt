@@ -10,7 +10,10 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Outline
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +23,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -81,6 +85,8 @@ class MainActivity : Activity() {
     private var contentFrame: FrameLayout? = null
     private var navBar: LinearLayout? = null
     private var railFrame: View? = null
+    private var mapHolder: View? = null
+    private var bottomFade: View? = null
     private var navTabs: List<Tab> = emptyList()
     private val navButtons = HashMap<Tab, View>()
     private var lastWidthDp = -1
@@ -214,6 +220,8 @@ class MainActivity : Activity() {
         stack.forEach { detach(it.root) }
         navButtons.clear()
         railFrame = null
+        mapHolder = null
+        bottomFade = null
         val p = ui.p
         val content = FrameLayout(this).apply { setBackgroundColor(p.bg) }
         contentFrame = content
@@ -222,10 +230,17 @@ class MainActivity : Activity() {
             navTabs = listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.MORE)
             val nav = buildNavBar(navTabs, vertical = false)
             navBar = nav
+            // Content passes under the capsule, so its foot fades into the page colour instead of ending in a hard edge.
+            val fade = View(this).apply {
+                background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(p.bg and 0x00FFFFFF, p.bg))
+            }
+            bottomFade = fade
             root = FrameLayout(this).apply {
                 addView(map.view, FrameLayout.LayoutParams(-1, -1))
                 addView(content, FrameLayout.LayoutParams(-1, -1))
-                addView(nav, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+                addView(fade, FrameLayout.LayoutParams(-1, dp(96), Gravity.BOTTOM))
+                // A floating capsule, not a bar: the map shows on both sides of it and below the page's edge.
+                addView(nav, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
             }
         } else {
             navTabs = if (lastCompactRail) listOf(Tab.MAP, Tab.ROUTES, Tab.HIKES, Tab.COMPASS, Tab.MORE)
@@ -235,18 +250,29 @@ class MainActivity : Activity() {
             val rail = ScrollView(this).apply {
                 isFillViewport = true
                 isVerticalScrollBarEnabled = false
-                elevation = dp(8).toFloat()
                 addView(nav)
             }
             railFrame = rail
-            val paneWidth = (resources.configuration.screenWidthDp * 0.42f).coerceIn(340f, 460f)
+            // The map takes the larger share: a slim rail and a pane no wider than its content needs.
+            val paneWidth = (resources.configuration.screenWidthDp * 0.34f).coerceIn(300f, 400f)
+            val holder = FrameLayout(this).apply {
+                addView(map.view, FrameLayout.LayoutParams(-1, -1))
+                clipToOutline = true
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        val r = if (mapFullScreen) 0f else dp(28).toFloat()
+                        // The right corners are pushed off the view, so only the edge beside the pane is rounded.
+                        outline.setRoundRect(0, 0, view.width + r.toInt(), view.height, r)
+                    }
+                }
+            }
+            mapHolder = holder
             root = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setBackgroundColor(p.bg)
-                addView(rail, LinearLayout.LayoutParams(dp(88), -1))
+                addView(rail, LinearLayout.LayoutParams(dp(RAIL_DP), -1))
                 addView(content, LinearLayout.LayoutParams(dp(paneWidth), -1))
-                addView(FrameLayout(this@MainActivity).apply { addView(map.view, FrameLayout.LayoutParams(-1, -1)) },
-                    LinearLayout.LayoutParams(0, -1, 1f))
+                addView(holder, LinearLayout.LayoutParams(0, -1, 1f))
             }
         }
         root.setOnApplyWindowInsetsListener { _, wi ->
@@ -276,19 +302,21 @@ class MainActivity : Activity() {
         val full = mapFullScreen
         railFrame?.visibility = if (full) View.GONE else View.VISIBLE
         if (wide) contentFrame?.visibility = if (full) View.GONE else View.VISIBLE
+        mapHolder?.invalidateOutline()
         map.onFullScreenChanged(full)
         applyInsets()
         updateBackCallback()
     }
 
     private fun buildNavBar(tabs: List<Tab>, vertical: Boolean, logo: Boolean = true): LinearLayout {
+        if (!vertical) return buildCapsule(tabs)
         val p = ui.p
         return LinearLayout(this).apply {
-            orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-            gravity = if (vertical) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
-            setBackgroundColor(p.surface)
-            elevation = dp(8).toFloat()
-            if (vertical && logo) addView(ImageView(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            // On the page's own colour, so the rail reads as part of the layout and not as a bar bolted to its edge.
+            setBackgroundColor(p.bg)
+            if (logo) addView(ImageView(this@MainActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 contentDescription = "TrailMind"
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(8); bottomMargin = dp(12) })
@@ -311,15 +339,56 @@ class MainActivity : Activity() {
                     addView(TextView(this@MainActivity).apply {
                         tag = "label"
                         text = t.label
-                        textSize = 12f
+                        textSize = 11.5f
                         gravity = Gravity.CENTER
                         setPadding(0, dp(4), 0, 0)
                     })
                     setOnClickListener { onNavClick(t) }
                 }
                 navButtons[t] = item
-                if (vertical) addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
-                else addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
+            }
+        }
+    }
+
+    /**
+     * The phone's navigation: a dark capsule floating over the map. Each destination is an icon; the one you are on
+     * opens into a mint pill with its name, so five destinations fit in about 300 dp and the map shows around them.
+     */
+    private fun buildCapsule(tabs: List<Tab>): LinearLayout {
+        val p = ui.p
+        // The Fold's cover screen is about 330 dp wide: five destinations and one open label need slimmer buttons there.
+        val sidePad = if (resources.configuration.screenWidthDp < 360) 10 else 14
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(p.inverse, dp(32).toFloat(), p.glassStroke, dp(1))
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            elevation = dp(10).toFloat()
+            for (t in tabs) {
+                val item = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(sidePad), 0, dp(sidePad), 0)
+                    isClickable = true
+                    contentDescription = t.label
+                    addView(ImageView(this@MainActivity).apply {
+                        tag = "icon"
+                        setImageDrawable(getDrawable(t.icon)?.mutate())
+                    }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                    addView(TextView(this@MainActivity).apply {
+                        tag = "label"
+                        text = t.label
+                        textSize = 13.5f
+                        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                        maxLines = 1
+                        visibility = View.GONE
+                        setPadding(dp(8), 0, 0, 0)
+                    })
+                    setOnClickListener { onNavClick(t) }
+                }
+                navButtons[t] = item
+                addView(item, LinearLayout.LayoutParams(-2, dp(48)))
             }
         }
     }
@@ -335,24 +404,42 @@ class MainActivity : Activity() {
         val selected = if (tab in navTabs) tab else Tab.MORE
         navButtons.forEach { (t, v) ->
             val sel = t == selected
-            val pill = v.findViewWithTag<FrameLayout>("pill")
-            pill.background = if (sel) rounded(p.primaryContainer, dp(16).toFloat()) else null
-            v.findViewWithTag<ImageView>("icon").drawable?.setTint(if (sel) p.onPrimaryContainer else p.muted)
-            v.findViewWithTag<TextView>("label").setTextColor(if (sel) p.onSurface else p.muted)
+            if (!wide) {
+                val mask = rounded(android.graphics.Color.WHITE, dp(24).toFloat())
+                v.background = if (sel) ripple(rounded(p.navSelected, dp(24).toFloat()), 0x22000000, mask) else ripple(null, 0x33FFFFFF, mask)
+                v.findViewWithTag<ImageView>("icon").drawable?.setTint(if (sel) p.onNavSelected else p.inverseMuted)
+                v.findViewWithTag<TextView>("label").apply {
+                    visibility = if (sel) View.VISIBLE else View.GONE
+                    setTextColor(p.onNavSelected)
+                }
+            } else {
+                val pill = v.findViewWithTag<FrameLayout>("pill")
+                pill.background = if (sel) rounded(p.navSelected, dp(16).toFloat()) else null
+                v.findViewWithTag<ImageView>("icon").drawable?.setTint(if (sel) p.onNavSelected else p.muted)
+                v.findViewWithTag<TextView>("label").setTextColor(if (sel) p.onSurface else p.muted)
+            }
         }
     }
 
     private fun applyInsets() {
         val nav = navBar ?: return
         if (!wide) {
-            nav.setPadding(insets.left, dp(6), insets.right, insets.bottom + dp(6))
+            // The capsule floats above the gesture bar; pages and the map keep clear of it by its height plus the gap.
+            val gap = insets.bottom + dp(10)
+            (nav.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                if (lp.bottomMargin != gap) { lp.bottomMargin = gap; nav.layoutParams = lp }
+            }
             contentFrame?.setPadding(insets.left, insets.top, insets.right, 0)
-            nav.post { map.setInsets(insets.left, insets.top, insets.right, nav.height) ; stack.lastOrNull()?.setBottomInset(nav.height) }
+            nav.post {
+                val clear = nav.height + gap
+                map.setInsets(insets.left, insets.top, insets.right, clear)
+                stack.lastOrNull()?.setBottomInset(clear + dp(4))
+            }
         } else {
             nav.setPadding(insets.left, insets.top + dp(8), 0, insets.bottom)
             railFrame?.let { r ->
                 val lp = r.layoutParams as? LinearLayout.LayoutParams
-                if (lp != null && lp.width != dp(88) + insets.left) { lp.width = dp(88) + insets.left; r.layoutParams = lp }
+                if (lp != null && lp.width != dp(RAIL_DP) + insets.left) { lp.width = dp(RAIL_DP) + insets.left; r.layoutParams = lp }
             }
             contentFrame?.setPadding(0, insets.top, 0, 0)
             map.setInsets(if (mapFullScreen) insets.left else 0, insets.top, insets.right, insets.bottom)
@@ -428,6 +515,8 @@ class MainActivity : Activity() {
         } else {
             frame.visibility = if (wide && !mapFullScreen) View.VISIBLE else View.GONE
         }
+        // The fade belongs to a page; over the bare map there is nothing to fade.
+        bottomFade?.visibility = frame.visibility
         updateNavSelection()
         applyInsets()
         updateBackCallback()
@@ -911,6 +1000,7 @@ class MainActivity : Activity() {
         const val EXTRA_MEMBER = "member"
         const val GROUP_LINK_SCHEME = "trailmind"
         const val WIDE_DP = 600
+        const val RAIL_DP = 76
         const val EDGE_GALLERY = "com.google.aiedge.gallery"
         private const val RC_PERMS = 10
         private const val RC_NOTIF = 11

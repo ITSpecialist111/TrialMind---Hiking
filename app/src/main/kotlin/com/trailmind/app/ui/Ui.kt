@@ -12,7 +12,12 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.TypefaceSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -30,9 +35,9 @@ import android.widget.Toast
 
 /** Colour palette, resolved for day/night. */
 class Palette(val night: Boolean) {
-    val bg = if (night) 0xFF101512.toInt() else 0xFFF4F6F2.toInt()
-    val surface = if (night) 0xFF1A211D.toInt() else 0xFFFFFFFF.toInt()
-    val surfaceVariant = if (night) 0xFF25302A.toInt() else 0xFFE6EDE7.toInt()
+    val bg = if (night) 0xFF0C110F.toInt() else 0xFFEFF3EE.toInt()
+    val surface = if (night) 0xFF161D19.toInt() else 0xFFFFFFFF.toInt()
+    val surfaceVariant = if (night) 0xFF222C27.toInt() else 0xFFE3EAE4.toInt()
     val onSurface = if (night) 0xFFE6ECE8.toInt() else 0xFF17201B.toInt()
     val muted = if (night) 0xFFA3B1A9.toInt() else 0xFF5B6A61.toInt()
     val primary = if (night) 0xFF7FD1AE.toInt() else 0xFF1F5B45.toInt()
@@ -47,12 +52,24 @@ class Palette(val night: Boolean) {
     val route = 0xFF8E24AA.toInt()
     val track = 0xFFF06E14.toInt()
 
+    // Floating controls over the map: frosted surfaces, and a dark capsule for navigation with a mint selection.
+    val glass = if (night) 0xEC161D19.toInt() else 0xECFFFFFF.toInt()
+    val glassStroke = if (night) 0x33FFFFFF else 0x16000000
+    val inverse = if (night) 0xF8222C27.toInt() else 0xF816211B.toInt()
+    val onInverse = 0xFFEAF2EC.toInt()
+    val inverseMuted = 0xFFA3B5AA.toInt()
+    val navSelected = if (night) 0xFF7FD1AE.toInt() else 0xFFBDF0D4.toInt()
+    val onNavSelected = 0xFF0B2E21.toInt()
+
     companion object {
         fun of(ctx: Context) = Palette(
             (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES,
         )
     }
 }
+
+/** A figure and its unit ("360 m", "↑12 m", "14.8 km/h"); a value with more than one number in it is left whole. */
+private val NUMBER_UNIT = Regex("""^([↑↓+\-]?\d[\d.,]*)[\s\u00A0]*([A-Za-z°%/²]+)$""")
 
 fun Context.dp(v: Number): Int = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 fun View.dp(v: Number): Int = context.dp(v)
@@ -171,7 +188,15 @@ class Ui(val ctx: Context) {
 
     fun card(color: Int = p.surface, padding: Int = 16, spacing: Int = 8, block: LinearLayout.() -> Unit = {}): LinearLayout =
         column(padding, spacing, block).apply {
-            background = rounded(color, dp(20).toFloat(), p.outline.takeIf { color == p.surface }, dp(1))
+            // Borderless and tonal: the surface colour alone separates a card from the page.
+            background = rounded(color, dp(24).toFloat())
+        }
+
+    /** A frosted card for floating over the map: translucent, with a hairline edge. */
+    fun glassCard(padding: Int = 12, spacing: Int = 6, radius: Int = 26, block: LinearLayout.() -> Unit = {}): LinearLayout =
+        column(padding, spacing, block).apply {
+            background = rounded(p.glass, dp(radius).toFloat(), p.glassStroke, dp(1))
+            elevation = dp(6).toFloat()
         }
 
     enum class B { FILLED, TONAL, OUTLINED, TEXT, DANGER }
@@ -182,7 +207,7 @@ class Ui(val ctx: Context) {
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         gravity = Gravity.CENTER
         minHeight = dp(48)
-        setPadding(dp(18), dp(10), dp(18), dp(10))
+        setPadding(dp(20), dp(10), dp(20), dp(10))
         val (bg, fg) = when (style) {
             B.FILLED -> p.primary to p.onPrimary
             B.TONAL -> p.primaryContainer to p.onPrimaryContainer
@@ -191,8 +216,8 @@ class Ui(val ctx: Context) {
             B.DANGER -> p.danger to Color.WHITE
         }
         setTextColor(fg)
-        val shape = rounded(bg, dp(24).toFloat(), if (style == B.OUTLINED) p.outline else null, dp(1))
-        background = ripple(shape, (fg and 0x00FFFFFF) or 0x33000000, rounded(Color.WHITE, dp(24).toFloat()))
+        val shape = rounded(bg, dp(28).toFloat(), if (style == B.OUTLINED) p.outline else null, dp(1))
+        background = ripple(shape, (fg and 0x00FFFFFF) or 0x33000000, rounded(Color.WHITE, dp(28).toFloat()))
         if (icon != null) {
             val d = ctx.getDrawable(icon)?.mutate()
             d?.setTint(fg)
@@ -205,41 +230,68 @@ class Ui(val ctx: Context) {
         setOnClickListener { onClick() }
     }
 
-    /** Round floating icon button for map controls. */
-    fun fab(icon: Int, description: String, sizeDp: Int = 48, bg: Int = p.surface, fg: Int = p.onSurface, onClick: () -> Unit): ImageButton =
+    /**
+     * Round icon button. Floating on its own it casts a shadow; with [flat] it sits inside a capsule of controls and
+     * is only an icon, so six of them read as one tool instead of six circles over the map.
+     */
+    fun fab(icon: Int, description: String, sizeDp: Int = 48, bg: Int = p.surface, fg: Int = p.onSurface, flat: Boolean = false, onClick: () -> Unit): ImageButton =
         ImageButton(ctx).apply {
             setImageDrawable(ctx.getDrawable(icon)?.mutate()?.apply { setTint(fg) })
             contentDescription = description
             scaleType = ImageView.ScaleType.CENTER
-            val circle = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(bg) }
-            background = ripple(circle, 0x33000000, GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
-            elevation = dp(4).toFloat()
+            val mask = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
+            if (flat) {
+                background = ripple(null, 0x33000000, mask)
+            } else {
+                val circle = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(bg) }
+                background = ripple(circle, 0x33000000, mask)
+                elevation = dp(4).toFloat()
+            }
             layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
             setOnClickListener { onClick() }
         }
 
-    fun chip(label: String, selected: Boolean = false, onClick: (() -> Unit)? = null): TextView = TextView(ctx).apply {
+    /** A pill label. With [glass] it is the compact, frosted kind for floating over the map. */
+    fun chip(label: String, selected: Boolean = false, glass: Boolean = false, onClick: (() -> Unit)? = null): TextView = TextView(ctx).apply {
         text = label
-        textSize = 13f
+        textSize = if (glass) 12.5f else 13f
         maxLines = 1
         ellipsize = TextUtils.TruncateAt.END
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setTextColor(if (selected) p.onPrimaryContainer else p.onSurface)
-        setPadding(dp(12), dp(7), dp(12), dp(7))
-        background = rounded(if (selected) p.primaryContainer else p.surface, dp(16).toFloat(), p.outline, dp(1))
+        if (glass) {
+            setPadding(dp(11), dp(6), dp(11), dp(6))
+            background = rounded(if (selected) p.primaryContainer else p.glass, dp(18).toFloat(), p.glassStroke, dp(1))
+            elevation = dp(3).toFloat()
+        } else {
+            setPadding(dp(13), dp(8), dp(13), dp(8))
+            background = rounded(if (selected) p.primaryContainer else p.surfaceVariant, dp(18).toFloat())
+        }
         if (onClick != null) { isClickable = true; setOnClickListener { onClick() } }
     }
 
-    /** Label over a value; both shrink to fit a weighted column instead of being clipped. */
+    /**
+     * Label over a value, shrunk to fit a weighted column. A value that is a number and a unit ("360 m", "14.8 km/h")
+     * is set with a big number and a small unit, so the figure is what the eye lands on.
+     */
     fun stat(label: String, value: String, big: Boolean = false): LinearLayout = column {
         addView(text(label, T.LABEL).apply {
             maxLines = 1
             setAutoSizeTextTypeUniformWithConfiguration(8, 12, 1, TypedValue.COMPLEX_UNIT_SP)
         }, lp())
-        addView(text(value, if (big) T.HEADLINE else T.TITLE).apply {
+        addView(text(numberAndUnit(value), if (big) T.HEADLINE else T.TITLE).apply {
             maxLines = 1
-            setAutoSizeTextTypeUniformWithConfiguration(10, if (big) 24 else 17, 1, TypedValue.COMPLEX_UNIT_SP)
+            setAutoSizeTextTypeUniformWithConfiguration(10, if (big) 28 else 22, 1, TypedValue.COMPLEX_UNIT_SP)
         }, lp())
+    }
+
+    private fun numberAndUnit(value: String): CharSequence {
+        val m = NUMBER_UNIT.matchEntire(value) ?: return value
+        val unitStart = m.groups[2]?.range?.first ?: return value
+        return SpannableString(value).apply {
+            setSpan(RelativeSizeSpan(0.62f), unitStart, value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(ForegroundColorSpan(p.muted), unitStart, value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
     }
 
     /** Grid of stat tiles, [cols] per row. */
@@ -260,8 +312,8 @@ class Ui(val ctx: Context) {
         setHintTextColor(p.muted)
         textSize = 15f
         setSingleLine(type and InputType.TYPE_TEXT_FLAG_MULTI_LINE == 0)
-        setPadding(dp(14), dp(12), dp(14), dp(12))
-        background = rounded(p.surfaceVariant, dp(12).toFloat())
+        setPadding(dp(16), dp(13), dp(16), dp(13))
+        background = rounded(p.surfaceVariant, dp(16).toFloat())
     }
 
     fun switch(label: String, checked: Boolean, onChange: (Boolean) -> Unit): Switch = Switch(ctx).apply {
@@ -270,6 +322,10 @@ class Ui(val ctx: Context) {
         setTextColor(p.onSurface)
         isChecked = checked
         minHeight = dp(48)
+        val on = intArrayOf(android.R.attr.state_checked)
+        val off = intArrayOf()
+        thumbTintList = ColorStateList(arrayOf(on, off), intArrayOf(p.onPrimary, p.muted))
+        trackTintList = ColorStateList(arrayOf(on, off), intArrayOf(p.primary, p.surfaceVariant))
         setOnCheckedChangeListener { _, v -> onChange(v) }
     }
 
@@ -289,16 +345,17 @@ class Ui(val ctx: Context) {
     /** Tappable list row with title/subtitle and optional trailing badge. */
     fun listItem(title: String, subtitle: String?, icon: Int? = null, badge: String? = null, onClick: () -> Unit): LinearLayout =
         row(spacing = 14) {
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = ripple(rounded(p.surface, dp(18).toFloat(), p.outline, dp(1)), 0x22000000, rounded(Color.WHITE, dp(18).toFloat()))
+            setPadding(dp(14), dp(14), dp(16), dp(14))
+            background = ripple(rounded(p.surface, dp(24).toFloat()), 0x22000000, rounded(Color.WHITE, dp(24).toFloat()))
             isClickable = true
             setOnClickListener { onClick() }
             if (icon != null) {
+                // A rounded square rather than a circle: the tile shape the new look uses throughout.
                 addView(ImageView(ctx).apply {
                     setImageDrawable(ctx.getDrawable(icon)?.mutate()?.apply { setTint(p.primary) })
-                    background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(p.primaryContainer) }
-                    setPadding(dp(10), dp(10), dp(10), dp(10))
-                }, LinearLayout.LayoutParams(dp(44), dp(44)))
+                    background = rounded(p.primaryContainer, dp(16).toFloat())
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                }, LinearLayout.LayoutParams(dp(48), dp(48)))
             }
             addView(column {
                 addView(text(title, T.TITLE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
@@ -308,18 +365,27 @@ class Ui(val ctx: Context) {
         }
 
     fun banner(message: String, danger: Boolean = false, icon: Int = com.trailmind.app.R.drawable.ic_warning): LinearLayout = row(spacing = 12) {
-        setPadding(dp(14), dp(12), dp(14), dp(12))
-        background = rounded(if (danger) p.dangerContainer else p.warnContainer, dp(16).toFloat())
+        setPadding(dp(16), dp(13), dp(16), dp(13))
+        background = rounded(if (danger) p.dangerContainer else p.warnContainer, dp(20).toFloat())
         addView(ImageView(ctx).apply {
             setImageDrawable(ctx.getDrawable(icon)?.mutate()?.apply { setTint(if (danger) p.danger else p.accent) })
         }, LinearLayout.LayoutParams(dp(22), dp(22)))
         addView(text(message, T.CAPTION, p.onSurface), lp(0, weight = 1f))
     }
 
+    /** A short title set light then bold ("Trip *group*"); anything with numbers, names or punctuation is left plain. */
+    private fun twoTone(title: String): CharSequence {
+        val words = title.split(' ')
+        if (words.size !in 2..3 || title.any { it.isDigit() || it in "·:,–—&/()" }) return title
+        return SpannableString(title).apply {
+            setSpan(TypefaceSpan("sans-serif-light"), 0, words[0].length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
+
     /** Header used by every page: back arrow (optional) and title, with any actions on a wrapping row below it. */
     fun header(title: String, onBack: (() -> Unit)?, vararg actions: View): LinearLayout {
         val top = row(spacing = 4) {
-            setPadding(dp(4), dp(8), dp(8), dp(4))
+            setPadding(dp(4), dp(10), dp(8), dp(6))
             if (onBack != null) {
                 addView(ImageButton(ctx).apply {
                     setImageDrawable(ctx.getDrawable(com.trailmind.app.R.drawable.ic_arrow_back)?.mutate()?.apply { setTint(p.onSurface) })
@@ -328,7 +394,8 @@ class Ui(val ctx: Context) {
                     setOnClickListener { onBack() }
                 }, LinearLayout.LayoutParams(dp(48), dp(48)))
             } else addView(View(ctx), LinearLayout.LayoutParams(dp(12), 1))
-            addView(text(title, T.HEADLINE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
+            // Short titles get the large size; a long one (a hike's name and date) steps down so it stays on one line.
+            addView(text(twoTone(title), T.HEADLINE).apply { textSize = if (title.length <= 22) 28f else 22f; maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, lp(0, weight = 1f))
         }
         if (actions.isEmpty()) return top
         return column {

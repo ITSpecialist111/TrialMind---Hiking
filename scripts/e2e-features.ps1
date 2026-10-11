@@ -109,7 +109,20 @@ function Scroll-To([string]$pattern, [int]$swipes = 12, [switch]$Up) {
         if ($Up) { Adb shell input swipe 540 700 540 1800 250 } else { Adb shell input swipe 540 1700 540 800 300 }
         Start-Sleep -Milliseconds 700
     }
-    Has $pattern
+    if (-not (Has $pattern)) { return $false }
+    if (-not $Up) { Clear-Of-Nav $pattern }
+    $true
+}
+
+# The navigation floats over the foot of every page, so a node can be in the tree yet sit under it. Nudges the page until
+# the node is clear (above y 1900 on the 2400 px emulator), as a thumb would.
+function Clear-Of-Nav([string]$pattern) {
+    for ($k = 0; $k -lt 3; $k++) {
+        $n = Find-Nodes $pattern | Select-Object -First 1
+        if (-not $n -or $n.Y -le 1900) { return }
+        Adb shell input swipe 540 1500 540 1100 250
+        Start-Sleep -Milliseconds 600
+    }
 }
 
 # The emulator console: lon lat alt satellites speed(m/s).
@@ -178,7 +191,7 @@ function Hide-Keyboard {
 
 # Brings [pattern] on screen by scrolling down, then up if it was above.
 function Reveal([string]$pattern) {
-    if (Has $pattern) { return $true }
+    if (Has $pattern) { Clear-Of-Nav $pattern; return $true }
     if (Scroll-To $pattern 6) { return $true }
     Scroll-To $pattern 10 -Up
 }
@@ -481,7 +494,7 @@ ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), H).serve_forever()
         Check 'Tiles come from the Forest of Dean (zoom 14, x 8074-8077)' (@($log | Where-Object { $_ -match '^200 /tiles/uk-osgb10k1888/14/80(7\d)/54\d\d\.jpg key=TESTKEY' }).Count -ge 4) "$($log.Count) requests"
         Check 'The key is sent to the tile service only as key=' (@($log | Where-Object { $_ -match '^200 ' }).Count -gt 0)
         # The credit is drawn on the map, so read it from the dialog the credit opens.
-        Adb shell input tap 300 1850 | Out-Null
+        Adb shell input tap 300 1900 | Out-Null
         Check 'Credit to the National Library of Scotland and MapTiler on the map' (Wait-Ui 'Old map: Ordnance Survey via National Library of Scotland' 5)
         Tap '^Close$' 3 | Out-Null
         Tap '^OS six-inch 1888.* 55%$' | Out-Null

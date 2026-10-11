@@ -39,6 +39,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Side length of a button in the map's tool capsule. */
+private const val FAB_DP = 44
+
 /** The map plus its floating controls: status chips, route guidance card, go-to target, recording bar. */
 class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val app = host.app
@@ -52,7 +55,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             val gap = freeBottom() - freeTop()
             val fabs = if (fullScreenFab.visibility == View.VISIBLE) 7 else 6
-            val showZoom = gap >= host.dp(fabs * 48 + (fabs - 1) * 10)
+            val showZoom = gap >= host.dp(fabs * FAB_DP + 12)
             if (zoomButtons.any { (it.visibility == View.VISIBLE) != showZoom }) {
                 zoomButtons.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
                 super.onMeasure(widthMeasureSpec, heightMeasureSpec)
@@ -71,19 +74,24 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         private fun freeBottom() = measuredHeight - paddingBottom - recordBar.measuredHeight - host.dp(12)
     }
     private val topColumn = ui.column(spacing = 8)
-    private val statusRow = ui.row(spacing = 8)
-    private val gpsChip = ui.chip("GPS off") { host.push(SafetyPage(host)) }
-    private val layerChip = ui.chip("Map") { chooseLayer() }
-    private val navCard = ui.card(padding = 14, spacing = 6)
-    private val targetCard = ui.card(padding = 14, spacing = 4)
+    // Every status chip in one wrapping row, so GPS, group, map name and any old-map fade share a line when they fit.
+    private val statusRow = ui.flow(6)
+    private val gpsChip = ui.chip("GPS off", glass = true) { host.push(SafetyPage(host)) }
+    private val layerChip = ui.chip("Map", glass = true) { chooseLayer() }
+    private val navCard = ui.glassCard(padding = 14, spacing = 6)
+    private val targetCard = ui.glassCard(padding = 14, spacing = 4)
     private val recoverCard = ui.card(color = p.warnContainer, padding = 14, spacing = 8)
-    private val fabColumn = ui.column(spacing = 10)
+    // One capsule of map tools, not six separate buttons.
+    private val fabColumn = ui.column(padding = 4, spacing = 2).apply {
+        background = rounded(p.glass, host.dp(28).toFloat(), p.glassStroke, host.dp(1))
+        elevation = host.dp(6).toFloat()
+    }
     private var followFab: ImageButton
-    private val orientationFab = ui.fab(R.drawable.ic_north, "North up") { toggleHeadingUp() }
+    private val orientationFab = ui.fab(R.drawable.ic_north, "North up", sizeDp = FAB_DP, flat = true) { toggleHeadingUp() }
     private var orientationState = -1
     /** Direction of travel from GPS while walking, for heading up when the compass is disturbed. */
     private var courseDeg: Float? = null
-    private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map") { host.setMapFullScreen(!host.mapFullScreen) }
+    private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map", sizeDp = FAB_DP, flat = true) { host.setMapFullScreen(!host.mapFullScreen) }
     private val zoomButtons: List<View>
     // Caps the recording card at 420 dp in the wide layout without overflowing a narrower map pane.
     private val recordBar = object : FrameLayout(host) {
@@ -105,13 +113,13 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var searchPinHeightJob = 0
     private var startByKey: Any? = null
     private var startByLine: String? = null
-    private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
-    private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
-    private val oldMapChip = ui.chip("Old map") { chooseOldMap() }.apply {
+    private val trackChip = ui.chip("Hike track  ✕", glass = true) { clearShownTrack() }.apply { visibility = View.GONE }
+    private val pinChip = ui.chip("Clear search pin  ✕", glass = true) { clearSearchPin() }.apply { visibility = View.GONE }
+    private val oldMapChip = ui.chip("Old map", glass = true) { chooseOldMap() }.apply {
         visibility = View.GONE
         contentDescription = "Old map settings"
     }
-    private val groupChip = ui.chip("Group") { fitGroup() }.apply {
+    private val groupChip = ui.chip("Group", glass = true) { fitGroup() }.apply {
         visibility = View.GONE
         contentDescription = "Show the trip group on the map"
     }
@@ -155,30 +163,30 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         }, FrameLayout.LayoutParams(-1, host.dp(56), Gravity.TOP))
         view.addView(overlay, FrameLayout.LayoutParams(-1, -1))
 
-        statusRow.addView(gpsChip, ui.lp(-2))
-        statusRow.addView(View(host), ui.lp(0, 1, 1f))
-        statusRow.addView(groupChip, ui.lp(-2))
-        statusRow.addView(trackChip, ui.lp(-2))
-        statusRow.addView(layerChip, ui.lp(-2))
-        layerChip.maxWidth = host.dp(200)
+        statusRow.addView(gpsChip)
+        statusRow.addView(groupChip)
+        statusRow.addView(layerChip)
+        statusRow.addView(trackChip)
+        statusRow.addView(oldMapChip)
+        statusRow.addView(pinChip)
+        layerChip.maxWidth = host.dp(170)
+        oldMapChip.maxWidth = host.dp(230)
         topColumn.addView(statusRow)
-        topColumn.addView(pinChip)
-        topColumn.addView(oldMapChip)
         topColumn.addView(recoverCard)
         topColumn.addView(navCard)
         topColumn.addView(targetCard)
         overlay.addView(topColumn, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
-        fabColumn.addView(ui.fab(R.drawable.ic_search, "Search") { host.push(SearchPage(host)) })
+        fabColumn.addView(ui.fab(R.drawable.ic_search, "Search", sizeDp = FAB_DP, flat = true) { host.push(SearchPage(host)) })
         fabColumn.addView(fullScreenFab)
-        fabColumn.addView(ui.fab(R.drawable.ic_layers, "Map layers") { chooseLayer() })
+        fabColumn.addView(ui.fab(R.drawable.ic_layers, "Map layers", sizeDp = FAB_DP, flat = true) { chooseLayer() })
         zoomButtons = listOf(
-            ui.fab(R.drawable.ic_add, "Zoom in") { mapView.zoomBy(1.0) },
-            ui.fab(R.drawable.ic_remove, "Zoom out") { mapView.zoomBy(-1.0) },
+            ui.fab(R.drawable.ic_add, "Zoom in", sizeDp = FAB_DP, flat = true) { mapView.zoomBy(1.0) },
+            ui.fab(R.drawable.ic_remove, "Zoom out", sizeDp = FAB_DP, flat = true) { mapView.zoomBy(-1.0) },
         )
         zoomButtons.forEach { fabColumn.addView(it) }
         fabColumn.addView(orientationFab)
-        followFab = ui.fab(R.drawable.ic_my_location, "My location") { locate() }
+        followFab = ui.fab(R.drawable.ic_my_location, "My location", sizeDp = FAB_DP, flat = true) { locate() }
         fabColumn.addView(followFab)
         overlay.addView(fabColumn, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
         overlay.addView(recordBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
@@ -709,7 +717,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         val points = planner.plan.controlPoints
         val est = planner.plan.estimate(app.prefs.pace)
         val summary = TrackStats.summarize(planner.plan.line)
-        val card = ui.card(padding = 12, spacing = 6).apply { elevation = host.dp(6).toFloat() }
+        val card = ui.glassCard(padding = 12, spacing = 6)
         card.addView(ui.row {
             addView(ui.text("Plan a route", Ui.T.TITLE), ui.lp(0, weight = 1f))
             addView(miniIcon(R.drawable.ic_close, "Close planner") { closePlanner() })
@@ -996,11 +1004,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         when (status) {
             TrackingState.Status.IDLE -> {
                 val start = ui.button("Start hike", R.drawable.ic_play, Ui.B.FILLED) { startRecording() }
-                start.elevation = host.dp(6).toFloat()
+                start.elevation = host.dp(8).toFloat()
+                start.setPadding(host.dp(26), host.dp(10), host.dp(28), host.dp(10))
                 recordBar.addView(start, FrameLayout.LayoutParams(-2, host.dp(56), Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM))
             }
             else -> {
-                val card = ui.card(padding = 12, spacing = 0).apply { elevation = host.dp(6).toFloat() }
+                val card = ui.glassCard(padding = 12, spacing = 0)
                 val row = ui.row(spacing = 12) {
                     addView(ui.row(spacing = 14) {
                         tag = "stats"
@@ -1013,14 +1022,18 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                     addView(ui.fab(R.drawable.ic_stop, "Finish", bg = p.danger, fg = Color.WHITE) { confirmFinish() })
                 }
                 card.addView(row)
+                // Check-in controls as small chips on one line, so the recording card stays short and the map stays visible.
                 val due = app.prefs.checkInDueMs
-                card.addView(ui.button(if (due > 0) "Check-in ${clockTime(host, due)} · Edit" else "Set check-in", null, Ui.B.TEXT) {
-                    val route = app.nav.active?.data
-                    val minutes = route?.let { com.trailmind.core.stats.HikeEstimator.estimate(it.points, app.prefs.pace).planningMinutes } ?: 60.0
-                    pickCheckIn(host, route?.meta?.name ?: TrackingState.hikeName, minutes, route?.meta?.id ?: 0L) { updateTracking(force = true) }
-                })
-                if (due > 0) card.addView(ui.button("Cancel check-in", R.drawable.ic_close, Ui.B.TEXT) {
-                    CheckIn.clear(host); updateTracking(force = true)
+                card.addView(ui.flow(6) {
+                    setPadding(0, host.dp(8), 0, 0)
+                    addView(ui.chip(if (due > 0) "Check-in ${clockTime(host, due)} · Edit" else "Set check-in") {
+                        val route = app.nav.active?.data
+                        val minutes = route?.let { com.trailmind.core.stats.HikeEstimator.estimate(it.points, app.prefs.pace).planningMinutes } ?: 60.0
+                        pickCheckIn(host, route?.meta?.name ?: TrackingState.hikeName, minutes, route?.meta?.id ?: 0L) { updateTracking(force = true) }
+                    })
+                    if (due > 0) addView(ui.chip("Cancel check-in  ✕") {
+                        CheckIn.clear(host); updateTracking(force = true)
+                    })
                 })
                 recordBar.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
                 updateRecordStats()

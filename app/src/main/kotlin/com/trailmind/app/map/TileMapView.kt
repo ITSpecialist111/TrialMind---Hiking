@@ -1104,9 +1104,12 @@ class TileMapView(context: Context) : View(context) {
         val h = fullH - bottomChromePx
         val attr = source.attribution + if (facilities.isNotEmpty() && zoom >= 13) " · Facilities: © OpenStreetMap contributors" else ""
         val pad = 6 * density
+        // The credit floats a little in from the corner, so a rounded map edge (the unfolded layout) never clips it.
+        val left = 12 * density
+        val room = w - 2 * pad - left - 8 * density
         attrPaint.textSize = 10.5f * density
         var tw = attrPaint.measureText(attr)
-        if (tw > w - 2 * pad) { attrPaint.textSize *= (w - 2 * pad) / tw; tw = attrPaint.measureText(attr) }
+        if (tw > room) { attrPaint.textSize *= room / tw; tw = attrPaint.measureText(attr) }
         val th = attrPaint.textSize
         val mpp = WebMercator.metresPerPixel(centerLat, zoom)
         val maxPx = 110 * density
@@ -1125,28 +1128,29 @@ class TileMapView(context: Context) : View(context) {
         credits.forEachIndexed { i, credit ->
             attrPaint.textSize = 10.5f * density
             var width = attrPaint.measureText(credit)
-            if (width > w - 2 * pad) {
-                attrPaint.textSize *= (w - 2 * pad) / width
+            if (width > room) {
+                attrPaint.textSize *= room / width
                 width = attrPaint.measureText(credit)
             }
             creditSizes[i] = attrPaint.textSize
             creditWidth = maxOf(creditWidth, width)
         }
         val attrHeight = th + creditSizes.sum() + pad * credits.size
-        canvas.drawRect(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h, attrBg)
-        creditBox.set(0f, h - attrHeight - 2 * pad, maxOf(tw, creditWidth) + 2 * pad, h)
+        val plate = RectF(left, h - attrHeight - 2 * pad, left + maxOf(tw, creditWidth) + 2 * pad, h)
+        canvas.drawRoundRect(plate, 9 * density, 9 * density, attrBg)
+        creditBox.set(plate)
         attrPaint.textSize = th
-        canvas.drawText(attr, pad, h - pad - 1 * density, attrPaint)
+        canvas.drawText(attr, left + pad, h - pad - 1 * density, attrPaint)
         var baseline = h - th - 2 * pad - 1 * density
         credits.forEachIndexed { i, credit ->
             attrPaint.textSize = creditSizes[i]
-            canvas.drawText(credit, pad, baseline, attrPaint)
+            canvas.drawText(credit, left + pad, baseline, attrPaint)
             baseline -= creditSizes[i] + pad
         }
         attrPaint.textSize = 10.5f * density
-        val by = h - attrHeight - 2 * pad - 10 * density
-        val bx = 12 * density
-        canvas.drawRect(bx - 4 * density, by - 16 * density, bx + px + 4 * density, by + 5 * density, attrBg)
+        val by = plate.top - 14 * density
+        val bx = left + 6 * density
+        canvas.drawRoundRect(bx - 6 * density, by - 16 * density, bx + px + 6 * density, by + 5 * density, 9 * density, 9 * density, attrBg)
         canvas.drawLine(bx, by, bx + px, by, scalePaint)
         canvas.drawLine(bx, by - 5 * density, bx, by, scalePaint)
         canvas.drawLine(bx + px, by - 5 * density, bx + px, by, scalePaint)
@@ -1154,9 +1158,9 @@ class TileMapView(context: Context) : View(context) {
         logoBox.setEmpty()
         if (source.showsOsLogo) osLogo?.let { logo ->
             // OS branding: the logo sits on the map itself, bottom left, at its fixed size with clear space around it.
-            val bottom = (by - 26 * density).toInt()
-            val left = (8 * density).toInt()
-            logo.setBounds(left, bottom - logo.intrinsicHeight, left + logo.intrinsicWidth, bottom)
+            val bottom = (by - 28 * density).toInt()
+            val logoLeft = left.toInt()
+            logo.setBounds(logoLeft, bottom - logo.intrinsicHeight, logoLeft + logo.intrinsicWidth, bottom)
             logo.draw(canvas)
             logoBox.set(logo.bounds)
         }
