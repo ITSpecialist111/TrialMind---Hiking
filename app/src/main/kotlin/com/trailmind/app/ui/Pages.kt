@@ -755,9 +755,14 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
     private var segments: List<List<TrackPoint>> = emptyList()
     private var loaded = false
 
+    private val onStrava: () -> Unit = { if (loaded) refresh() }
+
     override fun onShow() {
+        if (app.frontierEdition) app.strava.addListener(onStrava)
         if (!loaded) load()
     }
+
+    override fun onHide() { if (app.frontierEdition) app.strava.removeListener(onStrava) }
 
     private fun load() = Async.run({ app.db.hike(hikeId) to app.db.hikeSegments(hikeId) }) { r ->
         loaded = true
@@ -796,13 +801,14 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
                 host.map.showTrack(segments)
                 host.map.fit(BoundingBox.of(all.map { it.latLon() }))
             })
+            if (app.frontierEdition) addView(com.trailmind.app.plus.stravaHikeCard(host, hikeId, live) { stravaHelp(h) })
             addView(ui.card(spacing = 10) {
                 addView(ui.text("Export", Ui.T.LABEL))
                 addView(ui.row {
                     addView(ui.button("Save GPX", R.drawable.ic_folder) { host.saveGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                     addView(ui.button("Share GPX", R.drawable.ic_share, Ui.B.TONAL) { host.shareGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                 })
-                addView(ui.button("Upload to Strava…", R.drawable.ic_upload, Ui.B.OUTLINED) { stravaHelp(h) })
+                if (!app.frontierEdition) addView(ui.button("Upload to Strava…", R.drawable.ic_upload, Ui.B.OUTLINED) { stravaHelp(h) })
             })
             addView(ui.row {
                 addView(ui.button("Rename", null, Ui.B.TEXT) {
@@ -826,7 +832,7 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
     }.toString()
 
     private fun stravaHelp(h: HikeMeta) {
-        val msg = "TrailMind has no direct Strava connection. Strava's API requires OAuth with a registered app and a client secret that must stay on a server, " +
+        val msg = if (app.frontierEdition) "Save the GPX and upload it by hand at strava.com/upload/select, or share it to any other app." else "TrailMind has no direct Strava connection. Strava's API requires OAuth with a registered app and a client secret that must stay on a server, " +
             "and embedding one in an app would be insecure.\n\n" +
             "Reliable manual upload:\n" +
             "1. Save the GPX (e.g. to Downloads or Drive).\n" +

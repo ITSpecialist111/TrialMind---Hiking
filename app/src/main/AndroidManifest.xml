@@ -64,7 +64,7 @@
         android:theme="@style/Theme.TrailMind">
 
         <!-- TrailMind keeps to texts and small requests on satellite links (maps, terrain and route search wait for normal signal). -->
-        <meta-data android:name="android.telephony.PROPERTY_SATELLITE_DATA_OPTIMIZED" android:value="com.trailmind.app" />
+        <meta-data android:name="android.telephony.PROPERTY_SATELLITE_DATA_OPTIMIZED" android:value="${applicationId}" />
 
         <activity
             android:name=".ui.MainActivity"
@@ -160,7 +160,7 @@
 
         <provider
             android:name=".share.ExportProvider"
-            android:authorities="com.trailmind.app.exports"
+            android:authorities="${applicationId}.exports"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

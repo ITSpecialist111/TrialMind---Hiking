@@ -192,6 +192,7 @@ class TrackingService : Service(), LocationListener {
             val active = TrackingState.activeMs()
             app.db.finalizeHike(id, System.currentTimeMillis(), active)
             finishedHikeId = id
+            if (app.frontierEdition) app.strava.onHikeFinished(id)
         }
         hikeId = -1
         TrackingState.end()

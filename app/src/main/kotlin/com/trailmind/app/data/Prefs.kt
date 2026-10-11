@@ -15,6 +15,11 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putBoolean("onboarding_v1", v).apply()
 
     /** The user's own OS Data Hub API key. Never bundled with the app. */
+    /** TrailMind Frontier only: which look the app has (see Palette.Look). */
+    var look: String
+        get() = sp.getString("look", "dusk") ?: "dusk"
+        set(v) = sp.edit().putString("look", v).apply()
+
     var osApiKey: String
         get() = sp.getString("os_api_key", "") ?: ""
         set(v) = sp.edit().putString("os_api_key", v.trim()).apply()

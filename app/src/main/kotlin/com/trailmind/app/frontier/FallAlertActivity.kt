@@ -26,6 +26,7 @@ class FallAlertActivity : Activity() {
     private val app get() = TrailMindApp.instance
     private lateinit var ui: Ui
     private var countdown: TextView? = null
+    private var ring: com.trailmind.app.plus.CountdownRing? = null
     private var okRequested = false
     private val onChange: () -> Unit = { render() }
     private val tick = object : Runnable {
@@ -93,6 +94,7 @@ class FallAlertActivity : Activity() {
     private fun updateCountdown() {
         val left = ((FallAlert.deadlineMs(this) - System.currentTimeMillis()) / 1_000).coerceAtLeast(0)
         countdown?.text = "%d:%02d".format(left / 60, left % 60)
+        ring?.update(left * 1_000)
     }
 
     private fun render() {
@@ -103,12 +105,14 @@ class FallAlertActivity : Activity() {
         val name = FallAlert.contactName(this).ifBlank { "your emergency contact" }
         val sat = app.frontier.satelliteState
         countdown = null
+        ring = null
         val body = ui.column(padding = 24, spacing = 14) {
             when (stage) {
                 FallAlert.Stage.COUNTDOWN -> {
                     addView(ui.text("Possible fall detected", Ui.T.LABEL, p.danger))
                     addView(ui.text("Are you OK?", Ui.T.DISPLAY))
-                    countdown = ui.text("", Ui.T.DISPLAY, p.danger).also { addView(it) }
+                    if (app.frontierEdition) ring = com.trailmind.app.plus.CountdownRing(this@FallAlertActivity, FallAlert.COUNTDOWN_MS).also { addView(it, ui.lp(h = ui.dp(230))) }
+                    else countdown = ui.text("", Ui.T.DISPLAY, p.danger).also { addView(it) }
                     addView(ui.text(if (FallAlert.canSendItself(this@FallAlertActivity)) "If you don't answer, TrailMind texts $name your location."
                         else "If you don't answer, TrailMind gets a text to $name ready for you to send.", Ui.T.BODY))
                 }

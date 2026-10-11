@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
+import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -70,7 +73,7 @@ class GroupFindPage(host: MainActivity, private val memberId: Int) : Page(host) 
             addView(ui.card(spacing = 12) {
                 status = ui.text("", Ui.T.BODY).also { addView(it) }
                 if (s != null && s.active) {
-                    if (!found && finder.uwb.capabilities.azimuth) arrow = UwbArrowView(host).also { addView(it, ui.lp(h = ui.dp(220))) }
+                    if (!found && finder.uwb.capabilities.azimuth) arrow = UwbArrowView(host).also { addView(it, ui.lp(h = ui.dp(if (app.frontierEdition) 300 else 220))) }
                     distance = ui.text("—", Ui.T.DISPLAY).apply { gravity = Gravity.CENTER }.also { addView(it) }
                     if (!found && finder.uwb.capabilities.azimuth) direction = ui.text("", Ui.T.BODY).apply { gravity = Gravity.CENTER }.also { addView(it) }
                     addView(ui.button("Stop", null, Ui.B.OUTLINED) { finder.stop() })
@@ -114,6 +117,7 @@ class GroupFindPage(host: MainActivity, private val memberId: Int) : Page(host) 
         distance?.alpha = if (fresh) 1f else 0.4f
         val azimuth = m?.azimuthDeg?.takeIf { fresh }
         arrow?.azimuthDeg = azimuth
+        arrow?.distanceM = m?.distanceM?.takeIf { fresh }
         direction?.text = when {
             m == null || !fresh -> ""
             azimuth == null -> "Hold the phone upright in front of you to see which way."
@@ -128,30 +132,43 @@ class GroupFindPage(host: MainActivity, private val memberId: Int) : Page(host) 
     }
 }
 
-/** An arrow that points at the member: up is straight ahead, turned by the UWB azimuth. */
+/**
+ * Points at the member: up is straight ahead, turned by the UWB azimuth. In Frontier it is a radar: range rings, a slow
+ * sweep, and a blip at the measured distance on a glowing pointer.
+ */
 class UwbArrowView(context: Context) : View(context) {
     private val p = Palette.of(context)
+    private val radar = p.look != Palette.Look.CLASSIC
     private val d = resources.displayMetrics.density
     var azimuthDeg: Double? = null
         set(v) { if (field != v) { field = v; invalidate() } }
+    var distanceM: Double? = null
+        set(v) { if (field != v) { field = v; invalidate() } }
 
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = p.outline; strokeWidth = 2 * d }
-    private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.primary }
+    private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (radar) p.accent else p.primary }
     private val waiting = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.muted; alpha = 90 }
+    private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.muted; textSize = 10f * d; textAlign = Paint.Align.CENTER }
+    private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val sweep = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shape = Path()
+    private var t0 = SystemClock.uptimeMillis()
 
     override fun onDraw(c: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
         val r = min(width, height) / 2f - 8 * d
+        if (radar) drawRadar(c, cx, cy, r) else drawClassic(c, cx, cy, r)
+    }
+
+    private fun drawClassic(c: Canvas, cx: Float, cy: Float, r: Float) {
         c.drawCircle(cx, cy, r, ring)
         val az = azimuthDeg
-        if (az == null) {
-            c.drawCircle(cx, cy, r * 0.18f, waiting)
-            return
-        }
-        c.save()
-        c.rotate(az.toFloat(), cx, cy)
+        if (az == null) { c.drawCircle(cx, cy, r * 0.18f, waiting); return }
+        c.save(); c.rotate(az.toFloat(), cx, cy); drawArrow(c, cx, cy, r); c.restore()
+    }
+
+    private fun drawArrow(c: Canvas, cx: Float, cy: Float, r: Float) {
         shape.reset()
         shape.moveTo(cx, cy - r * 0.85f)
         shape.lineTo(cx + r * 0.32f, cy - r * 0.2f)
@@ -162,6 +179,40 @@ class UwbArrowView(context: Context) : View(context) {
         shape.lineTo(cx - r * 0.32f, cy - r * 0.2f)
         shape.close()
         c.drawPath(shape, arrowPaint)
-        c.restore()
     }
+
+    private fun drawRadar(c: Canvas, cx: Float, cy: Float, r: Float) {
+        glow.shader = RadialGradient(cx, cy, r, intArrayOf(withAlpha(p.accent, 0x30), 0), null, Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, r, glow)
+        // Rings at 10, 25 and 50 m on a square-root scale, so close range is not squashed into the middle.
+        for ((m, name) in listOf(10 to "10 m", 25 to "25 m", 50 to "50 m")) {
+            val rr = r * kotlin.math.sqrt(m / 50f)
+            c.drawCircle(cx, cy, rr, ring)
+            c.drawText(name, cx, cy - rr + 11 * d, label)
+        }
+        val angle = ((SystemClock.uptimeMillis() - t0) % 3600) / 3600f * 360f
+        sweep.shader = SweepGradient(cx, cy, intArrayOf(0, withAlpha(p.accent, 0x50)), floatArrayOf(0.8f, 1f))
+        c.save(); c.rotate(angle - 90, cx, cy); c.drawCircle(cx, cy, r, sweep); c.restore()
+        c.drawCircle(cx, cy, 6 * d, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.onSurface })
+        val az = azimuthDeg
+        val dist = distanceM
+        if (az != null) {
+            c.save(); c.rotate(az.toFloat(), cx, cy)
+            arrowPaint.setShadowLayer(14 * d, 0f, 0f, p.accent)
+            shape.reset()
+            shape.moveTo(cx, cy - r * 0.72f); shape.lineTo(cx + r * 0.16f, cy - r * 0.38f); shape.lineTo(cx - r * 0.16f, cy - r * 0.38f); shape.close()
+            c.drawPath(shape, arrowPaint)
+            arrowPaint.clearShadowLayer()
+            if (dist != null) {
+                val br = r * kotlin.math.sqrt((dist / 50.0).coerceIn(0.05, 1.0)).toFloat()
+                val pulse = 1f + 0.25f * kotlin.math.sin((SystemClock.uptimeMillis() - t0) / 250f)
+                c.drawCircle(cx, cy - br, 11 * d * pulse, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(p.accent, 0x55) })
+                c.drawCircle(cx, cy - br, 7 * d, arrowPaint)
+            }
+            c.restore()
+        } else c.drawCircle(cx, cy, r * 0.12f, waiting)
+        postInvalidateOnAnimation()
+    }
+
+    private fun withAlpha(color: Int, alpha: Int) = (color and 0x00FFFFFF) or (alpha shl 24)
 }

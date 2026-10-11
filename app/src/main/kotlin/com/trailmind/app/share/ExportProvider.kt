@@ -56,7 +56,7 @@ class ExportProvider : ContentProvider() {
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
 
     companion object {
-        const val AUTHORITY = "com.trailmind.app.exports"
+        /** One per installed app, so TrailMind and TrailMind Frontier can sit side by side: "<applicationId>.exports". */\n        fun authority(ctx: Context) = ctx.packageName + ".exports"
         const val GPX_MIME = "application/gpx+xml"
         const val CSV_MIME = "text/csv"
 
@@ -67,7 +67,7 @@ class ExportProvider : ContentProvider() {
             val safe = fileName.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(80).ifBlank { "export.gpx" }
             val f = File(dir(ctx), safe)
             f.writeText(content, Charsets.UTF_8)
-            return Uri.Builder().scheme("content").authority(AUTHORITY).appendPath(safe).build()
+            return Uri.Builder().scheme("content").authority(authority(ctx)).appendPath(safe).build()
         }
     }
 }

@@ -560,7 +560,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
 
     private fun pickTime() {
         val cal = Calendar.getInstance().apply { timeInMillis = startMs }
-        val theme = if (p.night) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+        val theme = if (p.dark) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
         android.app.DatePickerDialog(host, theme, { _, y, m, day ->
             android.app.TimePickerDialog(host, theme, { _, h, min ->
                 cal.set(y, m, day, h, min, 0)
@@ -636,6 +636,10 @@ class SafetyPage(host: MainActivity) : Page(host) {
         })
         addView(frontierCard())
         addView(groupCard())
+        if (app.frontierEdition) {
+            addView(ui.button("Sky check: how much sky do I have?", null, Ui.B.TONAL) { host.push(com.trailmind.app.plus.SkyCheckPage(host)) })
+            addView(com.trailmind.app.plus.triageCard(host) { refresh() })
+        }
         addView(sosCard())
         val due = app.prefs.checkInDueMs
         addView(ui.card(spacing = 6) {
@@ -834,6 +838,11 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
     override fun render(): View = scaffold("Settings") {
         val prefs = app.prefs
+
+        if (app.frontierEdition) {
+            addView(com.trailmind.app.plus.lookCard(host))
+            addView(com.trailmind.app.plus.stravaSettingsCard(host) { refresh() })
+        }
 
         addView(ui.card(spacing = 10) {
             addView(ui.text("Ordnance Survey maps", Ui.T.TITLE))

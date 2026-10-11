@@ -34,9 +34,9 @@ jobs:
         run: >-
           ./gradlew --console=plain
           :core:test :app:testDebugUnitTest
-          :app:assembleDebug :wear:assembleDebug
-          :app:bundleRelease :wear:bundleRelease
-          :app:lintDebug :wear:lintDebug
+          :app:assembleDebug :frontier:assembleDebug :wear:assembleDebug
+          :app:bundleRelease :frontier:bundleRelease :wear:bundleRelease
+          :app:lintDebug :frontier:lintDebug :wear:lintDebug
 
       - name: Upload debug APKs
         uses: actions/upload-artifact@v7
@@ -44,6 +44,7 @@ jobs:
           name: trailmind-debug-apks
           path: |
             app/build/outputs/apk/debug/*.apk
+            frontier/build/outputs/apk/debug/*.apk
             wear/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
@@ -56,6 +57,7 @@ jobs:
             core/build/reports/
             core/build/test-results/
             app/build/reports/
+            frontier/build/reports/
             app/build/test-results/
             wear/build/reports/
           if-no-files-found: ignore

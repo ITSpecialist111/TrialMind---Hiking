@@ -5,6 +5,7 @@ import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -67,7 +68,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         }
 
         private fun freeTop() = paddingTop + topColumn.measuredHeight + host.dp(12)
-        private fun freeBottom() = measuredHeight - paddingBottom - recordBar.measuredHeight - host.dp(12)
+        private fun freeBottom() = measuredHeight - paddingBottom - bottomView.measuredHeight - host.dp(12)
     }
     private val topColumn = ui.column(spacing = 8)
     private val statusRow = ui.row(spacing = 8)
@@ -92,6 +93,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             super.onMeasure(w, heightMeasureSpec)
         }
     }
+    /** Frontier: the route card sits above the record bar as one bottom deck, so the top of the map stays clear. */
+    private val deckStack = ui.column(spacing = 8)
+    private val bottomView: View get() = if (app.frontierEdition) deckStack else recordBar
     private var wide = false
     private var bottomInset = 0
     private var lastStatus = TrackingState.Status.IDLE
@@ -104,6 +108,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var searchPinHeightJob = 0
     private var startByKey: Any? = null
     private var startByLine: String? = null
+    /** Frontier: the Trail Deck inside the route card. Kept between rebuilds so a finger on it is not lost. */
+    private val deck by lazy { com.trailmind.app.plus.TrailDeck(host) { at -> mapView.previewPoint = at } }
+    private fun attachDeck() {
+        (deck.parent as? ViewGroup)?.removeView(deck)
+        navCard.addView(deck, LinearLayout.LayoutParams(-1, -2))
+    }
     private val trackChip = ui.chip("Hike track  ✕") { clearShownTrack() }.apply { visibility = View.GONE }
     private val pinChip = ui.chip("Clear search pin  ✕") { clearSearchPin() }.apply { visibility = View.GONE }
     private val groupChip = ui.chip("Group") { fitGroup() }.apply {
@@ -156,10 +166,19 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         statusRow.addView(trackChip, ui.lp(-2))
         statusRow.addView(layerChip, ui.lp(-2))
         layerChip.maxWidth = host.dp(200)
+        if (app.frontierEdition) {
+            topColumn.addView(ui.row(spacing = 8) {
+                addView(com.trailmind.app.plus.LinkLadder(host), ui.lp(-2))
+                addView(View(host), ui.lp(0, 1, 1f))
+                addView(ui.fab(R.drawable.ic_compass, "Heads-up display", sizeDp = 44) { host.push(com.trailmind.app.plus.HudPage(host)) }, LinearLayout.LayoutParams(host.dp(44), host.dp(44)))
+                addView(com.trailmind.app.plus.HoldButton(host, "SOS", p.danger, p.danger) { host.push(com.trailmind.app.plus.SosPage(host)) }, LinearLayout.LayoutParams(host.dp(44), host.dp(44)))
+            })
+            mapView.applyLook(p.look)
+        }
         topColumn.addView(statusRow)
         topColumn.addView(pinChip)
         topColumn.addView(recoverCard)
-        topColumn.addView(navCard)
+        if (!app.frontierEdition) topColumn.addView(navCard)
         topColumn.addView(targetCard)
         overlay.addView(topColumn, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
@@ -175,8 +194,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         followFab = ui.fab(R.drawable.ic_my_location, "My location") { locate() }
         fabColumn.addView(followFab)
         overlay.addView(fabColumn, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
-        overlay.addView(recordBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
-        recordBar.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ -> updateBottomChrome(bottom - top) }
+        if (app.frontierEdition) {
+            deckStack.addView(navCard, LinearLayout.LayoutParams(-1, -2))
+            deckStack.addView(recordBar, LinearLayout.LayoutParams(-1, -2))
+            overlay.addView(deckStack, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        } else overlay.addView(recordBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        bottomView.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ -> updateBottomChrome(bottom - top) }
 
         mapView.setCenter(app.prefs.mapLat, app.prefs.mapLon, app.prefs.mapZoom)
         applySource()
@@ -236,7 +259,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         bottomInset = bottom
         overlay.setPadding(left + host.dp(12), top + host.dp(8), right + host.dp(12), bottom + host.dp(12))
         view.findViewWithTag<View>("scrim")?.layoutParams?.height = top + host.dp(24)
-        updateBottomChrome(recordBar.height)
+        updateBottomChrome(bottomView.height)
     }
 
     private fun updateBottomChrome(recordH: Int) {
@@ -690,6 +713,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             mapView.distanceMarks = route?.let { DistanceMarks.along(it.guide, mapView.distanceStepM) } ?: emptyList()
         }
         if (route == null) {
+            mapView.previewPoint = null
             navShown = null
             if (navCard.childCount > 0) navCard.removeAllViews()
             navCard.visibility = View.GONE
@@ -735,12 +759,14 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 "Finish ≈ ${finishTime(host, daylight.finishMs)}, inside ${app.prefs.daylightMarginMinutes} min sunset margin (${clockTime(host, sunset)})"
             else "Finish ≈ ${finishTime(host, daylight.finishMs)} · sunset ${clockTime(host, sunset)}"
         else null
+        if (app.frontierEdition) deck.bind(route, fix)
         val shown = listOf(routeId, route.data.meta.name, offRoute, waiting, stats, status, next, daylightLine).joinToString("|")
         if (shown == navShown) return
         navShown = shown
         navCard.removeAllViews()
         navCard.visibility = View.VISIBLE
-        navCard.background = rounded(if (offRoute) p.dangerContainer else p.surface, host.dp(20).toFloat(), p.outline, host.dp(1))
+        navCard.background = if (app.frontierEdition) rounded(if (offRoute) p.dangerContainer else com.trailmind.app.plus.withAlpha(p.surface, 0xF0), host.dp(28).toFloat(), p.outline, host.dp(1))
+        else rounded(if (offRoute) p.dangerContainer else p.surface, host.dp(20).toFloat(), p.outline, host.dp(1))
         navCard.addView(ui.row(spacing = 8) {
             addView(ui.text("Following", Ui.T.LABEL, p.primary))
             addView(ui.text(route.data.meta.name, Ui.T.TITLE).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, ui.lp(0, weight = 1f))
@@ -748,10 +774,12 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 ui.confirm("Stop following?", "The route will be removed from the map.", "Stop") { app.nav.stopFollowing() }
             })
         })
-        if (waiting != null) { navCard.addView(ui.text(waiting, Ui.T.CAPTION)); return }
-        if (stats != null) navCard.addView(ui.row(spacing = 12) {
-            listOf("To go", "Time", "Climb", "Done").forEachIndexed { i, label -> addView(ui.stat(label, stats[i]), ui.lp(0, weight = 1f)) }
+        if (waiting != null) navCard.addView(ui.text(waiting, Ui.T.CAPTION))
+        if (waiting == null && stats != null) navCard.addView(ui.row(spacing = 12) {
+            listOf("To go", "Time", "Climb", "Done").forEachIndexed { i, label -> addView(ui.stat(label, stats[i], big = app.frontierEdition), ui.lp(0, weight = 1f)) }
         })
+        if (app.frontierEdition) attachDeck()
+        if (waiting != null) return
         status?.let { navCard.addView(if (offRoute) ui.text(it, Ui.T.TITLE, p.danger) else ui.text(it, Ui.T.CAPTION)) }
         next?.let { navCard.addView(ui.text(it, Ui.T.CAPTION)) }
         if (daylightLine != null) {

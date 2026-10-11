@@ -27,4 +27,7 @@ if (!coreOnly) {
     include(":app")
     // Wear OS companion (Galaxy Watch4 and later); talks to :app over Bluetooth, no Google Play services.
     include(":wear")
+    // TrailMind Frontier: the same sources under their own package, with the new screens and Strava switched on.
+    include(":frontier")
 }
+

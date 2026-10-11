@@ -428,7 +428,7 @@ class GroupSharing(private val app: TrailMindApp) : GroupRadio.Listener {
         val originS = (f.location.time.takeIf { it > 0 } ?: nowMs()) / 1_000
         val battery = app.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
         ownFrame = PositionFrame.of(g.memberId, seq, originS, f.lat, f.lon, f.altitudeM, f.accuracyM, battery.coerceIn(0, 100), status(),
-            capabilities = capabilityBits(), flags = flags())
+            triageCode = if (status().needsHelp) app.prefs.triageCode else 0, capabilities = capabilityBits(), flags = flags())
         ownFrameMs = System.currentTimeMillis()
     }
 

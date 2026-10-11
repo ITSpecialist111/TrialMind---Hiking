@@ -525,8 +525,24 @@ class MainActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.SEND_SMS), RC_SMS)
     }
 
+    private var pendingCamera: (() -> Unit)? = null
+
+    /** Frontier's Sky check: runs [then] once the camera may be used. The picture never leaves the phone. */
+    fun withCameraPermission(then: () -> Unit) {
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) { then(); return }
+        pendingCamera = then
+        requestPermissions(arrayOf(Manifest.permission.CAMERA), RC_CAMERA)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RC_CAMERA) {
+            val then = pendingCamera
+            pendingCamera = null
+            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) then?.invoke()
+            else toast("Without the camera, Sky check can't see the sky.")
+            return
+        }
         if (requestCode == RC_SMS) {
             val then = pendingSms
             pendingSms = null
@@ -689,6 +705,13 @@ class MainActivity : Activity() {
             link?.let { joinGroupFromLink(this, it) }
             return
         }
+        if (app.frontierEdition && intent.action == Intent.ACTION_VIEW && intent.dataString?.let { com.trailmind.core.strava.StravaOAuth.isRedirect(it) } == true) {
+            val redirect = intent.dataString.orEmpty()
+            intent.action = null
+            showTab(Tab.SETTINGS)
+            com.trailmind.app.plus.finishSignIn(this, redirect) { if (tab == Tab.SETTINGS) showTab(Tab.SETTINGS) }
+            return
+        }
         if (intent.action == ACTION_SAFETY) {
             intent.action = null
             showTab(Tab.SAFETY)
@@ -825,6 +848,7 @@ class MainActivity : Activity() {
         private const val RC_SMS = 13
         private const val RC_NEARBY = 14
         private const val RC_RANGING = 15
+        private const val RC_CAMERA = 16
         private const val RC_GPX = 20
         private const val RC_MBTILES = 21
         private const val RC_EXPORT = 22

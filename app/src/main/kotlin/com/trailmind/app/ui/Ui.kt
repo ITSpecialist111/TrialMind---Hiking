@@ -28,32 +28,76 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
-/** Colour palette, resolved for day/night. */
-class Palette(val night: Boolean) {
-    val bg = if (night) 0xFF101512.toInt() else 0xFFF4F6F2.toInt()
-    val surface = if (night) 0xFF1A211D.toInt() else 0xFFFFFFFF.toInt()
-    val surfaceVariant = if (night) 0xFF25302A.toInt() else 0xFFE6EDE7.toInt()
-    val onSurface = if (night) 0xFFE6ECE8.toInt() else 0xFF17201B.toInt()
-    val muted = if (night) 0xFFA3B1A9.toInt() else 0xFF5B6A61.toInt()
-    val primary = if (night) 0xFF7FD1AE.toInt() else 0xFF1F5B45.toInt()
-    val onPrimary = if (night) 0xFF06281B.toInt() else 0xFFFFFFFF.toInt()
-    val primaryContainer = if (night) 0xFF1E4A38.toInt() else 0xFFCDEBDC.toInt()
-    val onPrimaryContainer = if (night) 0xFFCDEBDC.toInt() else 0xFF0B3325.toInt()
-    val accent = if (night) 0xFFFFB066.toInt() else 0xFFE07A12.toInt()
-    val danger = if (night) 0xFFFF8A80.toInt() else 0xFFC62828.toInt()
-    val dangerContainer = if (night) 0xFF5C1B17.toInt() else 0xFFFDE2DF.toInt()
-    val warnContainer = if (night) 0xFF4A3A12.toInt() else 0xFFFFF1CC.toInt()
-    val outline = if (night) 0xFF3A463F.toInt() else 0xFFD3DBD5.toInt()
-    val route = 0xFF8E24AA.toInt()
-    val track = 0xFFF06E14.toInt()
+/**
+ * Colour palette. TrailMind resolves it for the system's day or night setting. TrailMind Frontier lets the user pick
+ * a [Look] instead: Dusk (dark glass over terrain), Day (high contrast for glare) or Night vision (reds only).
+ */
+class Palette(val night: Boolean, val look: Look = Look.CLASSIC) {
+    enum class Look(val id: String, val label: String) {
+        CLASSIC("classic", "Match system"), DUSK("dusk", "Dusk"), DAY("day", "Day · glare"), NIGHT_VISION("night_vision", "Night vision");
+
+        companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } ?: DUSK }
+    }
+
+    private class Tokens(
+        val bg: Int, val surface: Int, val surfaceVariant: Int, val onSurface: Int, val muted: Int, val primary: Int, val onPrimary: Int,
+        val primaryContainer: Int, val onPrimaryContainer: Int, val accent: Int, val danger: Int, val dangerContainer: Int,
+        val warnContainer: Int, val outline: Int, val route: Int, val track: Int, val mesh: Int, val sat: Int,
+    )
+
+    private val t: Tokens = when (look) {
+        Look.CLASSIC -> if (night) Tokens(0xFF101512.toInt(), 0xFF1A211D.toInt(), 0xFF25302A.toInt(), 0xFFE6ECE8.toInt(), 0xFFA3B1A9.toInt(), 0xFF7FD1AE.toInt(),
+            0xFF06281B.toInt(), 0xFF1E4A38.toInt(), 0xFFCDEBDC.toInt(), 0xFFFFB066.toInt(), 0xFFFF8A80.toInt(), 0xFF5C1B17.toInt(), 0xFF4A3A12.toInt(),
+            0xFF3A463F.toInt(), 0xFF8E24AA.toInt(), 0xFFF06E14.toInt(), 0xFF62D4FF.toInt(), 0xFFBBA7FF.toInt())
+        else Tokens(0xFFF4F6F2.toInt(), 0xFFFFFFFF.toInt(), 0xFFE6EDE7.toInt(), 0xFF17201B.toInt(), 0xFF5B6A61.toInt(), 0xFF1F5B45.toInt(),
+            0xFFFFFFFF.toInt(), 0xFFCDEBDC.toInt(), 0xFF0B3325.toInt(), 0xFFE07A12.toInt(), 0xFFC62828.toInt(), 0xFFFDE2DF.toInt(), 0xFFFFF1CC.toInt(),
+            0xFFD3DBD5.toInt(), 0xFF8E24AA.toInt(), 0xFFF06E14.toInt(), 0xFF0A769F.toInt(), 0xFF5E43CC.toInt())
+        Look.DUSK -> Tokens(0xFF0A0F0C.toInt(), 0xFF141C17.toInt(), 0xFF1F2A24.toInt(), 0xFFEAF2ED.toInt(), 0xFF93A79B.toInt(), 0xFF8CE6B4.toInt(),
+            0xFF04220F.toInt(), 0xFF1B3A2B.toInt(), 0xFFCFF3DF.toInt(), 0xFFFF9F55.toInt(), 0xFFFF6B5E.toInt(), 0xFF4A1A16.toInt(), 0xFF3F3214.toInt(),
+            0xFF2A372F.toInt(), 0xFFD29BFF.toInt(), 0xFFFF9F55.toInt(), 0xFF62D4FF.toInt(), 0xFFBBA7FF.toInt())
+        Look.DAY -> Tokens(0xFFEEF2EA.toInt(), 0xFFFFFFFF.toInt(), 0xFFE4EBDF.toInt(), 0xFF0F1B14.toInt(), 0xFF52665A.toInt(), 0xFF17694A.toInt(),
+            0xFFFFFFFF.toInt(), 0xFFCDEBDC.toInt(), 0xFF0B3325.toInt(), 0xFFC75E05.toInt(), 0xFFC62828.toInt(), 0xFFFDE2DF.toInt(), 0xFFFFF1CC.toInt(),
+            0xFFD0D9CE.toInt(), 0xFF8E24AA.toInt(), 0xFFD96A0B.toInt(), 0xFF0A769F.toInt(), 0xFF5E43CC.toInt())
+        Look.NIGHT_VISION -> Tokens(0xFF070000.toInt(), 0xFF140202.toInt(), 0xFF220505.toInt(), 0xFFFF6B5B.toInt(), 0xFFA83A2E.toInt(), 0xFFFF4D3D.toInt(),
+            0xFF1A0000.toInt(), 0xFF3A0A07.toInt(), 0xFFFF9A8C.toInt(), 0xFFFF7A45.toInt(), 0xFFFF3B30.toInt(), 0xFF3A0A07.toInt(), 0xFF2E0F05.toInt(),
+            0xFF3A0C08.toInt(), 0xFFFF8A7A.toInt(), 0xFFFF7A45.toInt(), 0xFFE0503F.toInt(), 0xFFC23B30.toInt())
+    }
+
+    /** Dark surfaces: dialogs and system chrome follow this, not the system setting, in Frontier looks. */
+    val dark get() = look == Look.DUSK || look == Look.NIGHT_VISION || (look == Look.CLASSIC && night)
+
+    val bg get() = t.bg
+    val surface get() = t.surface
+    val surfaceVariant get() = t.surfaceVariant
+    val onSurface get() = t.onSurface
+    val muted get() = t.muted
+    val primary get() = t.primary
+    val onPrimary get() = t.onPrimary
+    val primaryContainer get() = t.primaryContainer
+    val onPrimaryContainer get() = t.onPrimaryContainer
+    val accent get() = t.accent
+    val danger get() = t.danger
+    val dangerContainer get() = t.dangerContainer
+    val warnContainer get() = t.warnContainer
+    val outline get() = t.outline
+    val route get() = t.route
+    val track get() = t.track
+    /** Frontier link colours: mesh and satellite. */
+    val mesh get() = t.mesh
+    val sat get() = t.sat
 
     companion object {
-        fun of(ctx: Context) = Palette(
-            (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES,
-        )
+        fun of(ctx: Context): Palette {
+            val system = (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            val app = runCatching { com.trailmind.app.TrailMindApp.instance }.getOrNull()
+            if (app?.frontierEdition == true) {
+                val look = Look.of(app.prefs.look)
+                return Palette(system, if (look == Look.CLASSIC) Look.CLASSIC else look)
+            }
+            return Palette(system)
+        }
     }
 }
-
 fun Context.dp(v: Number): Int = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 fun View.dp(v: Number): Int = context.dp(v)
 
@@ -339,7 +383,7 @@ class Ui(val ctx: Context) {
 
     fun dialog(): AlertDialog.Builder = AlertDialog.Builder(
         ctx,
-        if (p.night) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert,
+        if (p.dark) android.R.style.Theme_DeviceDefault_Dialog_Alert else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert,
     )
 
     fun confirm(title: String, message: String, ok: String, danger: Boolean = false, onOk: () -> Unit) {

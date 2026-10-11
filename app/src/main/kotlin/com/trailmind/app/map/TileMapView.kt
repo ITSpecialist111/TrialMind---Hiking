@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -21,6 +23,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import com.trailmind.app.R
 import com.trailmind.app.TrailMindApp
+import com.trailmind.app.ui.Palette
 import com.trailmind.core.format.Units
 import com.trailmind.core.geo.Facility
 import com.trailmind.core.geo.BoundingBox
@@ -142,6 +145,10 @@ class TileMapView(context: Context) : View(context) {
         set(v) { field = v; invalidate() }
     var target: LatLon? = null
         set(v) { if (field != v) { field = v; invalidate() } }
+    /** Frontier: where the elevation profile's finger is, as a ring on the route. */
+    var previewPoint: LatLon? = null
+        set(v) { if (field != v) { field = v; invalidate() } }
+
     var searchPin: MapMarker? = null
         set(v) { field = v; invalidate() }
     /** Trip-group members, drawn above waypoints and below your own position. */
@@ -247,6 +254,7 @@ class TileMapView(context: Context) : View(context) {
         color = Color.WHITE; textSize = 10 * density; isFakeBoldText = true; textAlign = Paint.Align.CENTER
     }
     private val pinFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 121, 107) }
+    private val previewFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 159, 85) }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(30, 30, 30); textSize = 12 * density; isFakeBoldText = true
     }
@@ -488,6 +496,7 @@ class TileMapView(context: Context) : View(context) {
         drawHikers(canvas, w, h)
         drawTarget(canvas, w, h)
         drawSearchPin(canvas, w, h)
+        drawPreview(canvas, w, h)
         drawPosition(canvas, w, h)
         drawScaleAndAttribution(canvas, w, h)
         (hint ?: sourceHint)?.let { drawHint(canvas, it, w, h) }
@@ -1030,6 +1039,24 @@ class TileMapView(context: Context) : View(context) {
         canvas.drawPath(path, targetFill)
         canvas.drawCircle(x, y - r * 1.9f, r, targetFill)
         canvas.drawCircle(x, y - r * 1.9f, r * 0.4f, white)
+    }
+
+    private fun drawPreview(canvas: Canvas, w: Float, h: Float) {
+        val at = previewPoint ?: return
+        place(at, w, h)
+        canvas.drawCircle(px, py, 13 * density, white)
+        canvas.drawCircle(px, py, 10 * density, previewFill)
+        canvas.drawCircle(px, py, 4 * density, white)
+    }
+
+    /** Frontier looks: ease glare at dusk, or turn the whole map red to protect night vision. */
+    fun applyLook(look: Palette.Look) {
+        val m = when (look) {
+            Palette.Look.DUSK -> ColorMatrix(floatArrayOf(.80f, 0f, 0f, 0f, 0f, 0f, .84f, 0f, 0f, 3f, 0f, 0f, .80f, 0f, 0f, 0f, 0f, 0f, 1f, 0f))
+            Palette.Look.NIGHT_VISION -> ColorMatrix(floatArrayOf(.16f, .30f, .06f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f, 0f))
+            else -> null
+        }
+        setLayerType(if (m != null) LAYER_TYPE_HARDWARE else LAYER_TYPE_NONE, m?.let { Paint().apply { colorFilter = ColorMatrixColorFilter(it) } })
     }
 
     private fun drawSearchPin(canvas: Canvas, w: Float, h: Float) {

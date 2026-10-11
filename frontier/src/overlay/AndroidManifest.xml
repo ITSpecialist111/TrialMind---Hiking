@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Sky check only: looks at the sky to see what blocks it. The picture is analysed on the phone and never stored. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application android:label="TrailMind Frontier" android:networkSecurityConfig="@xml/network_security_config"
+        tools:replace="android:label">
+
+        <!-- Switches on the Frontier screens and the Strava connection (TrailMindApp.frontierEdition). -->
+        <meta-data android:name="com.trailmind.edition.frontier" android:value="true" />
+
+        <activity android:name="com.trailmind.app.ui.MainActivity" android:exported="true">
+            <!-- Strava sign-in returns here: trailmindfrontier://localhost/strava?code=… -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="trailmindfrontier" android:host="localhost" android:pathPrefix="/strava" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
