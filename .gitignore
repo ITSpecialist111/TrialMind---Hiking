@@ -12,3 +12,6 @@ captures
 !debug-sample.keystore
 *.jks
 .vscode
+ios/Generated/
+ios/TrailMind.xcodeproj/
+ios/DerivedData/

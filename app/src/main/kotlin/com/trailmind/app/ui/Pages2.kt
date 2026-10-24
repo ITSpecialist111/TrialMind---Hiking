@@ -47,6 +47,7 @@ class CompassPage(host: MainActivity) : Page(host) {
     }
 
     override fun render(): View = scaffold("Compass") {
+        addView(ui.listItem("Satellites & telemetry", "Sky view and GPS quality", R.drawable.ic_my_location) { host.push(SatellitePage(host)) })
         if (!host.compass.available) addView(ui.banner("This device has no magnetometer, so the compass is unavailable. Use GPS bearing while moving.", danger = true))
         calibrate = ui.banner("Compass accuracy is low. Move the phone in a figure-of-eight away from metal, magnets and the phone case clasp.").also {
             it.visibility = View.GONE; addView(it)
@@ -156,10 +157,11 @@ class CompassPage(host: MainActivity) : Page(host) {
 
 class MorePage(host: MainActivity) : Page(host) {
     override fun render(): View = scaffold("More") {
-        addView(ui.listItem("Offline maps", "Download OS map areas along routes, or import MBTiles", R.drawable.ic_download) { host.push(OfflinePage(host)) })
-        addView(ui.listItem("Beacon", "Offline hike assistant: a rule-based briefing with mountain weather, and a prompt for Gemma", R.drawable.ic_sparkle) { host.push(AssistantPage(host)) })
-        addView(ui.listItem("Safety & location", "Grid reference, share location, emergency numbers", R.drawable.ic_sos) { host.push(SafetyPage(host)) })
-        addView(ui.listItem("Settings", "OS API key, units, pace, alerts, map sources", R.drawable.ic_tune) { host.push(SettingsPage(host)) })
+        addView(ui.listItem("Offline maps", "Maps for use without signal", R.drawable.ic_download, info = "Download licensed OS areas or route corridors, or import MBTiles. Some premium detail expires after 24 hours. OpenStreetMap cannot be bulk downloaded.") { host.push(OfflinePage(host)) })
+        addView(ui.listItem("Beacon", "Prepare for your walk", R.drawable.ic_sparkle, info = "A rule-based hike briefing with mountain weather and a prompt you can use with an on-device Gemma model. Weather needs a connection to refresh; saved briefings remain available offline.") { host.push(AssistantPage(host)) })
+        addView(ui.listItem("Safety & location", "Your position and emergency tools", R.drawable.ic_sos, info = "Read or share coordinates, grid references and optional what3words. Set a check-in, manage fall alerts or prepare an emergency message. Emergency information remains visible without opening help.") { host.push(SafetyPage(host)) })
+        addView(ui.listItem("Satellites & telemetry", "Live sky view", R.drawable.ic_my_location, info = "See satellites reported by the GNSS receiver, those used in the fix, signal strength, accuracy and available altitude or pressure data. Requires precise location permission.") { host.push(SatellitePage(host)) })
+        addView(ui.listItem("Settings", "Personalise TrailMind", R.drawable.ic_tune, info = "Set API keys, menu transparency, units, pace, route alerts, recording preferences and your emergency contact.") { host.push(SettingsPage(host)) })
         if (!host.wide) addView(ui.text("Unfold your phone for a side-by-side map and panel layout.", Ui.T.CAPTION))
     }
 }
@@ -222,11 +224,11 @@ class DashboardPage(host: MainActivity) : Page(host) {
                 addView(ui.button("Import GPX", R.drawable.ic_upload) { host.pickGpx() })
             })
         }
-        addView(ui.row {
-            addView(ui.button("Offline maps", R.drawable.ic_download, Ui.B.OUTLINED) { host.push(OfflinePage(host)) }, ui.lp(0, weight = 1f))
-            addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.OUTLINED) { host.push(AssistantPage(host)) }, ui.lp(0, weight = 1f))
+        addView(ui.column(spacing = 8) {
+            addView(ui.button("Offline maps", R.drawable.ic_download, Ui.B.OUTLINED) { host.push(OfflinePage(host)) }, ui.lp())
+            addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.OUTLINED) { host.push(AssistantPage(host)) }, ui.lp())
         })
-        addView(ui.text("Long-press the map to set a go-to point. Tap the GPS chip for your grid reference and safety tools.", Ui.T.CAPTION))
+        addView(ui.help("Map shortcuts", "Long-press the map to set a go-to point. Tap the GPS chip for your grid reference and safety tools."))
     }
 }
 

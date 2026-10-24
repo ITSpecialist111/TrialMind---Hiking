@@ -52,7 +52,7 @@ class Palette(val night: Boolean) {
     val route = 0xFF8E24AA.toInt()
     val track = 0xFFF06E14.toInt()
 
-    // Floating controls over the map: frosted surfaces, and a dark capsule for navigation with a mint selection.
+    // Translucent surfaces do not reduce the opacity of text or safety controls.
     val glass = if (night) 0xEC161D19.toInt() else 0xECFFFFFF.toInt()
     val glassStroke = if (night) 0x33FFFFFF else 0x16000000
     val inverse = if (night) 0xF8222C27.toInt() else 0xF816211B.toInt()
@@ -157,6 +157,40 @@ class Ui(val ctx: Context) {
         addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
+    /** Paired actions stay on one row only when each label has its natural width. */
+    fun actionRow(spacing: Int = 8, block: LinearLayout.() -> Unit): LinearLayout =
+        object : LinearLayout(ctx) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val children = (0 until childCount).map { getChildAt(it) }.filter { it.visibility != GONE }
+                val natural = children.map {
+                    it.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+                        MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+                    it.measuredWidth
+                }
+                val available = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+                val fits = MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED ||
+                    natural.sum() + dp(spacing) * (children.size - 1).coerceAtLeast(0) <= available
+                val direction = if (fits) HORIZONTAL else VERTICAL
+                if (orientation != direction) orientation = direction
+                children.forEachIndexed { index, view ->
+                    val params = view.layoutParams as LayoutParams
+                    val width = if (fits) natural[index] else ViewGroup.LayoutParams.MATCH_PARENT
+                    val weight = if (fits) 1f else 0f
+                    if (params.width != width || params.weight != weight) {
+                        params.width = width
+                        params.weight = weight
+                        view.layoutParams = params
+                    }
+                }
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+        }.apply {
+            gravity = Gravity.CENTER_VERTICAL
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = GradientDrawable().apply { setSize(dp(spacing), dp(spacing)); setColor(Color.TRANSPARENT) }
+            block()
+        }
+
     fun flow(spacing: Int = 8, block: FlowLayout.() -> Unit = {}): FlowLayout = FlowLayout(ctx, dp(spacing)).apply(block)
 
     enum class T { DISPLAY, TITLE, HEADLINE, BODY, LABEL, CAPTION, MONO }
@@ -252,10 +286,10 @@ class Ui(val ctx: Context) {
         }
 
     /** A pill label. With [glass] it is the compact, frosted kind for floating over the map. */
-    fun chip(label: String, selected: Boolean = false, glass: Boolean = false, onClick: (() -> Unit)? = null): TextView = TextView(ctx).apply {
+    fun chip(label: String, selected: Boolean = false, glass: Boolean = false, wrap: Boolean = false, onClick: (() -> Unit)? = null): TextView = TextView(ctx).apply {
         text = label
         textSize = if (glass) 12.5f else 13f
-        maxLines = 1
+        maxLines = if (wrap) 3 else 1
         ellipsize = TextUtils.TruncateAt.END
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setTextColor(if (selected) p.onPrimaryContainer else p.onSurface)
@@ -342,10 +376,17 @@ class Ui(val ctx: Context) {
 
     fun spacer(h: Int = 8): View = View(ctx).apply { layoutParams = LinearLayout.LayoutParams(1, dp(h)) }
 
-    /** Tappable list row with title/subtitle and optional trailing badge. */
-    fun listItem(title: String, subtitle: String?, icon: Int? = null, badge: String? = null, onClick: () -> Unit): LinearLayout =
-        row(spacing = 14) {
-            setPadding(dp(14), dp(14), dp(16), dp(14))
+    fun help(summary: String, detail: String): View = row(spacing = 4) {
+        addView(text(summary, T.CAPTION), lp(0, weight = 1f))
+        addView(fab(com.trailmind.app.R.drawable.ic_info, "More information: $summary", flat = true) {
+            dialog().setTitle(summary).setMessage(detail).setPositiveButton("OK", null).show()
+        })
+    }
+
+    /** Keep status below the text so it cannot squeeze names into a narrow column. */
+    fun listItem(title: String, subtitle: String?, icon: Int? = null, badge: String? = null, info: String? = null, onClick: () -> Unit): LinearLayout =
+        row(spacing = 10) {
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             background = ripple(rounded(p.surface, dp(24).toFloat()), 0x22000000, rounded(Color.WHITE, dp(24).toFloat()))
             isClickable = true
             setOnClickListener { onClick() }
@@ -353,15 +394,18 @@ class Ui(val ctx: Context) {
                 // A rounded square rather than a circle: the tile shape the new look uses throughout.
                 addView(ImageView(ctx).apply {
                     setImageDrawable(ctx.getDrawable(icon)?.mutate()?.apply { setTint(p.primary) })
-                    background = rounded(p.primaryContainer, dp(16).toFloat())
-                    setPadding(dp(12), dp(12), dp(12), dp(12))
-                }, LinearLayout.LayoutParams(dp(48), dp(48)))
+                    background = rounded(p.primaryContainer, dp(13).toFloat())
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                }, LinearLayout.LayoutParams(dp(40), dp(40)))
             }
-            addView(column {
-                addView(text(title, T.TITLE).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
+            addView(column(spacing = 4) {
+                addView(text(title, T.TITLE).apply { textSize = 16f; maxLines = 3; ellipsize = TextUtils.TruncateAt.END })
                 if (!subtitle.isNullOrBlank()) addView(text(subtitle, T.CAPTION))
+                if (badge != null) addView(chip(badge, selected = true), lp(ViewGroup.LayoutParams.WRAP_CONTENT))
             }, lp(0, weight = 1f))
-            if (badge != null) addView(chip(badge, selected = true))
+            if (info != null) addView(fab(com.trailmind.app.R.drawable.ic_info, "About $title", flat = true) {
+                dialog().setTitle(title).setMessage(info).setPositiveButton("OK", null).show()
+            })
         }
 
     fun banner(message: String, danger: Boolean = false, icon: Int = com.trailmind.app.R.drawable.ic_warning): LinearLayout = row(spacing = 12) {

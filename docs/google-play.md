@@ -135,6 +135,12 @@ Why these answers:
 
 Update these answers and the privacy policy if the app ever sends heartbeats, tracks or other data anywhere.
 
+**October 2026 update:** optional what3words conversion sends precise location when the user taps
+*Look up three words*, or the address they submit in Search, directly to what3words with their own key.
+Review the precise-location and search-history Data safety answers for this optional service before the next
+Play release; it is not covered by the Bluetooth end-to-end encryption exemption. GNSS satellite reports
+stay on-device. Japan/GSI requests have been removed. Bulk deletion affects local records, not Strava copies.
+
 ## Permission declarations
 
 ### SMS (`SEND_SMS`)

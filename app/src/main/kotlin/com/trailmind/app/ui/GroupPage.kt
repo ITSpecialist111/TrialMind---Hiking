@@ -331,7 +331,7 @@ class GroupPage(host: MainActivity) : Page(host) {
                 letterSpacing = 0.08f
                 setTextIsSelectable(true)
             })
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Send invite", R.drawable.ic_share, Ui.B.TONAL) { host.shareText("TrailMind trip group", inviteText(g.name, g.code)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Copy code", null, Ui.B.TEXT) { host.copy("Trip group code", g.code.formatted) }, ui.lp(0, weight = 1f))
             })
@@ -475,7 +475,7 @@ fun groupIntroCard(host: MainActivity, done: () -> Unit): View = host.ui.card(sp
         addView(ui.banner("Trip groups need Android 12 or newer."))
         return@card
     }
-    addView(ui.row {
+    addView(ui.actionRow {
         addView(ui.button("Create group", R.drawable.ic_add, Ui.B.FILLED) { startGroupCreate(host, done) }, ui.lp(0, weight = 1f))
         addView(ui.button("Join with code", null, Ui.B.TONAL) { startGroupJoin(host, then = done) }, ui.lp(0, weight = 1f))
     })

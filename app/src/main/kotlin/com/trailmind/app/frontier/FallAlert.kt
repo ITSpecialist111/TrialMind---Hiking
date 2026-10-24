@@ -138,12 +138,19 @@ object FallAlert {
     fun message(context: Context, situation: String = prefs(context).sosSituation.ifBlank { NO_RESPONSE }, atMs: Long = System.currentTimeMillis()): String {
         val here = where(context)
         val battery = context.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-        return SosText.contact(situation, here?.first, here?.second, clockTime(context, atMs), battery)
+        return SosText.contact(situation, here?.first, here?.second, clockTime(context, atMs), battery, currentWords(context, here?.first))
     }
 
     /** For 999 by emergencySMS. Never sent automatically: the user reads it and sends it. */
     fun emergencyMessage(context: Context): String =
-        SosText.emergency(prefs(context).sosSituation.ifBlank { HELP }, where(context)?.first, clockTime(context, System.currentTimeMillis()))
+        where(context)?.first.let { here ->
+            SosText.emergency(prefs(context).sosSituation.ifBlank { HELP }, here, clockTime(context, System.currentTimeMillis()), currentWords(context, here))
+        }
+
+    private fun currentWords(context: Context, here: LatLon?): String? {
+        val fix = (context.applicationContext as TrailMindApp).location.latest
+        return com.trailmind.app.data.What3words.current(fix)?.takeIf { here != null && it.contains(here) }?.words
+    }
 
     fun composeIntent(number: String, body: String): Intent =
         Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(number))).putExtra("sms_body", body)

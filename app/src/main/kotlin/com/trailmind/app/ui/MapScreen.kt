@@ -89,8 +89,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var followFab: ImageButton
     private val orientationFab = ui.fab(R.drawable.ic_north, "North up", sizeDp = FAB_DP, flat = true) { toggleHeadingUp() }
     private var orientationState = -1
-    /** Direction of travel from GPS while walking, for heading up when the compass is disturbed. */
-    private var courseDeg: Float? = null
+    private var headingAnimation: android.animation.ValueAnimator? = null
+    private var headingTarget: Double? = null
     private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map", sizeDp = FAB_DP, flat = true) { host.setMapFullScreen(!host.mapFullScreen) }
     private val zoomButtons: List<View>
     // Caps the recording card at 420 dp in the wide layout without overflowing a narrower map pane.
@@ -128,13 +128,13 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val ticker = object : Runnable {
         override fun run() {
             if (TrackingState.status == TrackingState.Status.RECORDING) updateRecordStats()
+            updateHeading()
             Async.main.postDelayed(this, 1000)
         }
     }
 
     private val onFix: (Fix) -> Unit = { f ->
         mapView.setPosition(LatLon(f.lat, f.lon), f.accuracyM)
-        courseDeg = f.location.takeIf { it.hasBearing() && it.hasSpeed() && it.speed >= 1f }?.bearing
         if (app.prefs.mapHeadingUp) updateHeading()
         host.compass.updateLocation(f.lat, f.lon, f.altitudeM ?: 0.0)
         updateGps(f)
@@ -212,6 +212,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         applySource()
         updateNav(); updateTarget(); updateTracking(); updateRecover(); updateHikers()
         Async.main.removeCallbacks(ticker)
+        headingAnimation?.cancel()
+        headingAnimation = null
+        headingTarget = null
         Async.main.post(ticker)
     }
 
@@ -224,6 +227,9 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         host.removeHeadingListener(onHeading)
         app.group.removeListener(onGroup)
         Async.main.removeCallbacks(ticker)
+        headingAnimation?.cancel()
+        headingAnimation = null
+        headingTarget = null
     }
 
     fun saveCamera() {
@@ -245,6 +251,8 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     }
 
     fun onResize() = mapView.invalidate()
+
+    fun setPaneInset(left: Int) { mapView.coveredLeftPx = left.toFloat() }
 
     fun setInsets(left: Int, top: Int, right: Int, bottom: Int) {
         bottomInset = bottom
@@ -291,31 +299,57 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         })
     }
 
-    /**
-     * North up shows the compass on the position cone. Heading up turns the map with the compass, or with the direction
-     * of walking while the compass is disturbed or uncalibrated; the cone shows the same heading and the arrow turns orange.
-     */
     private fun updateHeading() {
         val on = app.prefs.mapHeadingUp
-        val compass = host.headingDeg?.toFloat()
-        val doubtful = host.compassDisturbed || host.compassUnreliable
+        val now = android.os.SystemClock.elapsedRealtime()
+        val compass = host.headingDeg?.let { com.trailmind.core.geo.MapHeading.Reading(it, host.headingAtMs) }
+        val location = app.location.latest?.location
+        val course = location?.takeIf { it.hasBearing() && it.hasSpeed() && it.hasAccuracy() }?.let {
+            com.trailmind.core.geo.MapHeading.Course(
+                com.trailmind.core.geo.MapHeading.Reading(it.bearing.toDouble(), it.elapsedRealtimeNanos / 1_000_000),
+                it.speed.toDouble(), it.accuracy.toDouble(),
+                if (it.hasBearingAccuracy()) it.bearingAccuracyDegrees.toDouble() else null,
+                if (it.hasSpeedAccuracy()) it.speedAccuracyMetersPerSecond.toDouble() else null,
+            )
+        }
+        val selected = com.trailmind.core.geo.MapHeading.choose(now, compass, !host.compassDisturbed && !host.compassUnreliable, course)
+        val doubtful = selected.source == com.trailmind.core.geo.MapHeading.Source.UNAVAILABLE
         if (!on) {
-            mapView.headingDeg = compass
+            headingAnimation?.cancel()
+            headingTarget = null
+            mapView.headingDeg = compass?.takeIf { now - it.atMs in 0..2_000 }?.degrees?.toFloat()
             mapView.bearing = 0f
         } else {
-            val heading = (if (doubtful) courseDeg else null) ?: compass ?: courseDeg
-            mapView.headingDeg = heading
-            heading?.let { mapView.bearing = it }
+            mapView.headingDeg = selected.degrees?.toFloat()
+            selected.degrees?.let { target ->
+                if (headingTarget == null || kotlin.math.abs(Geo.angleDiffDeg(headingTarget!!, target)) >= 0.2) {
+                    headingAnimation?.cancel()
+                    headingTarget = target
+                    val start = mapView.bearing.toDouble()
+                    val delta = Geo.angleDiffDeg(start, target)
+                    headingAnimation = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                        duration = 180
+                        interpolator = android.view.animation.LinearInterpolator()
+                        addUpdateListener {
+                            mapView.bearing = Geo.normalizeDeg(start + delta * (it.animatedValue as Float)).toFloat()
+                            orientationFab.rotation = -mapView.bearing
+                        }
+                        start()
+                    }
+                }
+            }
+            if (doubtful) { headingAnimation?.cancel(); headingTarget = null }
         }
-        val state = if (!on) 0 else if (doubtful) 1 else 2
+        val state = if (!on) 0 else if (doubtful) 1 else if (selected.source == com.trailmind.core.geo.MapHeading.Source.COURSE) 3 else 2
         if (state != orientationState) {
             orientationState = state
             val tint = when (state) { 0 -> p.onSurface; 1 -> p.accent; else -> p.primary }
             orientationFab.setImageDrawable(host.getDrawable(R.drawable.ic_north)?.mutate()?.apply { setTint(tint) })
             orientationFab.contentDescription = when (state) {
                 0 -> "North up. Tap for heading up."
-                1 -> "Heading up, but the compass may be off here. Tap for north up."
-                else -> "Heading up. Tap for north up."
+                1 -> "Heading unavailable. Last map direction held. Tap for north up."
+                3 -> "Heading up, GPS direction of travel. Tap for north up."
+                else -> "Heading up, compass. Tap for north up."
             }
         }
         // The arrow points to north on the screen.
@@ -366,7 +400,6 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.source = s
         mapView.showSteepGround = app.prefs.showSteepGround
         mapView.showLidar = app.prefs.showLidar
-        mapView.hillshade = if (app.prefs.showGsiHillshade) TileSources.hillshade() else null
         layerChip.text = s.name
         applyHistoric()
         updateHint()
@@ -536,21 +569,19 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     }
 
     private fun chooseOverlays() {
-        val labels = arrayOf("Steep ground (25° and steeper)", "LiDAR hill shading and crags (England)", "Hill shading (Japan, GSI)", "Offline areas")
-        val checked = booleanArrayOf(app.prefs.showSteepGround, app.prefs.showLidar, app.prefs.showGsiHillshade, app.prefs.showOfflineAreas)
+        val labels = arrayOf("Steep ground (25° and steeper)", "LiDAR hill shading and crags (England)", "Offline areas")
+        val checked = booleanArrayOf(app.prefs.showSteepGround, app.prefs.showLidar, app.prefs.showOfflineAreas)
         // A dialog with a list cannot also show a message, so the note goes in a custom title.
         val title = ui.column(padding = 20, spacing = 4) {
             addView(ui.text("Overlays", Ui.T.TITLE))
-            addView(ui.text("LiDAR shows 1 m detail of the ground in England, with crags in dark red. It loads when you zoom in close " +
-                "with signal, stays on the phone, and route offline maps save it along the route. " +
-                "Japan's hill shading comes from GSI; download it from Offline maps to see it without signal.", Ui.T.CAPTION))
+            addView(ui.help("Terrain and saved-map coverage.", "LiDAR shows 1 m detail of the ground in England, with crags in dark red. It loads when you zoom in close " +
+                "with signal, stays on the phone, and route offline maps save it along the route."))
         }
         ui.dialog().setCustomTitle(title)
             .setMultiChoiceItems(labels, checked) { _, which, on ->
                 when (which) {
                     0 -> { app.prefs.showSteepGround = on; mapView.showSteepGround = on }
                     1 -> { app.prefs.showLidar = on; mapView.showLidar = on }
-                    2 -> { app.prefs.showGsiHillshade = on; mapView.hillshade = if (on) TileSources.hillshade() else null }
                     else -> { app.prefs.showOfflineAreas = on; updateOfflineAreas() }
                 }
             }
@@ -669,7 +700,6 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
             TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
             LidarProvider.CREDIT.takeIf { app.prefs.showLidar },
-            "Hill shading (Japan): ${TileSources.GSI_ATTRIBUTION}".takeIf { app.prefs.showGsiHillshade && s.attribution != TileSources.GSI_ATTRIBUTION },
         ).joinToString("\n\n")
         val dialog = ui.dialog().setTitle("Map data").setMessage(credits).setNegativeButton("Close", null)
         when {
@@ -677,8 +707,6 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
                 .setNeutralButton("Report an error") { _, _ -> host.openUrl(TileSources.OS_ERRORS_URL) }
             s.id == TileSources.OSM -> dialog.setPositiveButton("Licence") { _, _ -> host.openUrl(TileSources.OSM_COPYRIGHT_URL) }
                 .setNeutralButton("Report a map issue") { _, _ -> host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }
-            s.attribution == TileSources.GSI_ATTRIBUTION || app.prefs.showGsiHillshade ->
-                dialog.setPositiveButton("GSI tiles") { _, _ -> host.openUrl(TileSources.GSI_TILES_URL) }
             mapView.historic != null ->
                 dialog.setPositiveButton("National Library of Scotland") { _, _ -> host.openUrl(TileSources.NLS_MAPS_URL) }
                     .setNeutralButton("MapTiler") { _, _ -> host.openUrl(TileSources.MAPTILER_COPYRIGHT_URL) }
@@ -862,8 +890,14 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         navCard.visibility = View.VISIBLE
         navCard.background = rounded(if (offRoute) p.dangerContainer else p.surface, host.dp(20).toFloat(), p.outline, host.dp(1))
         navCard.addView(ui.row(spacing = 8) {
-            addView(ui.text("Following", Ui.T.LABEL, p.primary))
-            addView(ui.text(route.data.meta.name, Ui.T.TITLE).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, ui.lp(0, weight = 1f))
+            addView(ui.column(spacing = 3) {
+                addView(ui.text("Following", Ui.T.LABEL, p.primary))
+                addView(ui.text(route.data.meta.name, Ui.T.TITLE).apply {
+                    textSize = 16f
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                }, ui.lp())
+            }, ui.lp(0, weight = 1f))
             addView(miniIcon(R.drawable.ic_close, "Stop following") {
                 ui.confirm("Stop following?", "The route will be removed from the map.", "Stop") { app.nav.stopFollowing() }
             })

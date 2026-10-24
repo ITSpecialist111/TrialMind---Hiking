@@ -6,7 +6,7 @@ Keep it in step with the Data safety answers in google-play.md whenever the app'
 
 # TrailMind privacy policy
 
-*Effective 28 September 2026*
+*Effective 24 October 2026*
 
 TrailMind is a hiking app for Android phones and Wear OS watches, published by [Developer name] ("we"). This
 policy explains what TrailMind does with your information. In short: TrailMind has no accounts, no ads, no
@@ -18,14 +18,14 @@ TrailMind stores the following only on your phone (and, for the watch app, on yo
 
 - routes you plan or import, and hikes you record, including their GPS tracks and times
 - offline map packs and cached map, terrain, weather and facility data
-- your settings, including your Ordnance Survey (OS) Data Hub API key, your emergency contact's name and number,
+- your settings, including your Ordnance Survey (OS), MapTiler and optional what3words API keys, your emergency contact's name and number,
   and check-in and fall alarm settings
 - fall alarm events and "group heartbeats" (short summaries of your own position, kept for a short time)
 - if you are in a trip group: its name and code (encrypted by Android's keystore), your name in the group, and
   the last positions heard from its members
 
 We never receive this information. TrailMind turns off Android backup, so it is not copied to cloud backups. It
-is deleted when you delete it in the app, clear the app's storage, or uninstall TrailMind. A trip group and
+is deleted when you delete it in the app (including selecting some or all saved routes/finished hikes), clear the app's storage, or uninstall TrailMind. Deleting local hikes does not delete exported files or copies already on Strava. A trip group and
 everything heard from its members are deleted when you leave it or the trip ends.
 
 ## What TrailMind sends, and to whom
@@ -34,14 +34,15 @@ TrailMind contacts third-party services directly from your phone, over encrypted
 provide the feature you are using. Each request contains only what that service needs, as listed below. Like any
 website, these services see your phone's IP address and the request, and handle them under their own privacy
 policies. TrailMind sends them no name, account or device identifier, apart from your own OS key, which goes to
-Ordnance Survey with your OS requests, your own MapTiler key, which goes to MapTiler with old-map requests, and, only
+Ordnance Survey with your OS requests, your own MapTiler key, which goes to MapTiler with old-map requests,
+your what3words key, which goes to what3words only when you request a conversion, and, only
 if you set up automatic posting, your own Strava application's credentials and account link, which go to Strava.
 
 | Service | Used for | What it receives |
 |---|---|---|
 | [Ordnance Survey](https://www.ordnancesurvey.co.uk/legal) (OS Maps API, OS Names API) | OS maps, place and postcode search, names for offline areas | The map tiles for the area on screen or being downloaded, what you type into search, or the area being named; your OS API key |
 | [OpenStreetMap Foundation](https://osmfoundation.org/wiki/Privacy_Policy) tile servers | OpenStreetMap map | The map tiles for the area on screen |
-| [Geospatial Information Authority of Japan](https://maps.gsi.go.jp/development/ichiran.html) (GSI Tiles, cyberjapandata.gsi.go.jp) | Japan maps: GSI Standard Map, Aerial Photo and Hill shading | The map tiles for the area on screen or being downloaded |
+| [what3words](https://what3words.com/privacy), optional | Convert three words to a position, or your current position to three words | The words you explicitly search for, or the precise GPS position when you tap Look up three words; your API key |
 | [MapTiler](https://www.maptiler.com/privacy-policy/) (MapTiler Cloud, api.maptiler.com), serving the National Library of Scotland's old Ordnance Survey maps | Old maps faded over the map | The map tiles for the area on screen; your MapTiler key |
 | [Strava](https://www.strava.com/legal/privacy) (www.strava.com), only if you set up automatic posting in Settings | Linking your Strava account and posting each finished hike to it | Your own Strava application's Client ID and secret and the sign-in code, then each hike: its name, track points with times and heights, the activity type and the note "Recorded with TrailMind". The secret and the tokens Strava returns are kept encrypted on the phone. Disconnecting in Settings tells Strava to forget TrailMind; hikes already posted stay on Strava until you delete them there |
 | Mapzen Terrain Tiles on [Amazon Web Services](https://aws.amazon.com/privacy/) | Heights, steep-ground shading, elevation profiles | The terrain tiles for the area involved |
@@ -53,7 +54,12 @@ if you set up automatic posting, your own Strava application's credentials and a
 | A custom map source you add | Your own map layer | The map tiles for the area on screen |
 
 When the map follows your position, the map tiles it asks for show roughly where you are. TrailMind does not
-upload your GPS track or position history anywhere. Services may keep request logs for a limited time: for
+upload your GPS track or position history except when you explicitly share/export it or enable Strava posting.
+what3words lookup is optional and online; there are no automatic conversions while recording or sending an SOS.
+A current-position result is kept in memory, used in sharing only while the fix remains in the same square and
+the lookup's fix is no more than one minute old, and is not saved to disk. GNSS satellite telemetry is displayed
+locally, not uploaded. The retired Japan sources no longer make requests; existing downloaded packs remain
+deletable without automatically erasing the user's files. Services may keep request logs for a limited time: for
 example, Open-Meteo deletes its logs after 90 days and BRouter after two weeks.
 
 ## Trip groups (Bluetooth)
@@ -79,7 +85,8 @@ it. You can stop sharing your position at any time on the Safety page.
 
 ## Texts to your emergency contact
 
-TrailMind can text your location (grid reference, a map link, the time and your battery level) to the emergency
+TrailMind can text your location (grid reference, coordinates or a map link, the time, battery level and a recent
+what3words result if available and it fits the automatic SMS limit) to the emergency
 contact you enter:
 
 - when you send a check-in or SOS text yourself, from your messages app or with TrailMind's own Send button; or

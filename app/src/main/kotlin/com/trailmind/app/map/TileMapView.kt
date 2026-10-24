@@ -157,10 +157,6 @@ class TileMapView(context: Context) : View(context) {
     var showLidar = false
         set(v) { if (field != v) { field = v; invalidate() } }
     private var lidarDrawn = false
-    /** GSI hill shading (Japan) over the base map, or null when off. */
-    var hillshade: TileSource? = null
-        set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
-    private var hillshadeDrawn = false
     /** A scanned historic map (Great Britain) drawn over the base map, or null when off. */
     var historic: TileSource? = null
         set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
@@ -210,11 +206,6 @@ class TileMapView(context: Context) : View(context) {
     // --- paints (allocated once)
     private val tilePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val historicPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val hillshadePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-        alpha = 150
-        if (Build.VERSION.SDK_INT >= 29) blendMode = BlendMode.MULTIPLY
-        else xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
-    }
     private val gridPaint = Paint().apply { color = Color.rgb(226, 230, 222); strokeWidth = 1f }
     private val bgColor = Color.rgb(238, 241, 234)
     private val routeCasing = strokePaint(Color.WHITE, 8f)
@@ -316,7 +307,12 @@ class TileMapView(context: Context) : View(context) {
         listener?.onCameraChanged()
     }
 
-    fun zoomBy(dz: Double) = zoomAround(width / 2f, height / 2f, dz)
+    var coveredLeftPx = 0f
+        set(value) { if (field != value) { field = value; invalidate() } }
+
+    private fun focalX(w: Float = width.toFloat()) = (w + coveredLeftPx.coerceIn(0f, w)) / 2f
+
+    fun zoomBy(dz: Double) = zoomAround(focalX(), height / 2f, dz)
 
     fun fitBounds(b: BoundingBox, paddingPx: Float = 48 * density) {
         if (width == 0 || height == 0) {
@@ -333,7 +329,7 @@ class TileMapView(context: Context) : View(context) {
             // The box's size on the turned screen.
             val w = bw * ac + bh * asn
             val h = bw * asn + bh * ac
-            if (w <= width - 2 * paddingPx && h <= height - 2 * paddingPx) break
+            if (w <= width - coveredLeftPx - 2 * paddingPx && h <= height - 2 * paddingPx) break
             z -= 0.25
         }
         follow = false
@@ -355,7 +351,7 @@ class TileMapView(context: Context) : View(context) {
     }
 
     fun screenToLatLon(sx: Float, sy: Float): LatLon {
-        val dx = sx - width / 2f
+        val dx = sx - focalX()
         val dy = sy - height / 2f
         val wx = WebMercator.lonToX(centerLon, zoom) + (dx * cosB - dy * sinB)
         val wy = WebMercator.latToY(centerLat, zoom) + (dx * sinB + dy * cosB)
@@ -367,7 +363,7 @@ class TileMapView(context: Context) : View(context) {
         val nz = (zoom + dz).coerceIn(minZoom, maxZoom)
         val ax = WebMercator.lonToX(anchor.lon, nz)
         val ay = WebMercator.latToY(anchor.lat, nz)
-        val dx = fx - width / 2f
+        val dx = fx - focalX()
         val dy = fy - height / 2f
         val cx = ax - (dx * cosB - dy * sinB)
         val cy = ay - (dx * sinB + dy * cosB)
@@ -468,15 +464,19 @@ class TileMapView(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
         // The part of the unturned map that covers the turned screen.
-        val ex = w / 2 * kotlin.math.abs(cosB) + h / 2 * kotlin.math.abs(sinB)
-        val ey = w / 2 * kotlin.math.abs(sinB) + h / 2 * kotlin.math.abs(cosB)
-        viewL = w / 2 - ex; viewR = w / 2 + ex; viewT = h / 2 - ey; viewB = h / 2 + ey
+        val x = focalX(w)
+        val l = -x
+        val r = w - x
+        val hh = h / 2
+        viewL = x + minOf(l * cosB, r * cosB) - hh * kotlin.math.abs(sinB)
+        viewR = x + maxOf(l * cosB, r * cosB) + hh * kotlin.math.abs(sinB)
+        viewT = hh + minOf(l * sinB, r * sinB) - hh * kotlin.math.abs(cosB)
+        viewB = hh + maxOf(l * sinB, r * sinB) + hh * kotlin.math.abs(cosB)
         sourceHint = null
         canvas.save()
-        canvas.rotate(-bearing, w / 2, h / 2)
+        canvas.rotate(-bearing, x, h / 2)
         drawTiles(canvas, w, h)
         drawHistoric(canvas, w, h)
-        drawHillshade(canvas, w, h)
         drawOfflineAreas(canvas, w, h)
         drawLidar(canvas, w, h)
         drawSteepGround(canvas, w, h)
@@ -505,24 +505,24 @@ class TileMapView(context: Context) : View(context) {
 
     /** Screen position of [p] on the turned map, into [px] and [py]. */
     private fun place(p: LatLon, w: Float, h: Float) {
-        val ux = toScreenX(p.lon, w) - w / 2
+        val ux = toScreenX(p.lon, w) - focalX(w)
         val uy = toScreenY(p.lat, h) - h / 2
-        px = w / 2 + ux * cosB + uy * sinB
+        px = focalX(w) + ux * cosB + uy * sinB
         py = h / 2 - ux * sinB + uy * cosB
     }
 
     /** Whether a rectangle of the unturned map shows on the turned screen (tested by its turned bounding box). */
     private fun onScreen(left: Float, top: Float, right: Float, bottom: Float, w: Float, h: Float): Boolean {
         if (bearing == 0f) return right >= 0 && left <= w && bottom >= 0 && top <= h
-        val l = left - w / 2
-        val r = right - w / 2
+        val l = left - focalX(w)
+        val r = right - focalX(w)
         val t = top - h / 2
         val b = bottom - h / 2
         val minX = minOf(l * cosB, r * cosB) + minOf(t * sinB, b * sinB)
         val maxX = maxOf(l * cosB, r * cosB) + maxOf(t * sinB, b * sinB)
         val minY = minOf(-l * sinB, -r * sinB) + minOf(t * cosB, b * cosB)
         val maxY = maxOf(-l * sinB, -r * sinB) + maxOf(t * cosB, b * cosB)
-        return maxX >= -w / 2 && minX <= w / 2 && maxY >= -h / 2 && minY <= h / 2
+        return maxX >= -focalX(w) && minX <= w - focalX(w) && maxY >= -h / 2 && minY <= h / 2
     }
 
     private fun drawTiles(canvas: Canvas, w: Float, h: Float) {
@@ -546,15 +546,15 @@ class TileMapView(context: Context) : View(context) {
         val size = (ts * scale).toFloat()
         val cx = WebMercator.lonToX(centerLon, zi.toDouble())
         val cy = WebMercator.latToY(centerLat, zi.toDouble())
-        val x0 = floor((cx + (viewL - w / 2) / scale) / ts).toInt()
-        val x1 = floor((cx + (viewR - w / 2) / scale) / ts).toInt()
+        val x0 = floor((cx + (viewL - focalX(w)) / scale) / ts).toInt()
+        val x1 = floor((cx + (viewR - focalX(w)) / scale) / ts).toInt()
         val y0 = floor((cy + (viewT - h / 2) / scale) / ts).toInt()
         val y1 = floor((cy + (viewB - h / 2) / scale) / ts).toInt()
         val n = 1 shl zi
         for (tx in x0..x1) for (ty in y0..y1) {
             if (ty < 0 || ty >= n) continue
             val wx = Math.floorMod(tx, n)
-            val left = ((tx * ts - cx) * scale + w / 2).toFloat()
+            val left = ((tx * ts - cx) * scale + focalX(w)).toFloat()
             val top = ((ty * ts - cy) * scale + h / 2).toFloat()
             if (!onScreen(left, top, left + size, top + size, w, h)) continue
             dst.set(left, top, left + size + 0.5f, top + size + 0.5f)
@@ -585,15 +585,6 @@ class TileMapView(context: Context) : View(context) {
         if (zf < s.minZoom || !TileSources.overlapsBritain(visibleBounds())) return
         historicPaint.alpha = (historicAlpha * 255).roundToInt()
         historicDrawn = drawMercatorTiles(canvas, w, h, s, zf.coerceAtMost(s.maxZoom), historicPaint, gridLines = false)
-    }
-
-    /** GSI hill shading of Japan, multiplied into whatever base map is showing. */
-    private fun drawHillshade(canvas: Canvas, w: Float, h: Float) {
-        hillshadeDrawn = false
-        val s = hillshade ?: return
-        val zf = floor(zoom).toInt()
-        if (zf < s.minZoom || !TileSources.overlapsJapan(visibleBounds())) return
-        hillshadeDrawn = drawMercatorTiles(canvas, w, h, s, zf.coerceAtMost(s.maxZoom), hillshadePaint, gridLines = false)
     }
 
     /**
@@ -701,7 +692,7 @@ class TileMapView(context: Context) : View(context) {
             for (footprint in offlineAreas) drawBngOfflineArea(canvas, w, h, footprint)
             return
         }
-        val ox = w / 2 - WebMercator.lonToX(centerLon, zoom)
+        val ox = focalX(w) - WebMercator.lonToX(centerLon, zoom)
         val oy = h / 2 - WebMercator.latToY(centerLat, zoom)
         for (f in offlineAreas) {
             val cell = WebMercator.TILE_SIZE * 2.0.pow(zoom - f.zoom)
@@ -736,8 +727,8 @@ class TileMapView(context: Context) : View(context) {
         val size = (WebMercator.TILE_SIZE * scale).toFloat()
         val cx = WebMercator.lonToX(centerLon, z.toDouble())
         val cy = WebMercator.latToY(centerLat, z.toDouble())
-        val x0 = floor((cx + (viewL - w / 2) / scale) / WebMercator.TILE_SIZE).toInt()
-        val x1 = floor((cx + (viewR - w / 2) / scale) / WebMercator.TILE_SIZE).toInt()
+        val x0 = floor((cx + (viewL - focalX(w)) / scale) / WebMercator.TILE_SIZE).toInt()
+        val x1 = floor((cx + (viewR - focalX(w)) / scale) / WebMercator.TILE_SIZE).toInt()
         val y0 = floor((cy + (viewT - h / 2) / scale) / WebMercator.TILE_SIZE).toInt()
         val y1 = floor((cy + (viewB - h / 2) / scale) / WebMercator.TILE_SIZE).toInt()
         terrain.keepSlopeTiles((x1 - x0 + 1) * (y1 - y0 + 1))
@@ -745,7 +736,7 @@ class TileMapView(context: Context) : View(context) {
         for (x in x0..x1) for (y in y0..y1) {
             if (y !in 0 until count) continue
             val key = TileKey(z, Math.floorMod(x, count), y)
-            val left = ((x * WebMercator.TILE_SIZE - cx) * scale + w / 2).toFloat()
+            val left = ((x * WebMercator.TILE_SIZE - cx) * scale + focalX(w)).toFloat()
             val top = ((y * WebMercator.TILE_SIZE - cy) * scale + h / 2).toFloat()
             if (!onScreen(left, top, left + size, top + size, w, h)) continue
             dst.set(left, top, left + size + 0.5f, top + size + 0.5f)
@@ -870,7 +861,7 @@ class TileMapView(context: Context) : View(context) {
         var lastY = Float.NaN
         var breakIdx = 0
         for (i in 0 until line.size) {
-            val sx = (line.nx[i] * ms - cx + w / 2).toFloat()
+            val sx = (line.nx[i] * ms - cx + focalX(w)).toFloat()
             val sy = (line.ny[i] * ms - cy + h / 2).toFloat()
             val isBreak = breakIdx < line.breaks.size && line.breaks[breakIdx] == i
             if (isBreak) breakIdx++
@@ -888,7 +879,7 @@ class TileMapView(context: Context) : View(context) {
         canvas.drawPath(path, paint)
     }
 
-    private fun toScreenX(lon: Double, w: Float) = (WebMercator.lonToX(lon, zoom) - WebMercator.lonToX(centerLon, zoom) + w / 2).toFloat()
+    private fun toScreenX(lon: Double, w: Float) = (WebMercator.lonToX(lon, zoom) - WebMercator.lonToX(centerLon, zoom) + focalX(w)).toFloat()
     private fun toScreenY(lat: Double, h: Float) = (WebMercator.latToY(lat, zoom) - WebMercator.latToY(centerLat, zoom) + h / 2).toFloat()
 
     private fun drawFacilities(canvas: Canvas, w: Float, h: Float) {
@@ -1105,7 +1096,7 @@ class TileMapView(context: Context) : View(context) {
         val attr = source.attribution + if (facilities.isNotEmpty() && zoom >= 13) " · Facilities: © OpenStreetMap contributors" else ""
         val pad = 6 * density
         // The credit floats a little in from the corner, so a rounded map edge (the unfolded layout) never clips it.
-        val left = 12 * density
+        val left = coveredLeftPx + 12 * density
         val room = w - 2 * pad - left - 8 * density
         attrPaint.textSize = 10.5f * density
         var tw = attrPaint.measureText(attr)
@@ -1121,7 +1112,6 @@ class TileMapView(context: Context) : View(context) {
             historic?.attribution.takeIf { historicDrawn },
             TerrainProvider.CREDIT.takeIf { showSteepGround && zoom >= STEEP_MIN_ZOOM },
             LidarProvider.CREDIT.takeIf { lidarDrawn },
-            "Hill shading: ${TileSources.GSI_ATTRIBUTION}".takeIf { hillshadeDrawn && source.attribution != TileSources.GSI_ATTRIBUTION },
         )
         val creditSizes = FloatArray(credits.size)
         var creditWidth = 0f
@@ -1167,12 +1157,13 @@ class TileMapView(context: Context) : View(context) {
     }
 
     private fun drawHint(canvas: Canvas, text: String, w: Float, h: Float) {
-        val lines = wrap(text, w * 0.8f)
+        val available = (w - coveredLeftPx).coerceAtLeast(1f)
+        val lines = wrap(text, available * 0.8f)
         val lh = hintPaint.textSize * 1.3f
         val boxH = lines.size * lh + 20 * density
         val top = h / 2 - boxH / 2
-        canvas.drawRect(w * 0.08f, top, w * 0.92f, top + boxH, attrBg)
-        lines.forEachIndexed { i, l -> canvas.drawText(l, w / 2, top + 10 * density + lh * (i + 0.8f), hintPaint) }
+        canvas.drawRect(coveredLeftPx + available * 0.08f, top, w - available * 0.08f, top + boxH, attrBg)
+        lines.forEachIndexed { i, l -> canvas.drawText(l, focalX(w), top + 10 * density + lh * (i + 0.8f), hintPaint) }
     }
 
     private fun wrap(text: String, maxW: Float): List<String> {

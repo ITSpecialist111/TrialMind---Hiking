@@ -54,16 +54,13 @@ data class TileSource(
 }
 
 object TileSources {
+    fun isRetired(id: String) = id in setOf("gsi_std", "gsi_photo", "gsi_hillshade")
     const val OSM = "osm"
     const val OS_OUTDOOR = "os_outdoor"
     const val OS_ROAD = "os_road"
     const val OS_LIGHT = "os_light"
     const val OS_LEISURE = "os_leisure"
-    const val GSI_STD = "gsi_std"
-    const val GSI_PHOTO = "gsi_photo"
-    const val GSI_HILLSHADE = "gsi_hillshade"
     const val CUSTOM = "custom"
-    const val GSI_ATTRIBUTION = "出典：国土地理院 (Geospatial Information Authority of Japan)"
 
     const val NLS_1900S = "nls_1900s"
     const val NLS_SIX_INCH = "nls_six_inch"
@@ -84,7 +81,6 @@ object TileSources {
     const val OSM_FIX_THE_MAP_URL = "https://www.openstreetmap.org/fixthemap"
     const val OS_TERMS_URL = "https://www.ordnancesurvey.co.uk/legal"
     const val OS_ERRORS_URL = "https://osdatahub.os.uk/apps/errors-and-omissions"
-    const val GSI_TILES_URL = "https://maps.gsi.go.jp/development/ichiran.html"
     const val NLS_MAPS_URL = "https://maps.nls.uk/projects/api/"
     const val MAPTILER_CLOUD_URL = "https://cloud.maptiler.com/account/keys/"
     const val MAPTILER_COPYRIGHT_URL = "https://www.maptiler.com/copyright/"
@@ -143,48 +139,7 @@ object TileSources {
         osLeisure(),
         osSource(OS_ROAD, "Road", "Road"),
         osSource(OS_LIGHT, "Light", "Light"),
-        TileSource(
-            id = GSI_STD,
-            name = "Japan – GSI Standard Map (online)",
-            template = "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
-            attribution = GSI_ATTRIBUTION,
-            minZoom = 5,
-            maxZoom = 18,
-            // A basic survey result (基本測量成果): real-time use needs only the credit, but stored copies can need
-            // approval under Japan's Survey Act (測量法), so this stays browse-only.
-            note = "Japan's national 1:25,000-based topographic map, with contours, footpaths, summits and huts. " +
-                "Labels are in Japanese. Browsing only: saving it offline can need approval under Japan's Survey Act. " +
-                "For offline use in Japan, download GSI Aerial Photo and GSI Hill shading.",
-        ),
-        // Not basic survey results: GSI lets these be used, including stored offline, with the credit only.
-        TileSource(
-            id = GSI_PHOTO,
-            name = "Japan – GSI Aerial Photo",
-            template = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",
-            attribution = GSI_ATTRIBUTION,
-            minZoom = 2,
-            maxZoom = 18,
-            offlineDownloadAllowed = true,
-            downloadMaxZoom = 17,
-            note = "GSI's seamless aerial photos of Japan, sharp enough to pick out paths and clearings. " +
-                "Can be downloaded for offline use (credit only, no application needed).",
-        ),
-        TileSource(
-            id = GSI_HILLSHADE,
-            name = "Japan – GSI Hill shading (overlay)",
-            template = "https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png",
-            attribution = GSI_ATTRIBUTION,
-            minZoom = 2,
-            maxZoom = 16,
-            offlineDownloadAllowed = true,
-            overlay = true,
-            note = "Hill shading of Japan from GSI's 5–10 m elevation model, drawn over any map from Overlays. " +
-                "Download it for offline use as its own pack (credit only, no application needed).",
-        ),
     )
-
-    /** GSI's Japan-only overlay tiles exist only around Japan; elsewhere they are not requested. */
-    fun overlapsJapan(b: BoundingBox) = b.maxLat >= 20.0 && b.minLat <= 46.0 && b.maxLon >= 122.0 && b.minLon <= 154.0
 
     /** The old Ordnance Survey series cover Great Britain only; elsewhere their tiles are not requested. */
     fun overlapsBritain(b: BoundingBox) = b.maxLat >= 49.8 && b.minLat <= 61.0 && b.maxLon >= -8.7 && b.minLon <= 2.0
@@ -273,8 +228,6 @@ object TileSources {
             packs.filter { it.kind == com.trailmind.app.data.PackKind.IMPORT }.map { fromPack(it) }
 
     fun baseLayers(prefs: Prefs, packs: List<PackMeta>): List<TileSource> = all(prefs, packs).filterNot { it.overlay }
-
-    fun hillshade(): TileSource = builtIns().single { it.id == GSI_HILLSHADE }
 
     /** The old map the user chose to draw over the base map, or null for none. */
     fun historicOverlay(prefs: Prefs): TileSource? = historic().firstOrNull { it.id == prefs.historicOverlayId }

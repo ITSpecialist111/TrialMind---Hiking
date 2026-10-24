@@ -183,16 +183,23 @@ class StravaManager(private val app: TrailMindApp) {
 
     fun post(hikeId: Long): StravaPostRow? = app.db.stravaPost(hikeId)
 
+    /** Wait for an in-flight upload before removing its local queue row and track. */
+    fun deleteFinishedHikes(ids: Set<Long>): Int = synchronized(queueLock) {
+        app.db.deleteFinishedHikes(ids)
+    }
+
     /** A hike has just been finished: post it if the user links Strava and wants that, and it was a real hike. */
     fun onHikeFinished(hikeId: Long) {
         if (!linked || !prefs.stravaAuto) return
         Async.io {
-            val hike = app.db.hike(hikeId) ?: return@io
-            if (StravaPolicy.worthPosting(hike.distanceM, hike.pointCount)) enqueue(hikeId)
-            else {
-                app.db.saveStravaPost(StravaPostRow(hikeId, StravaPostState.SKIPPED, null, null,
-                    "Too short to be a hike (under ${StravaPolicy.MIN_DISTANCE_M.toInt()} m).", 0, 0, System.currentTimeMillis()))
-                changed()
+            synchronized(queueLock) {
+                val hike = app.db.hike(hikeId) ?: return@io
+                if (StravaPolicy.worthPosting(hike.distanceM, hike.pointCount)) enqueue(hikeId)
+                else {
+                    app.db.saveStravaPost(StravaPostRow(hikeId, StravaPostState.SKIPPED, null, null,
+                        "Too short to be a hike (under ${StravaPolicy.MIN_DISTANCE_M.toInt()} m).", 0, 0, System.currentTimeMillis()))
+                    changed()
+                }
             }
         }
     }
@@ -205,6 +212,10 @@ class StravaManager(private val app: TrailMindApp) {
 
     private fun enqueue(hikeId: Long) {
         synchronized(queueLock) {
+            if (app.db.hike(hikeId) == null) {
+                android.util.Log.i("Strava", "Hike was deleted before it could be queued.")
+                return
+            }
             val now = System.currentTimeMillis()
             val earlier = app.db.stravaPost(hikeId)
             if (earlier?.state == StravaPostState.POSTED) return

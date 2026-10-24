@@ -10,7 +10,6 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
-import android.graphics.Outline
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -23,7 +22,6 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -91,9 +89,12 @@ class MainActivity : Activity() {
     private val navButtons = HashMap<Tab, View>()
     private var lastWidthDp = -1
     private var lastCompactRail = false
+    private var paneWidthDp = 0
+    private var unfoldingMenu: UnfoldingMenuLayout? = null
 
     /** Latest compass heading, degrees true; null if no sensor data. */
     var headingDeg: Double? = null; private set
+    var headingAtMs: Long = -1; private set
     var compassUnreliable = false; private set
     /** The magnetometer sees more than the Earth's field (steel, magnets, electronics), whatever its calibration says. */
     var compassDisturbed = false; private set
@@ -121,6 +122,7 @@ class MainActivity : Activity() {
         fgLocation = ForegroundLocation(this, app.location)
         compass = Compass(this) { trueDeg, _, acc, disturbed ->
             val now = android.os.SystemClock.elapsedRealtime()
+            headingAtMs = now
             val headingChanged = headingGate.accept(trueDeg, now)
             Async.main.removeCallbacks(flushHeading)
             headingGate.pendingDelayMs(now)?.let { Async.main.postDelayed(flushHeading, it) }
@@ -184,7 +186,10 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        unfoldingMenu?.finishMotion()
         compass.stop()
+        headingDeg = null
+        headingAtMs = -1
         Async.main.removeCallbacks(flushHeading)
         headingGate.reset()
         stack.lastOrNull()?.onHide()
@@ -195,9 +200,7 @@ class MainActivity : Activity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (newConfig.screenWidthDp != lastWidthDp || compactRail(newConfig) != lastCompactRail) {
-            val wasWide = wide
-            val nowWide = newConfig.screenWidthDp >= WIDE_DP
-            if (wasWide != nowWide || (nowWide && compactRail(newConfig) != lastCompactRail)) buildLayout() else map.onResize()
+            buildLayout()
             showTab(tab, keepStack = true)
         }
     }
@@ -213,6 +216,8 @@ class MainActivity : Activity() {
     private fun detach(v: View) { (v.parent as? ViewGroup)?.removeView(v) }
 
     private fun buildLayout() {
+        unfoldingMenu?.finishMotion()
+        unfoldingMenu = null
         lastWidthDp = resources.configuration.screenWidthDp
         lastCompactRail = compactRail(resources.configuration)
         wide = lastWidthDp >= WIDE_DP
@@ -253,27 +258,25 @@ class MainActivity : Activity() {
                 addView(nav)
             }
             railFrame = rail
-            // The map takes the larger share: a slim rail and a pane no wider than its content needs.
-            val paneWidth = (resources.configuration.screenWidthDp * 0.34f).coerceIn(300f, 400f)
+            paneWidthDp = (resources.configuration.screenWidthDp * 0.29f).toInt().coerceIn(260, 340)
             val holder = FrameLayout(this).apply {
                 addView(map.view, FrameLayout.LayoutParams(-1, -1))
-                clipToOutline = true
-                outlineProvider = object : ViewOutlineProvider() {
-                    override fun getOutline(view: View, outline: Outline) {
-                        val r = if (mapFullScreen) 0f else dp(28).toFloat()
-                        // The right corners are pushed off the view, so only the edge beside the pane is rounded.
-                        outline.setRoundRect(0, 0, view.width + r.toInt(), view.height, r)
-                    }
-                }
             }
             mapHolder = holder
-            root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+            content.clipToOutline = true
+            content.isClickable = true
+            root = UnfoldingMenuLayout(this, holder, { updateWideMapInsets(it) }, { open -> setMapFullScreen(!open) }).apply {
                 setBackgroundColor(p.bg)
-                addView(rail, LinearLayout.LayoutParams(dp(RAIL_DP), -1))
-                addView(content, LinearLayout.LayoutParams(dp(paneWidth), -1))
-                addView(holder, LinearLayout.LayoutParams(0, -1, 1f))
+                drawerWidthPx = dp(RAIL_DP + paneWidthDp) + insets.left
+                drawer.addView(rail, FrameLayout.LayoutParams(dp(RAIL_DP), -1))
+                drawer.addView(content, FrameLayout.LayoutParams(dp(paneWidthDp), -1).apply {
+                    leftMargin = dp(RAIL_DP)
+                    topMargin = dp(8)
+                    bottomMargin = dp(8)
+                })
+                unfoldingMenu = this
             }
+            updateMenuAppearance()
         }
         root.setOnApplyWindowInsetsListener { _, wi ->
             if (Build.VERSION.SDK_INT >= 30) {
@@ -289,20 +292,31 @@ class MainActivity : Activity() {
         }
         setContentView(root)
         map.onLayoutChanged(wide)
-        applyMapFullScreen()
+        applyMapFullScreen(animate = false)
     }
 
     fun setMapFullScreen(on: Boolean) {
         if (app.prefs.mapFullScreen == on) return
         app.prefs.mapFullScreen = on
+        if (on) {
+            currentFocus?.let { focus ->
+                getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(focus.windowToken, 0)
+                focus.clearFocus()
+            }
+        }
         applyMapFullScreen()
     }
 
-    private fun applyMapFullScreen() {
+    fun updateMenuAppearance() {
+        if (!wide) return
+        val color = (ui.p.bg and 0x00FFFFFF) or ((app.prefs.menuOpacityPercent * 255 / 100) shl 24)
+        contentFrame?.background = rounded(color, dp(28).toFloat(), ui.p.glassStroke, dp(1))
+        navBar?.background = rounded(color, dp(24).toFloat())
+    }
+
+    private fun applyMapFullScreen(animate: Boolean = true) {
         val full = mapFullScreen
-        railFrame?.visibility = if (full) View.GONE else View.VISIBLE
-        if (wide) contentFrame?.visibility = if (full) View.GONE else View.VISIBLE
-        mapHolder?.invalidateOutline()
+        unfoldingMenu?.setOpen(!full, animate)
         map.onFullScreenChanged(full)
         applyInsets()
         updateBackCallback()
@@ -424,6 +438,7 @@ class MainActivity : Activity() {
     private fun applyInsets() {
         val nav = navBar ?: return
         if (!wide) {
+            map.setPaneInset(0)
             // The capsule floats above the gesture bar; pages and the map keep clear of it by its height plus the gap.
             val gap = insets.bottom + dp(10)
             (nav.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
@@ -438,13 +453,36 @@ class MainActivity : Activity() {
         } else {
             nav.setPadding(insets.left, insets.top + dp(8), 0, insets.bottom)
             railFrame?.let { r ->
-                val lp = r.layoutParams as? LinearLayout.LayoutParams
+                val lp = r.layoutParams as? FrameLayout.LayoutParams
                 if (lp != null && lp.width != dp(RAIL_DP) + insets.left) { lp.width = dp(RAIL_DP) + insets.left; r.layoutParams = lp }
             }
-            contentFrame?.setPadding(0, insets.top, 0, 0)
-            map.setInsets(if (mapFullScreen) insets.left else 0, insets.top, insets.right, insets.bottom)
-            stack.lastOrNull()?.setBottomInset(insets.bottom)
+            contentFrame?.let { frame ->
+                val lp = frame.layoutParams as FrameLayout.LayoutParams
+                val left = dp(RAIL_DP) + insets.left
+                val top = insets.top + dp(8)
+                val bottom = insets.bottom + dp(8)
+                if (lp.leftMargin != left || lp.topMargin != top || lp.bottomMargin != bottom) {
+                    lp.leftMargin = left
+                    lp.topMargin = top
+                    lp.bottomMargin = bottom
+                    frame.layoutParams = lp
+                }
+                frame.setPadding(0, 0, 0, 0)
+            }
+            unfoldingMenu?.let {
+                it.drawerWidthPx = dp(RAIL_DP + paneWidthDp) + insets.left
+                it.setHandleInsets(insets.left, insets.top, insets.bottom)
+            }
+            updateWideMapInsets(unfoldingMenu?.openFraction ?: if (mapFullScreen) 0f else 1f)
+            stack.lastOrNull()?.setBottomInset(0)
         }
+    }
+
+    private fun updateWideMapInsets(fraction: Float) {
+        if (!wide) return
+        val covered = ((dp(RAIL_DP + paneWidthDp + 8) + insets.left) * fraction).toInt()
+        map.setPaneInset(covered)
+        map.setInsets(maxOf(covered, insets.left), insets.top, insets.right, insets.bottom)
     }
 
     // ------------------------------------------------------------------ navigation
@@ -511,10 +549,11 @@ class MainActivity : Activity() {
             detach(top.root)
             frame.addView(top.root, FrameLayout.LayoutParams(-1, -1))
             top.ensureRendered()
-            frame.visibility = if (mapFullScreen) View.GONE else View.VISIBLE
+            frame.visibility = View.VISIBLE
         } else {
-            frame.visibility = if (wide && !mapFullScreen) View.VISIBLE else View.GONE
+            frame.visibility = if (wide) View.VISIBLE else View.GONE
         }
+        unfoldingMenu?.gesturesEnabled = app.prefs.onboardingAccepted
         // The fade belongs to a page; over the bare map there is nothing to fade.
         bottomFade?.visibility = frame.visibility
         updateNavSelection()

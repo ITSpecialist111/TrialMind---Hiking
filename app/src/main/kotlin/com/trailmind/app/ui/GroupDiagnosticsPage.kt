@@ -103,7 +103,7 @@ class GroupDiagnosticsPage(host: MainActivity) : Page(host) {
             host.withRangingPermission { finder.selfTest() }
         })
 
-        addView(ui.row {
+        addView(ui.actionRow {
             addView(ui.button("Share log (CSV)", null, Ui.B.TONAL) { shareLog() }, ui.lp(0, weight = 1f))
             addView(ui.button("Clear log", null, Ui.B.TEXT) { sharing.clearLog(); host.toast("Log cleared") }, ui.lp(0, weight = 1f))
         })

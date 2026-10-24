@@ -16,6 +16,7 @@ android {
         applicationId = "com.trailmind.app"
         minSdk = 26
         targetSdk = 36
+        testInstrumentationRunner = "com.trailmind.app.RedesignInstrumentation"
         versionCode = providers.gradleProperty("trailmind.versionCode").get().toInt()
         versionName = providers.gradleProperty("trailmind.versionName").get()
     }

@@ -62,6 +62,9 @@ private fun fmtDate(ms: Long): String = DateFormat.getDateTimeInstance(DateForma
 
 class RoutesPage(host: MainActivity) : Page(host) {
     private var routes: List<RouteMeta>? = null
+    private val selection = com.trailmind.core.stats.LibrarySelection()
+    private var deleting = false
+    private var loadError: String? = null
     private val navListener: () -> Unit = { if (activeId != app.nav.active?.data?.meta?.id) refresh() }
     private var activeId: Long? = null
 
@@ -72,7 +75,29 @@ class RoutesPage(host: MainActivity) : Page(host) {
 
     override fun onHide() { app.nav.removeListener(navListener) }
 
-    private fun load() = Async.run({ app.db.routes() }) { r -> routes = r.getOrDefault(emptyList()); refresh() }
+    private fun load() = Async.run({ app.db.routes() }) { r ->
+        r.onSuccess { routes = it; loadError = null }.onFailure { loadError = "Could not load routes. Try opening Routes again." }
+        refresh()
+    }
+
+    private fun deleteSelected() {
+        val ids = selection.ids - setOfNotNull(app.nav.active?.data?.meta?.id)
+        if (ids.isEmpty()) { host.toast("Select a route that you are not following."); return }
+        ui.confirm("Delete ${ids.size} routes?", "Permanently delete these routes from this phone? Export any you want to keep first. Recorded hikes and offline maps are kept.", "Delete") {
+            deleting = true
+            refresh()
+            Async.run({
+                val count = app.db.deleteRoutes(ids)
+                ids.forEach { id -> OpenMeteo.delete(host, id); OverpassFacilities.delete(host, id); LidarChecks.delete(host, id) }
+                count
+            }) { result ->
+                deleting = false
+                result.onSuccess { count -> selection.cancel(); host.toast("Deleted $count routes") }
+                    .onFailure { host.toast("Could not finish deleting routes. Recheck the list and try again.") }
+                load()
+            }
+        }
+    }
 
     override fun render(): View = scaffold("Routes", actions = listOf(
         ui.button("Find", R.drawable.ic_route, Ui.B.TONAL) { host.push(RouteFinderPage(host)) },
@@ -81,6 +106,11 @@ class RoutesPage(host: MainActivity) : Page(host) {
     )) {
         activeId = app.nav.active?.data?.meta?.id
         val list = routes
+        loadError?.let { addView(ui.banner(it)) }
+        if (!list.isNullOrEmpty()) {
+            addView(ui.selectionBar(selection, list.filter { it.id != activeId }.map { it.id }, deleting, ::refresh, ::deleteSelected))
+            if (selection.enabled) addView(ui.help("Select routes to remove.", "The route you are following is protected. Stop following it first to delete it. Select all includes only removable routes."))
+        }
         when {
             list == null -> addView(ui.text("Loading…", Ui.T.CAPTION))
             list.isEmpty() -> addView(ui.card(spacing = 10) {
@@ -92,6 +122,10 @@ class RoutesPage(host: MainActivity) : Page(host) {
             })
             else -> list.forEach { r ->
                 val imperial = app.prefs.imperial
+                if (selection.enabled) {
+                    addView(ui.selectionItem(selection, r.id, r.name + if (r.id == activeId) " (following)" else "", r.id != activeId, deleting, ::refresh))
+                    return@forEach
+                }
                 addView(ui.listItem(
                     r.name,
                     "${nb(Units.distance(r.distanceM, imperial))} · ${nb("↑" + Units.elevation(r.ascentM, imperial))}" +
@@ -589,7 +623,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                 }
             })
             addView(lidarCard(d))
-            addView(ui.row {
+            addView(ui.actionRow {
                 if (following) addView(ui.button("Stop following", R.drawable.ic_close, Ui.B.TONAL) { app.nav.stopFollowing() }, ui.lp(0, weight = 1f))
                 else addView(ui.button("Follow route", R.drawable.ic_navigation) {
                     app.nav.follow(routeId) { r -> r?.let { host.map.fit(BoundingBox.of(it.data.points.map { p -> p.latLon() })) } }
@@ -599,7 +633,7 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     host.map.fit(BoundingBox.of(d.points.map { it.latLon() }))
                 }, ui.lp(0, weight = 1f))
             })
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Offline map", R.drawable.ic_download, Ui.B.TONAL) { host.push(OfflinePage(host, routeId)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Briefing", R.drawable.ic_sparkle, Ui.B.TONAL) { host.push(AssistantPage(host, routeId)) }, ui.lp(0, weight = 1f))
             })
@@ -675,11 +709,11 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
                     })
                 }
             }
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Save GPX", R.drawable.ic_folder, Ui.B.OUTLINED) { host.saveGpx(d.meta.name, routeGpx(d)) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Share", R.drawable.ic_share, Ui.B.OUTLINED) { host.shareGpx(d.meta.name, routeGpx(d)) }, ui.lp(0, weight = 1f))
             })
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Rename", null, Ui.B.TEXT) {
                     ui.prompt("Rename route", d.meta.name) { n ->
                         if (n.isNotBlank()) Async.run({ app.db.renameRoute(routeId, n); app.db.routeData(routeId) }) { r ->
@@ -709,6 +743,9 @@ class RouteDetailPage(host: MainActivity, private val routeId: Long) : Page(host
 
 class HikesPage(host: MainActivity) : Page(host) {
     private var hikes: List<HikeMeta>? = null
+    private val selection = com.trailmind.core.stats.LibrarySelection()
+    private var deleting = false
+    private var loadError: String? = null
     private val trackingListener: () -> Unit = { if (TrackingState.status == TrackingState.Status.IDLE) load() }
 
     override fun onShow() {
@@ -718,11 +755,38 @@ class HikesPage(host: MainActivity) : Page(host) {
 
     override fun onHide() { TrackingState.removeListener(trackingListener) }
 
-    private fun load() = Async.run({ app.db.hikes() }) { r -> hikes = r.getOrDefault(emptyList()); refresh() }
+    private fun load() = Async.run({ app.db.hikes() }) { r ->
+        r.onSuccess { hikes = it; loadError = null }.onFailure { loadError = "Could not load hikes. Try opening Hikes again." }
+        refresh()
+    }
+
+    private fun deleteSelected() {
+        val eligible = hikes.orEmpty().filter { it.status == HikeStatus.DONE && it.id != TrackingState.hikeId }.map { it.id }
+        val ids = selection.ids.intersect(eligible.toSet())
+        if (ids.isEmpty()) { host.toast("Select a finished hike."); return }
+        ui.confirm("Delete ${ids.size} hikes?", "Permanently delete these hikes and GPS tracks from this phone? Export them first if needed. This does not delete copies on Strava or exported GPX files. An upload already in progress may finish.", "Delete") {
+            deleting = true
+            refresh()
+            Async.run({ app.strava.deleteFinishedHikes(ids) }) { result ->
+                deleting = false
+                result.onSuccess { count ->
+                    selection.cancel()
+                    host.map.showTrack(emptyList())
+                    host.toast("Deleted $count hikes")
+                }.onFailure { host.toast("Could not delete hikes. No success was confirmed; check the list and retry.") }
+                load()
+            }
+        }
+    }
 
     override fun render(): View = scaffold("Hikes") {
         val list = hikes
         val imperial = app.prefs.imperial
+        loadError?.let { addView(ui.banner(it)) }
+        if (!list.isNullOrEmpty()) {
+            addView(ui.selectionBar(selection, list.filter { it.status == HikeStatus.DONE && it.id != TrackingState.hikeId }.map { it.id }, deleting, ::refresh, ::deleteSelected))
+            if (selection.enabled) addView(ui.help("Select finished hikes to remove.", "Recording, paused and unfinished hikes are protected from bulk deletion. Finish or manage those hikes individually."))
+        }
         when {
             list == null -> addView(ui.text("Loading…", Ui.T.CAPTION))
             list.isEmpty() -> addView(ui.card(spacing = 10) {
@@ -741,6 +805,11 @@ class HikesPage(host: MainActivity) : Page(host) {
                 })
                 list.forEach { h ->
                     val live = h.id == TrackingState.hikeId
+                    if (selection.enabled) {
+                        val eligible = h.status == HikeStatus.DONE && !live
+                        addView(ui.selectionItem(selection, h.id, "${h.name} · ${fmtDate(h.startMs)}" + if (!eligible) " (unfinished)" else "", eligible, deleting, ::refresh))
+                        return@forEach
+                    }
                     addView(ui.listItem(
                         h.name,
                         "${fmtDate(h.startMs)} · ${nb(Units.distance(h.distanceM, imperial))} · ${nb(Units.duration(h.durationMs))} · ${nb("↑" + Units.elevation(h.ascentM, imperial))}",
@@ -810,13 +879,13 @@ class HikeDetailPage(host: MainActivity, private val hikeId: Long) : Page(host) 
             })
             addView(ui.card(spacing = 10) {
                 addView(ui.text("Export", Ui.T.LABEL))
-                addView(ui.row {
+                addView(ui.actionRow {
                     addView(ui.button("Save GPX", R.drawable.ic_folder) { host.saveGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                     addView(ui.button("Share GPX", R.drawable.ic_share, Ui.B.TONAL) { host.shareGpx(fileBase(h), gpx(h)) }, ui.lp(0, weight = 1f))
                 })
             })
             addView(stravaCard(h, live))
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Rename", null, Ui.B.TEXT) {
                     ui.prompt("Rename hike", h.name, type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES) { n ->
                         if (n.isNotBlank()) Async.run({ app.db.renameHike(hikeId, n) }) { load() }

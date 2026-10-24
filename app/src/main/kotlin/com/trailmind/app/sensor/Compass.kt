@@ -12,9 +12,8 @@ import android.view.Display
 import android.view.Surface
 import android.view.WindowManager
 import com.trailmind.core.geo.MagneticCheck
+import com.trailmind.core.geo.Geo
 import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Heading from the rotation-vector sensor (fused accel/mag/gyro), falling back to accelerometer +
@@ -43,8 +42,9 @@ class Compass(
     private val remapped = FloatArray(9)
     private var gravity: FloatArray? = null
     private var geomag: FloatArray? = null
-    private var sinS = 0.0
-    private var cosS = 0.0
+    private var smoothedDeg = 0.0
+    private var lastSampleNs = 0L
+    private var lastRotationNs = 0L
     private var hasValue = false
     private var lastEmit = 0L
     private var running = false
@@ -54,14 +54,18 @@ class Compass(
         running = true
         hasValue = false
         hasMatrix = false
+        gravity = null
+        geomag = null
+        lastRotationNs = 0L
+        lastSampleNs = 0L
+        lastEmit = 0L
         field.reset()
         accuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
-        if (rotation != null) {
-            sm.registerListener(this, rotation, SensorManager.SENSOR_DELAY_UI)
-            mag?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) } // accuracy reports
-        } else {
-            accel?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-            mag?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        // Keep fallback samples warm: some sensor hubs stop delivering fused rotation after folding.
+        for (sensor in listOfNotNull(rotation, accel, mag)) {
+            if (!sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)) {
+                Log.w(TAG, "Could not register ${sensor.name}")
+            }
         }
     }
 
@@ -98,11 +102,19 @@ class Compass(
             }
         }
         when (event.sensor.type) {
-            Sensor.TYPE_ROTATION_VECTOR -> { SensorManager.getRotationMatrixFromVector(r, event.values); hasMatrix = true }
-            Sensor.TYPE_ACCELEROMETER -> { gravity = lowPass(event.values, gravity); if (!fromAccelMag()) return }
+            Sensor.TYPE_ROTATION_VECTOR -> {
+                lastRotationNs = event.timestamp
+                SensorManager.getRotationMatrixFromVector(r, event.values); hasMatrix = true
+            }
+            Sensor.TYPE_ACCELEROMETER -> {
+                gravity = lowPass(event.values, gravity)
+                if (lastRotationNs != 0L && event.timestamp - lastRotationNs <= 500_000_000L) return
+                if (!fromAccelMag()) return
+            }
             Sensor.TYPE_MAGNETIC_FIELD -> {
-                if (rotation != null) return
-                geomag = lowPass(event.values, geomag); if (!fromAccelMag()) return
+                geomag = lowPass(event.values, geomag)
+                if (lastRotationNs != 0L && event.timestamp - lastRotationNs <= 500_000_000L) return
+                if (!fromAccelMag()) return
             }
             else -> return
         }
@@ -118,16 +130,17 @@ class Compass(
         val north = remapped[0].toDouble()
         // Screen's right edge pointing straight up or down: no usable heading, keep the last one.
         if (east * east + north * north < 0.04) return
-        val az = atan2(east, north)
-        if (!hasValue) { sinS = sin(az); cosS = cos(az); hasValue = true } else {
-            val a = 0.15
-            sinS += a * (sin(az) - sinS)
-            cosS += a * (cos(az) - cosS)
+        val az = Math.toDegrees(atan2(east, north))
+        if (!hasValue) { smoothedDeg = az; hasValue = true } else {
+            val dt = ((event.timestamp - lastSampleNs) / 1e9).coerceIn(0.0, 1.0)
+            val a = 1.0 - kotlin.math.exp(-dt / 0.12)
+            smoothedDeg = Geo.normalizeDeg(smoothedDeg + a * Geo.angleDiffDeg(smoothedDeg, az))
         }
+        lastSampleNs = event.timestamp
         val now = System.nanoTime()
         if (now - lastEmit < 33_000_000L) return
         lastEmit = now
-        val magnetic = (Math.toDegrees(atan2(sinS, cosS)) + 360.0) % 360.0
+        val magnetic = Geo.normalizeDeg(smoothedDeg)
         onHeading((magnetic + declinationDeg + 360.0) % 360.0, magnetic, accuracy, field.disturbed)
     }
 

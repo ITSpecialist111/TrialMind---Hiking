@@ -34,13 +34,21 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putBoolean("os_premium", v).apply()
 
     var baseSourceId: String
-        get() = sp.getString("base_source", "osm") ?: "osm"
+        get() = (sp.getString("base_source", "osm") ?: "osm").let { if (com.trailmind.app.map.TileSources.isRetired(it)) "osm" else it }
         set(v) = sp.edit().putString("base_source", v).apply()
 
     /** Wide layout: the map fills the window, with the navigation rail and side pane hidden. */
     var mapFullScreen: Boolean
         get() = sp.getBoolean("map_full_screen", false)
         set(v) = sp.edit().putBoolean("map_full_screen", v).apply()
+
+    var menuOpacityPercent: Int
+        get() = sp.getInt("menu_opacity", 92).coerceIn(70, 100)
+        set(v) { require(v in 70..100); sp.edit().putInt("menu_opacity", v).apply() }
+
+    var what3wordsKey: String
+        get() = sp.getString("what3words_key", "") ?: ""
+        set(v) = sp.edit().putString("what3words_key", v.trim()).apply()
 
     /** The map turns so the way you face is at the top, instead of north. */
     var mapHeadingUp: Boolean
@@ -73,11 +81,6 @@ class Prefs(context: Context) {
     var packLidar: Boolean
         get() = sp.getBoolean("pack_lidar", true)
         set(v) = sp.edit().putBoolean("pack_lidar", v).apply()
-
-    /** GSI hill shading (Japan) over the base map. */
-    var showGsiHillshade: Boolean
-        get() = sp.getBoolean("show_gsi_hillshade", false)
-        set(v) = sp.edit().putBoolean("show_gsi_hillshade", v).apply()
 
     var showFacilities: Boolean
         get() = sp.getBoolean("show_facilities", true)

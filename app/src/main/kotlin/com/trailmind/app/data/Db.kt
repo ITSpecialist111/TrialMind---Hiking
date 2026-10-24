@@ -324,7 +324,33 @@ class Db(context: Context) : SQLiteOpenHelper(context, "trailmind.db", null, 6) 
     }
 
     fun deleteRoute(id: Long) {
-        writableDatabase.delete("routes", "id=?", arrayOf(id.toString()))
+        deleteRoutes(setOf(id))
+    }
+
+    fun deleteRoutes(ids: Set<Long>): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            var count = 0
+            for (id in ids) {
+                val args = arrayOf(id.toString())
+                count += db.delete("routes", "id=?", args)
+                db.execSQL("UPDATE hikes SET route_id=NULL WHERE route_id=?", args)
+            }
+            db.setTransactionSuccessful()
+            return count
+        } finally { db.endTransaction() }
+    }
+
+    fun deleteFinishedHikes(ids: Set<Long>): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            var count = 0
+            for (id in ids) count += db.delete("hikes", "id=? AND status=?", arrayOf(id.toString(), HikeStatus.DONE.name))
+            db.setTransactionSuccessful()
+            return count
+        } finally { db.endTransaction() }
     }
 
     private fun routeMeta(c: Cursor) = RouteMeta(

@@ -9,7 +9,7 @@ object SosText {
     const val MAX_CHARS = 160
 
     /** For a contact: what happened, where (grid, map link or coordinates), height and battery. */
-    fun contact(situation: String, location: LatLon?, altitudeM: Int?, time: String, batteryPercent: Int): String {
+    fun contact(situation: String, location: LatLon?, altitudeM: Int?, time: String, batteryPercent: Int, words: String? = null): String {
         val what = gsm(situation).trimEnd('.', ' ')
         val prefix = "SOS from TrailMind: "
         val suffix = " at ${gsm(time)}."
@@ -20,17 +20,24 @@ object SosText {
         }
         val tail = (altitudeM?.let { " $it m." } ?: "") + if (batteryPercent in 0..100) " Battery $batteryPercent%." else ""
         val head = prefix + what + suffix
+        val threeWords = words?.let { com.trailmind.core.geo.ThreeWordAddress.normalize(it) }
+            ?.takeIf { location != null && isGsm7(it) }?.let { " ///$it." }
+        if (threeWords != null) {
+            val room = MAX_CHARS - prefix.length - suffix.length - grid.length - coords.length - tail.length - threeWords.length
+            if (room >= 12) return prefix + what.take(room).trimEnd(',', ' ') + suffix + grid + coords + threeWords + tail
+        }
         link?.let { head + grid + it + tail }?.takeIf { it.length <= MAX_CHARS }?.let { return it }
         val room = MAX_CHARS - prefix.length - suffix.length - grid.length - coords.length - tail.length
         return prefix + what.take(room.coerceAtLeast(0)).trimEnd(',', ' ') + suffix + grid + coords + tail
     }
 
     /** For 999 by emergencySMS: the service to send, then what and where. The user reads it before sending. */
-    fun emergency(situation: String, location: LatLon?, time: String): String {
+    fun emergency(situation: String, location: LatLon?, time: String, words: String? = null): String {
         val where = location?.let { l ->
             (OsGrid.fromWgs84(l)?.format(10)?.let { "Grid $it, " } ?: "") + String.format(Locale.ROOT, "lat %.5f lon %.5f", l.lat, l.lon)
         } ?: "location unknown"
-        return "Police, mountain rescue. ${gsm(situation).trim().trimEnd('.')}. $where. Time ${gsm(time)}."
+        val threeWords = words?.let { com.trailmind.core.geo.ThreeWordAddress.normalize(it) }?.takeIf { location != null }?.let { " what3words ///$it." } ?: ""
+        return "Police, mountain rescue. ${gsm(situation).trim().trimEnd('.')}. $where.$threeWords Time ${gsm(time)}."
     }
 
     /** True if [text] uses only the basic GSM-7 alphabet, so it is sent as one 160-character SMS. */

@@ -190,12 +190,11 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
         })
         addView(ui.card(spacing = 8) {
             addView(ui.text("What can be offline", Ui.T.LABEL))
-            addView(ui.text("• OS Maps areas, downloaded with your own OS Data Hub key. Overview maps stay in your pack.\n" +
+            addView(ui.help("Save licensed maps before you leave.", "• OS Maps areas, downloaded with your own OS Data Hub key. Overview maps stay in your pack.\n" +
                 "• Explorer 1:25k detail can be added for 24 hours, the longest OS allows. Add it on the day of the hike. TrailMind asks before it expires, and you choose whether to renew it.\n" +
                 "• Any raster MBTiles file you have the right to use (e.g. made with QGIS, MOBAC or bought).\n" +
-                "• Japan: GSI Aerial Photo and GSI Hill shading (turn it on under Overlays). GSI's Standard Map is browse-only.\n" +
                 "• OpenStreetMap's public tiles are never bulk-downloaded: their usage policy forbids it. Areas you browse are cached for a few days only.\n" +
-                "Zoomed in beyond what is on the phone, the map enlarges the closest zoom it has.", Ui.T.CAPTION))
+                "Zoomed in beyond what is on the phone, the map enlarges the closest zoom it has."))
         })
 
         // --- new download
@@ -321,15 +320,16 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
     }
 
     private fun chipRow(items: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit): View =
-        ui.flow { items.forEach { (label, value) -> addView(ui.chip(label, value == selected) { onPick(value) }) } }
+        ui.flow { items.forEach { (label, value) -> addView(ui.chip(label, value == selected, wrap = true) { onPick(value) }) } }
 
     private fun packCard(pk: PackMeta): View = ui.card(spacing = 6) {
         val active = DownloadState.packId == pk.id
+        val retired = TileSources.isRetired(pk.sourceId) && pk.kind == PackKind.DOWNLOAD
         addView(ui.row(spacing = 8) {
             addView(ui.text(pk.name, Ui.T.TITLE), ui.lp(0, weight = 1f))
             addView(ui.chip(if (active) "Downloading" else pk.status.name.lowercase().replaceFirstChar { it.uppercase() }, pk.status == PackStatus.COMPLETE || pk.status == PackStatus.READY))
         })
-        val srcName = if (pk.kind == PackKind.IMPORT) "Imported ${pk.format.uppercase()}" else TileSources.byId(pk.sourceId, app.prefs, packs).name
+        val srcName = if (retired) "Retired Japan map (delete when no longer needed)" else if (pk.kind == PackKind.IMPORT) "Imported ${pk.format.uppercase()}" else TileSources.byId(pk.sourceId, app.prefs, packs).name
         addView(ui.text("$srcName · zoom ${pk.minZoom}–${pk.maxZoom} · ${mb(pk.bytes)}", Ui.T.CAPTION))
         if (pk.kind == PackKind.DOWNLOAD) {
             val bar = ui.progress().apply { progress = if (pk.tileTotal > 0) (pk.tileDone * 1000 / pk.tileTotal).toInt() else 0 }
@@ -359,7 +359,7 @@ class OfflinePage(host: MainActivity, private val presetRouteId: Long? = null) :
                     else -> null
                 }
                 if (active) addView(ui.button("Pause", R.drawable.ic_pause, Ui.B.TEXT) { DownloadService.pause(host) })
-                else if (again != null) addView(ui.button(again, if (again == "Resume") R.drawable.ic_play else R.drawable.ic_download, Ui.B.TEXT) {
+                else if (again != null && !retired) addView(ui.button(again, if (again == "Resume") R.drawable.ic_play else R.drawable.ic_download, Ui.B.TEXT) {
                     downloadAgain(pk, when (again) {
                         "Renew" -> "Renew for 24 hours?"
                         "Download again" -> "Download again?"
@@ -523,7 +523,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
         }
         addView(ui.text("Route", Ui.T.LABEL))
         addView(ui.flow {
-            routes.take(12).forEach { r -> addView(ui.chip(r.name, r.id == routeId) { routeId = r.id; load() }) }
+            routes.take(12).forEach { r -> addView(ui.chip(r.name, r.id == routeId, wrap = true) { routeId = r.id; load() }) }
         })
         addView(ui.text("Planned start", Ui.T.LABEL))
         addView(ui.flow {
@@ -550,7 +550,7 @@ class AssistantPage(host: MainActivity, private val presetRouteId: Long? = null)
             addView(ui.text(if (host.edgeGalleryInstalled()) "AI Edge Gallery is installed. Tap below, choose AI Chat with a Gemma model, and paste." else
                 "AI Edge Gallery isn't installed. You can still copy the prompt into any assistant you trust.", Ui.T.CAPTION))
             addView(ui.button("Copy prompt & open Edge Gallery", R.drawable.ic_sparkle) { host.openEdgeGallery(prompt) })
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Copy", null, Ui.B.TONAL) { host.copy("Beacon prompt", prompt) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Share…", R.drawable.ic_share, Ui.B.TONAL) { host.shareText("Hike briefing prompt", prompt) }, ui.lp(0, weight = 1f))
             })
@@ -588,6 +588,13 @@ class SafetyPage(host: MainActivity) : Page(host) {
     private var groupShown: String? = null
     private var grid: TextView? = null
     private var detail: TextView? = null
+    private var wordsLabel: TextView? = null
+    private var wordsRequest: com.trailmind.app.data.OsNames.Request? = null
+    private var wordsJob = 0
+    private var wordsError: String? = null
+    private val freshnessTick = object : Runnable {
+        override fun run() { update(); Async.main.postDelayed(this, 1000) }
+    }
 
     override fun onShow() {
         app.location.addListener(onFix)
@@ -596,9 +603,15 @@ class SafetyPage(host: MainActivity) : Page(host) {
         app.group.addListener(onGroup)
         update()
         refresh()
+        Async.main.removeCallbacks(freshnessTick)
+        Async.main.post(freshnessTick)
     }
 
     override fun onHide() {
+        wordsJob++
+        wordsRequest?.cancel()
+        wordsRequest = null
+        Async.main.removeCallbacks(freshnessTick)
         app.location.removeListener(onFix)
         app.frontier.removeListener(onFrontier)
         FallAlert.removeListener(onFrontier)
@@ -616,7 +629,9 @@ class SafetyPage(host: MainActivity) : Page(host) {
             OsGrid.fromWgs84(ll)?.format(10)?.let { append("OS grid ref: ").append(it).append('\n') }
             append("Lat/Lon: ").append(Units.latLon(f.lat, f.lon)).append(" (±").append(Units.distance(f.accuracyM.toDouble(), app.prefs.imperial)).append(")\n")
             f.altitudeM?.let { append("Altitude: ").append(Units.elevation(it, app.prefs.imperial)).append('\n') }
-            append("https://www.openstreetmap.org/?mlat=%.5f&mlon=%.5f#map=16/%.5f/%.5f".format(f.lat, f.lon, f.lat, f.lon))
+            append("Fix time: ").append(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(f.location.time))).append('\n')
+            com.trailmind.app.data.What3words.current(f)?.let { append("what3words: ///").append(it.words).append('\n') }
+            append(String.format(java.util.Locale.ROOT, "https://www.openstreetmap.org/?mlat=%.5f&mlon=%.5f#map=16/%.5f/%.5f", f.lat, f.lon, f.lat, f.lon))
         }
     }
 
@@ -626,7 +641,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
             grid = ui.text("—", Ui.T.DISPLAY).also { it.setTextIsSelectable(true); addView(it) }
             detail = ui.text("", Ui.T.CAPTION).also { addView(it) }
         })
-        addView(ui.row {
+        addView(ui.actionRow {
             addView(ui.button("Copy", null, Ui.B.TONAL) {
                 locationText(app.location.latest)?.let { host.copy("My location", it) } ?: host.toast("No GPS fix yet")
             }, ui.lp(0, weight = 1f))
@@ -634,6 +649,28 @@ class SafetyPage(host: MainActivity) : Page(host) {
                 locationText(app.location.latest)?.let { host.shareText("My location", it) } ?: host.toast("No GPS fix yet")
             }, ui.lp(0, weight = 1f))
         })
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("what3words", Ui.T.TITLE))
+            addView(ui.help("Three words for your current position.", "Lookup sends this GPS position to what3words. It needs internet and your API key. GPS uncertainty may span several 3 m squares. Read back all three words and also give your grid reference or coordinates. Sharing only includes a lookup still in the same square and less than a minute old; emergency actions never wait for the network."))
+            wordsLabel = ui.text("", Ui.T.BODY).also { it.setTextIsSelectable(true); addView(it) }
+            addView(ui.button(if (wordsRequest == null) "Look up three words" else "Looking up...", R.drawable.ic_search, Ui.B.TONAL) {
+                val fix = app.location.latest
+                if (fix == null) { host.toast("Wait for a GPS fix first."); return@button }
+                val request = com.trailmind.app.data.OsNames.Request()
+                wordsRequest = request
+                wordsError = null
+                val job = ++wordsJob
+                refresh()
+                Async.run({ com.trailmind.app.data.What3words.locate(fix, app.prefs.what3wordsKey, request) }) { result ->
+                    if (job != wordsJob) return@run
+                    wordsRequest = null
+                    wordsError = result.exceptionOrNull()?.message
+                    refresh()
+                    update()
+                }
+            }.apply { isEnabled = wordsRequest == null })
+        })
+        addView(ui.listItem("Satellites & telemetry", "Live sky view and GPS quality", R.drawable.ic_my_location) { host.push(SatellitePage(host)) })
         addView(frontierCard())
         addView(groupCard())
         addView(sosCard())
@@ -642,7 +679,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
             addView(ui.text("Check-in", Ui.T.TITLE))
             addView(ui.text(if (due > 0) "Check-in ${clockTime(host, due)} · ${app.prefs.checkInRoute}" else "No check-in set", Ui.T.BODY))
             addView(ui.text("TrailMind reminds you on this phone. It does not send an SMS for you; Text opens your SMS app for you to send it.", Ui.T.CAPTION))
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button(if (due > 0) "Edit" else "Set check-in", null, Ui.B.TONAL) {
                     pickCheckIn(host, app.prefs.checkInRoute.ifBlank { app.nav.active?.data?.meta?.name ?: "my walk" }, 60.0,
                         app.prefs.checkInRouteId.takeIf { due > 0 } ?: app.nav.active?.data?.meta?.id ?: 0L) { refresh() }
@@ -793,7 +830,7 @@ class SafetyPage(host: MainActivity) : Page(host) {
         addView(ui.divider())
         addView(ui.text("999 by text (emergencySMS)", Ui.T.TITLE))
         addView(ui.text("Satellite can't carry 999 calls. Register this phone for emergencySMS before you go, and you can text 999 instead.", Ui.T.CAPTION))
-        addView(ui.switch("This phone is registered for emergencySMS", prefs.emergencySmsRegistered) {
+        addView(ui.switch("Registered for emergencySMS", prefs.emergencySmsRegistered) {
             prefs.emergencySmsRegistered = it
             refresh()
         })
@@ -807,6 +844,8 @@ class SafetyPage(host: MainActivity) : Page(host) {
 
     private fun update() {
         val f = app.location.latest
+        wordsLabel?.setIfChanged(com.trailmind.app.data.What3words.current(f)?.let { "///${it.words}" }
+            ?: wordsError ?: if (wordsRequest != null) "Looking up..." else "Not looked up, moved square, or expired. Tap to refresh.")
         if (f == null) { grid?.setIfChanged("No fix"); detail?.setIfChanged("Waiting for GPS. Move to open ground for a better signal."); return }
         val ll = LatLon(f.lat, f.lon)
         grid?.setIfChanged(OsGrid.fromWgs84(ll)?.format(10) ?: Units.latLon(f.lat, f.lon))
@@ -835,14 +874,46 @@ class SettingsPage(host: MainActivity) : Page(host) {
     override fun render(): View = scaffold("Settings") {
         val prefs = app.prefs
 
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("what3words API", Ui.T.TITLE))
+            addView(ui.help("Optional three-word location lookup.", "Use your own what3words API key with convert-to-coordinates and convert-to-3wa access. Pricing and allowances depend on your plan. Requests are made only when you search three words or tap Look up three words in Safety. Keys stay in app-private settings and are not included in backups."))
+            val key = ui.input("what3words API key", prefs.what3wordsKey, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+            addView(key, ui.lp())
+            addView(ui.button("Save what3words key", null, Ui.B.TONAL) { prefs.what3wordsKey = key.text.toString(); host.toast("what3words key saved") })
+            addView(ui.button("Get a what3words key", null, Ui.B.TEXT) { host.openUrl("https://developer.what3words.com/") })
+        })
+
+        addView(ui.card(spacing = 6) {
+            addView(ui.text("Appearance", Ui.T.TITLE))
+            addView(ui.help("Menu transparency", "On unfolded phones and wide windows, the rounded menu floats over the map. Text and controls stay opaque. Choose 100% opacity for maximum contrast."))
+            val label = ui.text("Menu opacity: ${prefs.menuOpacityPercent}%", Ui.T.LABEL)
+            addView(label)
+            addView(android.widget.SeekBar(host).apply {
+                max = 30
+                minimumHeight = host.dp(48)
+                progress = prefs.menuOpacityPercent - 70
+                contentDescription = "Menu opacity, 70 to 100 percent"
+                setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: android.widget.SeekBar?, value: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        prefs.menuOpacityPercent = value + 70
+                        label.text = "Menu opacity: ${value + 70}%"
+                        host.updateMenuAppearance()
+                    }
+                    override fun onStartTrackingTouch(bar: android.widget.SeekBar?) {}
+                    override fun onStopTrackingTouch(bar: android.widget.SeekBar?) {}
+                })
+            }, ui.lp())
+        })
+
         addView(ui.card(spacing = 10) {
             addView(ui.text("Ordnance Survey maps", Ui.T.TITLE))
-            addView(ui.text("Create a free account and API project on the OS Data Hub, add the OS Maps API, and paste the project API key here. The key is stored only on this phone. " +
-                "Overview maps (zooms 7–16) stay saved; closer detail uses your plan's allowance and is kept for 24 hours.", Ui.T.CAPTION))
+            addView(ui.help("Use your own OS maps key.", "Create a free account and API project on the OS Data Hub, add the OS Maps API, and paste the project API key here. The key is stored only on this phone. " +
+                "Overview maps (zooms 7–16) stay saved; closer detail uses your plan's allowance and is kept for 24 hours."))
             val key = ui.input("OS Data Hub API key", prefs.osApiKey, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
             addView(key, ui.lp())
             val status = ui.text("", Ui.T.CAPTION)
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Save & test", null) {
                     prefs.osApiKey = key.text.toString().trim()
                     app.tiles.clearErrors()
@@ -856,14 +927,14 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
         addView(ui.card(spacing = 10) {
             addView(ui.text("Old maps (MapTiler key)", Ui.T.TITLE))
-            addView(ui.text("Scanned Ordnance Survey maps of Great Britain from 1885–1961, including every sheet of the Forest of Dean and the lower Wye, " +
+            addView(ui.help("Historic maps with your MapTiler key.", "Scanned Ordnance Survey maps of Great Britain from 1885–1961, including every sheet of the Forest of Dean and the lower Wye, " +
                 "are served free by MapTiler Cloud with your own key. Create a free MapTiler account, copy a key from your account page and paste it here: " +
                 "the free plan is for personal, non-commercial use. The key is stored only on this phone. " +
-                "Then open Map layers → Old maps.", Ui.T.CAPTION))
+                "Then open Map layers → Old maps."))
             val key = ui.input("MapTiler key", prefs.mapTilerKey, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
             addView(key, ui.lp())
             val status = ui.text("", Ui.T.CAPTION)
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("Save & test", null) {
                     prefs.mapTilerKey = key.text.toString().trim()
                     app.tiles.clearErrors()
@@ -890,13 +961,14 @@ class SettingsPage(host: MainActivity) : Page(host) {
         addView(ui.card(spacing = 6) {
             addView(ui.text("Recording", Ui.T.TITLE))
             addView(ui.switch("Pause the hike when I get in a vehicle", prefs.autoPauseInVehicle) { prefs.autoPauseInVehicle = it })
-            addView(ui.text("If the phone keeps moving faster than about 22 km/h (14 mph) for half a minute, TrailMind pauses the hike, " +
+            addView(ui.help("Leave vehicle journeys out of hikes.", "If the phone keeps moving faster than about 22 km/h (14 mph) for half a minute, TrailMind pauses the hike, " +
                 "leaves the drive out of your track and time, switches the GPS off and tells you. Tap Resume when you are back on foot. " +
-                "Turn it off if you cycle or ski.", Ui.T.CAPTION))
+                "Turn it off if you cycle or ski."))
         })
 
         addView(ui.card(spacing = 6) {
             addView(ui.text("Units & pace", Ui.T.TITLE))
+            addView(ui.help("Choose units and walking estimates.", "Flat speed is your normal walking pace. The conditions/group factor increases estimated time for rough ground, bad weather or a slower party. Estimates are not guarantees; allow extra time for stops."))
             addView(ui.switch("Miles and feet", prefs.imperial) { prefs.imperial = it; app.nav.settingsChanged(); host.map.refreshPlannerDisplay(); refresh() })
             addView(ui.text("Flat walking speed", Ui.T.LABEL))
             addView(chips(listOf(3.5, 4.0, 4.5, 5.0, 5.5, 6.0).map { Units.speedKmh(it / 3.6, prefs.imperial) to it }, prefs.flatSpeedKmh) {
@@ -914,8 +986,9 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(chips(listOf(30, 60, 100, 150).map { Units.distance(it.toDouble(), prefs.imperial) to it.toDouble() }, prefs.offRouteThresholdM.toDouble()) {
                 prefs.offRouteThresholdM = it.toInt(); app.nav.settingsChanged(); refresh()
             })
-            addView(ui.text("Alerts need 3 consecutive GPS fixes beyond this distance (after allowing for GPS accuracy), then vibrate and notify.", Ui.T.CAPTION))
+            addView(ui.help("Alert when you leave the route.", "Alerts need 3 consecutive GPS fixes beyond this distance (after allowing for GPS accuracy), then vibrate and notify."))
             addView(ui.text("Daylight margin", Ui.T.LABEL))
+            addView(ui.help("Allow time before sunset.", "Adds a daylight safety margin when checking your likely finish time. This does not account for local shade or poor visibility; carry a torch."))
             addView(chips(listOf(0, 30, 60).map { "$it min" to it.toDouble() }, prefs.daylightMarginMinutes.toDouble()) {
                 prefs.daylightMarginMinutes = it.toInt(); app.nav.settingsChanged(); refresh()
             })
@@ -924,8 +997,8 @@ class SettingsPage(host: MainActivity) : Page(host) {
 
         addView(ui.card(spacing = 8) {
             addView(ui.text("Watch companion", Ui.T.TITLE))
-            addView(ui.text("Shows the map, hike stats, route guidance and off-route alerts on a Wear OS watch such as a Galaxy Watch4, " +
-                "over Bluetooth with no Google services. Install TrailMind on the watch too. It works while this app is open or a hike is recording.", Ui.T.CAPTION))
+            addView(ui.help("Maps and guidance on your Wear OS watch.", "Shows the map, hike stats, route guidance and off-route alerts on a Wear OS watch such as a Galaxy Watch4, " +
+                "over Bluetooth with no Google services. Install TrailMind on the watch too. It works while this app is open or a hike is recording."))
             addView(ui.switch("Connect to my watch", prefs.watchEnabled) { on ->
                 if (!on) { prefs.watchEnabled = false; app.watch.refresh(); refresh() }
                 else host.withBluetoothPermission { prefs.watchEnabled = true; app.watch.refresh(); refresh() }
@@ -936,7 +1009,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
                 if (devices.isEmpty()) addView(ui.text("No paired Bluetooth devices. Pair the watch with this phone first (Galaxy Wearable app).", Ui.T.CAPTION))
                 else addView(ui.flow {
                     devices.forEach { (name, address) ->
-                        addView(ui.chip(name, address.equals(prefs.watchAddress, ignoreCase = true)) {
+                        addView(ui.chip(name, address.equals(prefs.watchAddress, ignoreCase = true), wrap = true) {
                             prefs.watchAddress = address; app.watch.refresh(); refresh()
                         })
                     }
@@ -994,23 +1067,21 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("About", Ui.T.TITLE))
             addView(ui.text("TrailMind ${app.versionName} · personal offline-first hiking app.\n" +
                 "Map data: © OpenStreetMap contributors (ODbL); Contains OS data © Crown copyright and database rights (OS OpenData under the Open Government Licence; OS Premium under your OS Data Hub plan).\n" +
-                "Japan map: 出典：国土地理院 (Geospatial Information Authority of Japan, GSI Tiles).\n" +
                 "Old maps: Ordnance Survey, scanned by the National Library of Scotland (maps.nls.uk), CC BY 3.0, hosted by MapTiler.\n" +
                 "Routes found with Waymarked Trails; their heights: ASTER GDEM is a product of METI and NASA.\n" +
                 "Weather data by Open-Meteo.com (CC BY 4.0).\n" +
                 "1 m LiDAR terrain for England, under the Open Government Licence: © Environment Agency copyright and/or database right 2022. All rights reserved.\n" +
                 "Icons: Material Symbols (Apache 2.0).\n" +
                 "Estimates use Naismith's rule with Langmuir corrections and Tobler's hiking function; they exclude breaks.", Ui.T.CAPTION))
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("OS terms", null, Ui.B.TEXT) { host.openUrl(TileSources.OS_TERMS_URL) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Report an OS map error", null, Ui.B.TEXT) { host.openUrl(TileSources.OS_ERRORS_URL) }, ui.lp(0, weight = 1f))
             })
-            addView(ui.row {
+            addView(ui.actionRow {
                 addView(ui.button("OpenStreetMap copyright", null, Ui.B.TEXT) { host.openUrl(TileSources.OSM_COPYRIGHT_URL) }, ui.lp(0, weight = 1f))
                 addView(ui.button("Report an OpenStreetMap issue", null, Ui.B.TEXT) { host.openUrl(TileSources.OSM_FIX_THE_MAP_URL) }, ui.lp(0, weight = 1f))
             })
             addView(ui.button("Weather data licence (CC BY 4.0)", null, Ui.B.TEXT) { host.openUrl(OpenMeteo.LICENCE_URL) })
-            addView(ui.button("GSI Tiles (Japan) terms", null, Ui.B.TEXT) { host.openUrl(TileSources.GSI_TILES_URL) })
             addView(ui.button("Old maps: National Library of Scotland", null, Ui.B.TEXT) { host.openUrl(TileSources.NLS_MAPS_URL) })
             addView(ui.button("LiDAR licence (Open Government Licence)", null, Ui.B.TEXT) { host.openUrl(LidarProvider.LICENCE_URL) })
             addView(ui.button("Show safety introduction", null, Ui.B.TEXT) { host.push(OnboardingPage(host).also { app.prefs.onboardingAccepted = true }) })
@@ -1020,7 +1091,7 @@ class SettingsPage(host: MainActivity) : Page(host) {
             addView(ui.text("Privacy", Ui.T.TITLE))
             addView(ui.text("No accounts, ads or analytics, and no backups: your routes, hikes, emergency contact and OS key stay on this phone. " +
                 "To show maps, terrain, place names, forecasts, routes and facilities, TrailMind sends the map area or points involved to that service: " +
-                "Ordnance Survey, OpenStreetMap, Japan's GSI (Geospatial Information Authority of Japan), MapTiler (old maps, with your own key), Mapzen terrain tiles on Amazon Web Services, the Environment Agency (LiDAR), Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
+                "Ordnance Survey, OpenStreetMap, MapTiler (old maps, with your own key), what3words (only on explicit lookup with your own key), Mapzen terrain tiles on Amazon Web Services, the Environment Agency (LiDAR), Open-Meteo, BRouter, Waymarked Trails, Overpass or your custom map source. " +
                 "Your location is texted only to the contact you choose: when you send it or, if you turn it on, after an unanswered fall alarm. " +
                 "In a trip group it also goes, encrypted with the group's code, straight to the group's phones over Bluetooth, never to a server. " +
                 "The watch link is Bluetooth between your own devices.", Ui.T.CAPTION))
