@@ -1,0 +1,77 @@
+<#
+.SYNOPSIS
+  Drive the TrailMind iPhone build in WSL from Windows, then run scripts/ios-xtool.sh there.
+
+.DESCRIPTION
+  USB iPhones are reached through Apple's own Windows device service (the Apple Devices app, usbmuxd on
+  127.0.0.1:27015) with WSL in mirrored networking mode. Forwarding the raw USB device into WSL with
+  usbipd-win is not used: its packet timing makes the iPhone reject installs (dorssel/usbipd-win#867).
+
+.EXAMPLE
+  scripts\ios-wsl.ps1 setup
+  scripts\ios-wsl.ps1 setup -XcodeXip C:\Users\me\Downloads\Xcode_27.0.xip
+  scripts\ios-wsl.ps1 auth             # one-time Apple ID sign-in for xtool (interactive)
+  scripts\ios-wsl.ps1 devices          # list connected iPhones and their UDIDs
+  scripts\ios-wsl.ps1 run -Udid 00008101-000455A21189001E
+  scripts\ios-wsl.ps1 run-network -PhoneIp 192.168.68.12
+#>
+param(
+    [Parameter(Mandatory, Position = 0)]
+    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network')]
+    [string]$Command,
+    [string]$Distro = 'trailmind-ios',
+    [string]$XcodeXip,
+    [string]$PhoneIp,
+    [string]$Udid
+)
+$ErrorActionPreference = 'Stop'
+$env:WSL_UTF8 = '1'
+$repo = Split-Path -Parent $PSScriptRoot
+
+function ConvertTo-WslPath([string]$path) {
+    $full = (Resolve-Path $path).Path
+    '/mnt/' + $full.Substring(0, 1).ToLower() + ($full.Substring(2) -replace '\\', '/')
+}
+
+function Test-AppleMux {
+    $c = New-Object Net.Sockets.TcpClient
+    try { $c.Connect('127.0.0.1', 27015); $true } catch { $false } finally { $c.Dispose() }
+}
+
+function Start-AppleMobileDevice {
+    $config = Join-Path $env:USERPROFILE '.wslconfig'
+    if (-not ((Test-Path $config) -and (Select-String -Path $config -Pattern '^\s*networkingMode\s*=\s*mirrored' -Quiet))) {
+        throw "WSL must use mirrored networking to reach Apple's device service. Add 'networkingMode=mirrored' under [wsl2] in $config, then run: wsl --shutdown"
+    }
+    if (Test-AppleMux) { return }
+    $pkg = Get-AppxPackage AppleInc.AppleDevices
+    if (-not $pkg) { throw 'Install Apple Devices first: winget install --id 9NP83LWLPZ9K -s msstore' }
+    # The package normally starts this at sign-in (a startup task); start it now if it is not running.
+    Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId App `
+        -Command (Join-Path $pkg.InstallLocation 'AppleMobileDeviceLauncher.exe')
+    foreach ($i in 1..30) { if (Test-AppleMux) { Start-Sleep 5; return }; Start-Sleep 1 }
+    throw "Apple's device service did not start on 127.0.0.1:27015. Open the Apple Devices app and retry."
+}
+
+function Invoke-Script([string[]]$scriptArgs, [string]$prefix = '') {
+    $script = (ConvertTo-WslPath (Join-Path $repo 'scripts\ios-xtool.sh'))
+    wsl -d $Distro -- bash -lc "$prefix bash '$script' $($scriptArgs -join ' ')"
+    if ($LASTEXITCODE) { throw "ios-xtool.sh $($scriptArgs -join ' ') failed ($LASTEXITCODE)" }
+}
+
+$udidArgs = if ($Udid) { @('--udid', $Udid) } else { @() }
+switch ($Command) {
+    'setup' {
+        $prefix = if ($XcodeXip) { "XCODE_XIP='$(ConvertTo-WslPath $XcodeXip)'" } else { '' }
+        Invoke-Script @('setup') $prefix
+    }
+    'auth' { Invoke-Script @('auth') }
+    'devices' { Start-AppleMobileDevice; Invoke-Script @('devices') }
+    'pair-network' { Start-AppleMobileDevice; Invoke-Script @('pair-network') }
+    'run' { Start-AppleMobileDevice; Invoke-Script (@('run') + $udidArgs) }
+    'run-network' {
+        if (-not $PhoneIp) { throw '-PhoneIp is required' }
+        Invoke-Script @('run-network', $PhoneIp)
+    }
+    default { Invoke-Script @($Command) }
+}

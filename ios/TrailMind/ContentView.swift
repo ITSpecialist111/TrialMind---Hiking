@@ -17,9 +17,16 @@ struct ContentView: View {
     @EnvironmentObject private var location: LocationService
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("menuOpacity") private var opacity = 0.92
+    @AppStorage("mapLayer") private var layerID = MapLayer.osOutdoor.rawValue
     @State private var destination: Destination? = .map
-    @State private var position: MapCameraPosition = .automatic
-    @State private var headingUp = false
+    @State private var tracking: MapTracking = .none
+    @State private var recentre = 0
+    @State private var osKey: String? = OSKeyStore.load()
+    @State private var keyDraft = ""
+    @State private var tileProblem: String?
+
+    private var layer: MapLayer { MapLayer(rawValue: layerID) ?? .osOutdoor }
+    private var missingKey: Bool { layer.requiresKey && osKey == nil }
 
     var body: some View {
         NavigationSplitView {
@@ -42,33 +49,75 @@ struct ContentView: View {
     }
 
     private var map: some View {
-        Map(position: $position) { UserAnnotation() }
-            .mapControls {
-                MapCompass()
-                MapScaleView()
+        TrailMapView(layer: layer, apiKey: osKey, tracking: $tracking, recentre: recentre) { status in
+            switch status {
+            case 401?, 403?: tileProblem = "OS rejected the API key. Check it in Settings and that the OS Maps API is on in your Data Hub project."
+            case 429?: tileProblem = "OS Maps API rate limit reached. Try again shortly."
+            case let code?: tileProblem = "Map tiles failed (HTTP \(code))."
+            case nil: tileProblem = "Map tiles could not be downloaded. Check your connection."
             }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 8) {
-                    Text("iPhone preview · Apple Maps · no offline hiking maps or recording yet")
-                        .font(.caption)
-                    HStack {
-                        Button {
-                            location.requestLocation()
-                            position = .userLocation(followsHeading: headingUp, fallback: .automatic)
-                        } label: { Label("Locate", systemImage: "location") }
-                        Button {
-                            headingUp.toggle()
-                            location.requestLocation()
-                            position = .userLocation(followsHeading: headingUp, fallback: .automatic)
-                        } label: { Label(headingUp ? "Heading up" : "North up", systemImage: "location.north.line") }
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .overlay(alignment: .bottomLeading) { credits }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                if missingKey {
+                    Button { destination = .settings } label: {
+                        Label("Add your OS Data Hub API key in Settings to show OS Maps", systemImage: "key")
                     }
-                    Text(location.message).font(.caption)
+                    .font(.caption)
+                } else if let tileProblem {
+                    Text(tileProblem).font(.caption).foregroundStyle(.red)
                 }
-                .padding()
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-                .padding()
+                HStack {
+                    Menu {
+                        Picker("Map", selection: $layerID) {
+                            ForEach(MapLayer.allCases) { Text($0.name).tag($0.rawValue) }
+                        }
+                    } label: { Label(layer.name, systemImage: "square.3.layers.3d") }
+                    Button {
+                        location.requestLocation()
+                        tracking = .follow
+                        recentre += 1
+                    } label: { Label("Locate", systemImage: "location") }
+                    Button {
+                        location.requestLocation()
+                        tracking = tracking == .followHeading ? .follow : .followHeading
+                    } label: {
+                        Label(tracking == .followHeading ? "Heading up" : "North up", systemImage: "location.north.line")
+                    }
+                }
+                .labelStyle(.titleAndIcon)
+                .font(.callout)
+                Text(location.message).font(.caption)
             }
-            .navigationTitle("Map")
+            .padding()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+            .padding()
+            .padding(.bottom, 28)
+        }
+        .onChange(of: layerID) { _, _ in tileProblem = nil }
+        .navigationTitle("Map")
+    }
+
+    /// OS branding asks for the OS logo on the map, with the copyright statement.
+    @ViewBuilder private var credits: some View {
+        if let text = layer.attribution() {
+            HStack(alignment: .bottom, spacing: 6) {
+                if layer.isOrdnanceSurvey, let logo = OSLogo.image {
+                    Image(uiImage: logo).accessibilityLabel("Ordnance Survey")
+                }
+                if let url = layer.termsURL {
+                    Link(text, destination: url).font(.caption2)
+                } else {
+                    Text(text).font(.caption2)
+                }
+            }
+            .padding(6)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.leading, 8)
+            .padding(.bottom, 4)
+        }
     }
 
     private var safety: some View {
@@ -103,6 +152,30 @@ struct ContentView: View {
 
     private var settings: some View {
         Form {
+            Section {
+                Picker("Map", selection: $layerID) {
+                    ForEach(MapLayer.allCases) { Text($0.name).tag($0.rawValue) }
+                }
+            } header: { Text("Map") } footer: {
+                Text("OS Maps zooms 17 and closer are OS Premium data: they use your plan's allowance and are not stored on the phone. OpenStreetMap is for browsing only.")
+            }
+            Section {
+                if osKey == nil {
+                    SecureField("OS Data Hub API key", text: $keyDraft)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("Save key") {
+                        if OSKeyStore.save(keyDraft) { osKey = OSKeyStore.load(); keyDraft = ""; tileProblem = nil }
+                    }
+                    .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } else {
+                    Label("Key saved on this iPhone", systemImage: "checkmark.seal")
+                    Button("Remove key", role: .destructive) { OSKeyStore.delete(); osKey = nil }
+                }
+                Link("Get a free key at OS Data Hub", destination: URL(string: "https://osdatahub.os.uk/")!)
+            } header: { Text("OS Maps") } footer: {
+                Text("Use your own key from a Data Hub project with the OS Maps API added. It is kept in this iPhone's Keychain and only sent to Ordnance Survey.")
+            }
             Section("Appearance") {
                 Slider(value: $opacity, in: 0.70...1.0, step: 0.01) {
                     Text("Menu opacity")
@@ -112,9 +185,8 @@ struct ContentView: View {
                     .font(.caption)
             }
             Section("Private preview") {
-                Text("Location runs only while this app is open. Apple Maps may request map data from Apple. Nothing is uploaded to TrailMind servers.")
-                Text("OS maps, GPX routes, hike recording, what3words, groups, Strava and fall alerts have not been ported to iOS.")
-                Text("This starter needs its first Xcode build and device validation before distribution.")
+                Text("Location runs only while this app is open. Map tiles come from the provider you choose. Nothing is uploaded to TrailMind servers.")
+                Text("OS Explorer/Landranger (British National Grid), offline maps, GPX routes, hike recording, what3words, groups, Strava and fall alerts have not been ported to iOS yet.")
             }
         }
         .navigationTitle("Settings")
