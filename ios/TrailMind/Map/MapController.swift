@@ -141,6 +141,11 @@ final class MapController: ObservableObject {
             rect = rect.insetBy(dx: -(minWidth - rect.size.width) / 2, dy: -(minWidth - rect.size.width) / 2)
         }
         mapHeading = 0
+        if map.camera.heading != 0 {
+            let cam = map.camera.copy() as! MKMapCamera
+            cam.heading = 0
+            map.setCamera(cam, animated: false)
+        }
         map.setVisibleMapRect(rect, edgePadding: padding, animated: true)
     }
 
