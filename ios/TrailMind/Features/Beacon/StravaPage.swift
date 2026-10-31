@@ -128,6 +128,9 @@ struct StravaPage: View {
 
     private func connect() {
         guard let url = strava.beginConnect(clientId, secret, error: { note = $0 }) else { return }
+        // The secret is saved now; as on Android, the box never shows it again (blank keeps it).
+        secret = ""
+        clientId = prefs.stravaClientId
         note = "\(Self.waiting) and approve. You'll come straight back here."
         StravaSignIn.shared.start(url) { outcome in
             switch outcome {
