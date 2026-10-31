@@ -189,16 +189,22 @@ final class RouteFollow: ObservableObject {
 enum RouteMap {
     static let lidarStretchLine = "lidar-stretch"
 
+    /// Brings the map into view (MainActivity.showMap): in the narrow layout the page gives way to it; where the map
+    /// shows beside the page (wide and folded layouts) the page stays.
+    static func revealMap() {
+        if !Navigator.shared.mapHasPane { Navigator.shared.showMap() }
+    }
+
     /// Shows the map and centres it on a point (MapScreen.centerOn).
     static func centerOn(_ p: LatLon, zoom: Double) {
-        Navigator.shared.showMap()
+        revealMap()
         DispatchQueue.main.async { MapController.shared.centerOn(p, zoom: zoom) }
     }
 
     /// Shows the map and fits a box into its visible part (MapScreen.fit).
     static func fit(_ box: BoundingBox?) {
         guard let box else { return }
-        Navigator.shared.showMap()
+        revealMap()
         DispatchQueue.main.async { MapController.shared.fit(box) }
     }
 

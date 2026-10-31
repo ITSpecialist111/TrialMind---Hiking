@@ -131,7 +131,7 @@ extension RouteMap {
         } else if let at {
             centerOn(at, zoom: TileSources.forestOfDeanZoom)
         } else {
-            Navigator.shared.showMap()
+            revealMap()
         }
         AppModel.shared.toast("\(s.name.replacingOccurrences(of: TileSources.oldMapPrefix, with: "")) over today's map. " +
                               "Drag the slider under Map layers → Old maps to fade it.")

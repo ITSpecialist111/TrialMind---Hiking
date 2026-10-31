@@ -151,7 +151,7 @@ final class RoutePlanner: ObservableObject {
 
     private func begin(_ at: LatLon?) {
         start(at)
-        Navigator.shared.showMap()
+        RouteMap.revealMap()
     }
 
     func askToClose() {
