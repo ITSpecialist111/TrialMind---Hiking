@@ -43,6 +43,14 @@ final class MapController: ObservableObject {
     @Published private(set) var mapHeading: Double = 0
     /// Why heading-up cannot turn the map right now (no usable course or compass), shown in orange on the control.
     @Published var headingUnavailable = false
+    /// The last tile-loading problem (TileLoader.lastError), shown on the map.
+    @Published private(set) var tileError: String? = nil
+    /// A note about the base map where it can't show ("Zoom in to show …", "… covers Great Britain only").
+    @Published private(set) var sourceHint: String? = nil
+
+    init() {
+        TileLoader.shared.onErrorChanged = { [weak self] message in self?.tileError = message }
+    }
 
     // MARK: Content (each change bumps `revision`, which TrailMapView syncs)
     @Published private(set) var revision = 0
@@ -141,6 +149,11 @@ final class MapController: ObservableObject {
             rect = rect.insetBy(dx: -(minWidth - rect.size.width) / 2, dy: -(minWidth - rect.size.width) / 2)
         }
         mapHeading = 0
+        if map.camera.heading != 0 {
+            let cam = map.camera.copy() as! MKMapCamera
+            cam.heading = 0
+            map.setCamera(cam, animated: false)
+        }
         map.setVisibleMapRect(rect, edgePadding: padding, animated: true)
     }
 
@@ -162,6 +175,45 @@ final class MapController: ObservableObject {
         center = c
         zoom = z
         mapHeading = h
+        updateSourceHint()
+    }
+
+    /// The base map chosen in Prefs.
+    var baseSource: TileSource {
+        TileSources.builtIns().first { $0.id == Prefs.shared.baseSourceId } ?? TileSources.builtIns()[0]
+    }
+
+    /// TileMapView's source hints: below the source's first zoom, or (OS Explorer & Landranger) outside the National Grid.
+    func updateSourceHint() {
+        let s = baseSource
+        var hint: String? = nil
+        if !s.appleMap {
+            if s.grid == .britishNationalGrid {
+                if WebMercator.metresPerPixel(center.lat, zoom) > BngTiles.resolution(s.minZoom) * 2 {
+                    hint = "Zoom in to show \(s.name)"
+                } else if let map = mapView, map.bounds.width > 0 {
+                    // Corners and edge midpoints of the uncovered map, as the grid is turned slightly against north.
+                    let area = visibleArea.width > 0 ? visibleArea : map.bounds
+                    var minE = Double.greatestFiniteMagnitude, maxE = -Double.greatestFiniteMagnitude
+                    var minN = Double.greatestFiniteMagnitude, maxN = -Double.greatestFiniteMagnitude
+                    for i in 0...2 {
+                        for j in 0...2 {
+                            let pt = CGPoint(x: area.minX + area.width * CGFloat(i) / 2, y: area.minY + area.height * CGFloat(j) / 2)
+                            let c = map.convert(pt, toCoordinateFrom: map)
+                            let g = OsGrid.project(LatLon(c.latitude, c.longitude))
+                            minE = min(minE, g.easting); maxE = max(maxE, g.easting)
+                            minN = min(minN, g.northing); maxN = max(maxN, g.northing)
+                        }
+                    }
+                    if maxE < 0 || minE > BngTiles.gbMaxE || maxN < 0 || minN > BngTiles.gbMaxN {
+                        hint = "\(s.name) covers Great Britain only"
+                    }
+                }
+            } else if Int(zoom.rounded(.down)) < s.minZoom {
+                hint = "Zoom in to show \(s.name)"
+            }
+        }
+        if sourceHint != hint { sourceHint = hint }
     }
 
     func saveCamera() {

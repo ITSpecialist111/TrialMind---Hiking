@@ -55,6 +55,8 @@ final class LocationHub: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var headingListeners: [UUID: () -> Void] = [:]
     private var foreground = false
     private(set) var recording = false
+    /// A page that shows pressure (the compass) asked for the barometer, which may prompt for Motion & Fitness access.
+    private var barometerRequested = false
     private var backgroundSession: AnyObject?
     private var baroAnchor: (pressureAlt: Double, gpsAlt: Double)?
     private var lastPressureAltitude: Double?
@@ -112,6 +114,18 @@ final class LocationHub: NSObject, ObservableObject, CLLocationManagerDelegate {
         updateSession()
     }
 
+    /// Pages that show air pressure call this: starts the barometer, asking for Motion & Fitness access if iOS hasn't yet.
+    func requestBarometer() {
+        barometerRequested = true
+        updateSession()
+    }
+
+    /// The barometer needs Motion & Fitness access, so iOS asks the first time it starts. Ask when it matters (a hike
+    /// recording, or a page showing pressure) rather than as soon as the map opens; once allowed, it also runs for the map.
+    private var barometerWanted: Bool {
+        recording || barometerRequested || CMAltimeter.authorizationStatus() == .authorized
+    }
+
     private func updateSession() {
         let wanted = (foreground || recording) && hasPermission
         if wanted {
@@ -120,7 +134,7 @@ final class LocationHub: NSObject, ObservableObject, CLLocationManagerDelegate {
             manager.startUpdatingLocation()
             if foreground && CLLocationManager.headingAvailable() { manager.startUpdatingHeading() } else { manager.stopUpdatingHeading() }
             if recording, backgroundSession == nil, #available(iOS 17.0, *) { backgroundSession = CLBackgroundActivitySession() }
-            startAltimeter()
+            if barometerWanted { startAltimeter() } else { altimeter.stopRelativeAltitudeUpdates() }
         } else {
             manager.stopUpdatingLocation()
             manager.stopUpdatingHeading()

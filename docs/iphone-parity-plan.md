@@ -10,8 +10,23 @@ the iOS 27.1 SDK and Apple's iPhone Duo documentation. Status is tracked at the 
    Apple's docs say such apps "don't extend under the status bar and camera" on iPhone Duo. Fixed in
    `ios/Package.swift` by linking with `-platform_version ios 17.0 27.1` (checked with `llvm-objdump`: `sdk 27.1`),
    plus the `DT*` Info.plist keys Xcode would add.
+   Confirmed on the device: the old build ran in a phone-sized window letterboxed in the middle of the open inner
+   display (with the system's rotate button beside it); the new build fills the inner display (951×669 pt in
+   landscape) and reports the hinge, fold and camera regions.
 2. **It was a different, minimal app**: Apple Maps, three list items and a settings form. It now uses the Android design
    system and structure, and the Android features are being ported one area at a time.
+
+## What the iPhone Duo reports (measured on the device, iOS 27.1)
+
+| | Cover display (closed) | Inner display (open) |
+|---|---|---|
+| Panel | 1398×2034 px at 3× (466×678 pt), about 5.4″ | 1878×2670 px at 3× (626×890 pt), about 7.6″ |
+| TrailMind layout | narrow: capsule standing on the vertical-bar edge | wide: rail and side pane (portrait and landscape) |
+| Landscape, open | | window 951×669 pt; status bar stands on the trailing edge (safe area right 84 pt, bottom 34 pt) |
+| Fold | | a 40 pt division region down the middle (x 455), active only when partly folded |
+
+The device's screens, logs and app launches can be driven from Windows/WSL (see
+[iphone-development.md](iphone-development.md#testing-on-iphone-duo-from-windows)), which is how these were measured.
 
 ## iPhone Duo: what the SDK provides and how TrailMind uses it
 

@@ -4,11 +4,13 @@
 #
 #   scripts/ios-xtool.sh setup            Swift 6.4 + libimobiledevice + omarchy-apple-dev toolchain (Ubuntu)
 #   XCODE_XIP=/path/Xcode_27.x.xip scripts/ios-xtool.sh setup   ...then register the iOS SDK
-#   scripts/ios-xtool.sh test             LocationText unit tests on Linux (no iOS SDK needed)
+#   scripts/ios-xtool.sh test [FILTER]    the ported core tests on Linux (no iOS SDK needed)
 #   scripts/ios-xtool.sh auth             once: sign xtool in to your Apple ID (interactive)
 #   scripts/ios-xtool.sh devices          list connected iPhones and their UDIDs
 #   scripts/ios-xtool.sh build            xtool dev build -> ~/trailmind-ios/xtool/TrailMind.app under WSL
 #   scripts/ios-xtool.sh run [--udid ID]  sign with your Apple ID, install and launch on a USB iPhone
+#   scripts/ios-xtool.sh screenshot [--udid ID] [--display inner|outer] FILE.png   capture a screen
+#   scripts/ios-xtool.sh logs [--udid ID] stream TrailMind's log (iPhone Duo display/layout lines)
 #   scripts/ios-xtool.sh pair-network     one-time USB pairing record for cable-free installs (iOS 27)
 #   scripts/ios-xtool.sh run-network IP   install + launch over Wi-Fi/Tailscale (iOS 27, after pair-network)
 #
@@ -190,7 +192,83 @@ cmd_build() {
 cmd_run() {
   need_linux; xtool_env
   local dir; dir="$(sync_ios)"
+  # Installing over a copy that is running can stall at "Installing 100%" (seen on iOS 27), so stop it first.
+  stop_app "$@"
   (cd "$dir" && "$OAD_DIR/device-run.sh" "$@")
+}
+
+# --- iPhone checks from Linux (pymobiledevice3; iOS 17+ needs the developer disk image, mounted on demand) ---
+PMD3="$HOME/pymobile3-venv/bin/pymobiledevice3"
+BUNDLE_SUFFIX="com.trailmind.ios.beta"
+
+# The UDID after a --udid argument, if any.
+udid_arg() {
+  local prev=""
+  for a in "$@"; do [[ "$prev" == --udid ]] && { echo "$a"; return; }; prev="$a"; done
+}
+
+# The installed bundle id (xtool prefixes it with XTL-<team>.), or nothing.
+installed_bundle() {
+  local udid="$1" args=()
+  [[ -n "$udid" ]] && args=(--udid "$udid")
+  "$PMD3" apps list "${args[@]}" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    apps = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+print(next((k for k in apps if k.endswith(sys.argv[1])), ""))' "$BUNDLE_SUFFIX"
+}
+
+stop_app() {
+  [[ -x "$PMD3" ]] || return 0
+  local udid bid args=()
+  udid="$(udid_arg "$@")"
+  [[ -n "$udid" ]] && args=(--udid "$udid")
+  bid="$(installed_bundle "$udid" || true)"
+  [[ -n "$bid" ]] || return 0
+  "$PMD3" mounter auto-mount "${args[@]}" >/dev/null 2>&1 || true
+  "$PMD3" developer dvt pkill --bundle "$bid" "${args[@]}" >/dev/null 2>&1 || true
+}
+
+# screenshot [--udid ID] [--display inner|outer|UNIQUE_ID] FILE.png
+# iPhone Duo has two displays; the default capture is the cover display, which is black while the phone is open.
+cmd_screenshot() {
+  need_linux
+  [[ -x "$PMD3" ]] || die "pymobiledevice3 not found; run setup first"
+  local udid="" display="" out=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --udid) udid="$2"; shift 2 ;;
+      --display) display="$2"; shift 2 ;;
+      *) out="$1"; shift ;;
+    esac
+  done
+  [[ -n "$out" ]] || die "usage: $0 screenshot [--udid ID] [--display inner|outer|ID] FILE.png"
+  [[ -n "$udid" ]] && export PYMOBILEDEVICE3_UDID="$udid"
+  local args=(); [[ -n "$udid" ]] && args=(--udid "$udid")
+  "$PMD3" mounter auto-mount "${args[@]}" >/dev/null 2>&1 || true
+  if [[ "$display" == inner || "$display" == outer ]]; then
+    # The cover display is the primary one; the inner display is the other integrated panel.
+    display="$("$PMD3" developer core-device get-display-info 2>/dev/null | python3 -c '
+import json, sys
+want_primary = sys.argv[1] == "outer"
+for d in json.load(sys.stdin)["displays"]:
+    if d.get("uniqueId") and "integrated" in d.get("type", {}) and bool(d.get("primary")) == want_primary:
+        print(d["uniqueId"]); break' "$display")"
+    [[ -n "$display" ]] || die "no such display on this phone"
+  fi
+  local extra=(); [[ -n "$display" ]] && extra=(--display-unique-id "$display")
+  "$PMD3" developer core-device screen-capture screenshot "${extra[@]}" "$out"
+}
+
+# logs [--udid ID]: stream TrailMind's own log lines (Ctrl-C to stop). "display"/"layout" lines show the iPhone Duo pose.
+cmd_logs() {
+  need_linux
+  command -v idevicesyslog >/dev/null || die "idevicesyslog not found; run setup first"
+  local udid; udid="$(udid_arg "$@")"
+  local args=(); [[ -n "$udid" ]] && args=(-u "$udid")
+  idevicesyslog "${args[@]}" -p TrailMind --no-colors
 }
 
 cmd_pair_network() {
@@ -216,6 +294,8 @@ case "${1:-}" in
   devices) shift; cmd_devices "$@" ;;
   build) shift; cmd_build "$@" ;;
   run) shift; cmd_run "$@" ;;
+  screenshot) shift; cmd_screenshot "$@" ;;
+  logs) shift; cmd_logs "$@" ;;
   pair-network) shift; cmd_pair_network "$@" ;;
   run-network) shift; cmd_run_network "$@" ;;
   *) sed -n '2,15p' "$0"; exit 2 ;;

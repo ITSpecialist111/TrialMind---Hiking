@@ -1,10 +1,20 @@
-import SwiftUI
+import Foundation
 
 /// Where everything goes for the current window, pose and setting. The Android rules (MainActivity.buildLayout) decide
 /// narrow versus wide; iPhone Duo adds the fold (book and tabletop) and vertical bars on the side.
+/// Pure geometry (Foundation only) so the layout rules are tested on Linux; `Duo/ShellGeometry+SwiftUI.swift` adapts it.
 struct ShellGeometry: Equatable {
     enum Mode: Equatable { case compact, wide, foldBook, foldTable }
     enum NavPlacement: Equatable { case bottom, leading, trailing }
+    /// The side where the system stands bars vertically (iPhone Duo's `verticalBarEdge` trait).
+    enum BarEdge: Equatable { case leading, trailing }
+
+    struct Insets: Equatable {
+        var top: CGFloat = 0
+        var leading: CGFloat = 0
+        var bottom: CGFloat = 0
+        var trailing: CGFloat = 0
+    }
 
     static let wideMinWidth: CGFloat = 600     // MainActivity.WIDE_DP
     static let railWidth: CGFloat = 76         // MainActivity.RAIL_DP
@@ -13,7 +23,7 @@ struct ShellGeometry: Equatable {
 
     var mode: Mode
     var size: CGSize
-    var safe: EdgeInsets
+    var safe: Insets
     var fold: CGRect?
     var nav: NavPlacement
     /// Rail and pane side in the wide and book layouts.
@@ -27,8 +37,8 @@ struct ShellGeometry: Equatable {
     /// The uncovered part of the map, in window coordinates: overlays and centring use this.
     var mapArea: CGRect = .zero
 
-    static func resolve(size: CGSize, safe: EdgeInsets, fold: CGRect?, verticalBarEdge: HorizontalEdge?,
-                        occlusions: [CGRect], fullScreen: Bool) -> ShellGeometry {
+    static func resolve(size: CGSize, safe: Insets, fold: CGRect?, verticalBarEdge: BarEdge?,
+                        occlusions: [CGRect], fullScreen: Bool, compactTabCount: Int) -> ShellGeometry {
         let wide = size.width >= wideMinWidth
         var g = ShellGeometry(mode: .compact, size: size, safe: safe, fold: nil, nav: .bottom, menuOnLeading: verticalBarEdge != .trailing,
                               fullScreen: false, compactTabs: !wide || size.height < 600)
@@ -93,7 +103,7 @@ struct ShellGeometry: Equatable {
         // Narrow: a floating capsule, at the bottom or (iPhone Duo's outer display) standing on the vertical-bar edge.
         if let edge = verticalBarEdge {
             g.nav = edge == .leading ? .leading : .trailing
-            let count = CGFloat(Tab.compactTabs.count)
+            let count = CGFloat(compactTabCount)
             let capsuleH = min(usable.height - 16, 48 * count + 12)
             var y = usable.midY - capsuleH / 2
             let x = edge == .leading ? usable.minX + 6 : usable.maxX - 6 - capsuleThickness
@@ -117,12 +127,12 @@ struct ShellGeometry: Equatable {
     }
 
     /// What pages must keep clear of so their content scrolls under the floating capsule.
-    var pageInsets: EdgeInsets {
+    var pageInsets: Insets {
         switch (mode, nav) {
-        case (.compact, .bottom): return EdgeInsets(top: 0, leading: 0, bottom: ShellGeometry.capsuleThickness + ShellGeometry.gap + 4, trailing: 0)
-        case (.compact, .leading): return EdgeInsets(top: 0, leading: ShellGeometry.capsuleThickness + ShellGeometry.gap, bottom: 0, trailing: 0)
-        case (.compact, .trailing): return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: ShellGeometry.capsuleThickness + ShellGeometry.gap)
-        default: return EdgeInsets()
+        case (.compact, .bottom): return Insets(bottom: ShellGeometry.capsuleThickness + ShellGeometry.gap + 4)
+        case (.compact, .leading): return Insets(leading: ShellGeometry.capsuleThickness + ShellGeometry.gap)
+        case (.compact, .trailing): return Insets(trailing: ShellGeometry.capsuleThickness + ShellGeometry.gap)
+        default: return Insets()
         }
     }
 
