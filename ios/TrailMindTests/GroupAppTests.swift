@@ -303,4 +303,14 @@ final class GroupAppTests: XCTestCase {
         XCTAssertEqual("Tap to see how far away they are. Keep TrailMind open on screen until they reach you.", notice.text)
         XCTAssertEqual("Hiker 3F2A is finding you with UWB", GroupText.beingFound(GroupText.name(nil, memberId: 0x3F2A)).title)
     }
+
+    func testMarkerLabelsShowTheAgeOnceAPositionIsNotFresh() throws {
+        let pos = try PositionFrame.of(
+            memberId: 7, sequence: 1, originTimeS: T, lat: 54.45, lon: -3.0, altitudeM: nil, accuracyM: 5, batteryPercent: 50, status: .ok
+        )
+        XCTAssertEqual("Sam", GroupText.markerLabel("Sam", position: pos, nowS: T + 120))
+        XCTAssertEqual("Sam · 2 min", GroupText.markerLabel("Sam", position: pos, nowS: T + 121))
+        XCTAssertEqual("Sam · 15 min", GroupText.markerLabel("Sam", position: pos, nowS: T + 900))
+        XCTAssertEqual("Sam · 1 h 0 min", GroupText.markerLabel("Sam", position: pos, nowS: T + 3_600))
+    }
 }

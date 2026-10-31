@@ -206,6 +206,12 @@ enum GroupText {
     static func beingFound(_ name: String) -> (title: String, text: String) {
         ("\(name) is finding you with UWB", "Tap to see how far away they are. Keep TrailMind open on screen until they reach you.")
     }
+
+    /// The label beside a member's map marker (MapScreen.updateHikers): the name, with the position's age once it is
+    /// no longer fresh.
+    static func markerLabel(_ name: String, position: PositionFrame, nowS: Int64) -> String {
+        PeerTable.freshness(position, nowS: nowS) == .fresh ? name : "\(name) · \(age(nowS - position.originTimeS))"
+    }
 }
 
 /// `trailmind://group/join?code=…&name=…` invites (GroupPage.inviteLink and inviteText, joinGroupFromLink).
