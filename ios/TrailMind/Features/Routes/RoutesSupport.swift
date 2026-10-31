@@ -130,13 +130,17 @@ final class RouteHTTP: NSObject, URLSessionDataDelegate {
         return q
     }()
     private var jobs: [Int: Job] = [:]
-    private lazy var session: URLSession = {
+    /// Made once, up front: requests start on several threads at once, and task ids are only unique within a session.
+    private var session: URLSession!
+
+    override init() {
+        super.init()
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.httpMaximumConnectionsPerHost = 4
-        return URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
-    }()
+        session = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
+    }
 
     /// Starts a request. Replies over `maxBytes` fail with `tooLarge` as the message, or are cut short and marked
     /// truncated when `tooLarge` is nil. The completion runs on a background queue.

@@ -16,6 +16,12 @@ struct RouteDetailPage: View {
         _model = StateObject(wrappedValue: RouteDetailModel(routeId: routeId))
     }
 
+    /// The page for a model kept by its page route, so the page comes back as it was left.
+    init(model: RouteDetailModel) {
+        routeId = model.routeId
+        _model = StateObject(wrappedValue: model)
+    }
+
     var body: some View {
         Group {
             if let d = model.data {
@@ -89,7 +95,7 @@ struct RouteDetailPage: View {
                 RouteMap.showOldMap(box: BoundingBox.of(line), at: nil)
             }
             RouteFacilitiesCard(model: model, route: d)
-            startCard(d)
+            if !d.points.isEmpty { startCard(d) }
             if !d.waypoints.isEmpty {
                 SectionLabel("Waypoints")
                 ForEach(Array(d.waypoints.prefix(100).enumerated()), id: \.offset) { _, w in

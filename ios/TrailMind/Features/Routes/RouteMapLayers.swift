@@ -121,7 +121,7 @@ extension RouteMap {
             AppModel.shared.choose("MapTiler key needed",
                                    "\(s.note)\n\nThe old maps are served by MapTiler Cloud. Create a free account, copy a key from " +
                                     "your account page, and paste it in Settings.",
-                                   options: [("Add key", { Navigator.shared.open(.settings) })])
+                                   options: [("Add key", { RoutesFeature.openSettings() })])
             return
         }
         prefs.historicOverlayId = s.id

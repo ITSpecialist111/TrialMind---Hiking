@@ -4,33 +4,37 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// "You are here" on a followed route's profile, kept apart from the page so a new fix redraws only the chart.
+/// "You are here" on a followed route's profile: where route guidance places you along it (Android's
+/// `app.nav.fix?.alongM`), kept apart from the page so a new fix redraws only the chart. Guidance has followed you since
+/// you set off, so on a loop or an out-and-back route it knows which leg you are on.
 final class RouteCursor: ObservableObject {
     @Published private(set) var alongM: Double? = nil
-    private var guide: RouteGuide?
-    private var listener: UUID?
+    private var routeId: Int64?
+    private var cancellable: AnyCancellable?
 
-    /// Starts or stops following GPS fixes along `points`.
-    func track(_ points: [TrackPoint]?) {
-        if let points, points.count >= 2 {
-            if guide == nil { guide = try? RouteGuide(points) }
-            if listener == nil { listener = LocationHub.shared.addListener { [weak self] fix in self?.onFix(fix) } }
-            if let fix = LocationHub.shared.latest { onFix(fix) }
-        } else {
-            stop()
+    /// Shows where you are along `routeId` while guidance follows it; nil stops.
+    func track(_ routeId: Int64?) {
+        self.routeId = routeId
+        guard routeId != nil else { return stop() }
+        if cancellable == nil {
+            cancellable = Guidance.shared.$revision.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.update() }
         }
+        update()
     }
 
     func stop() {
-        if let listener { LocationHub.shared.removeListener(listener) }
-        listener = nil
-        guide = nil
+        cancellable = nil
+        routeId = nil
         if alongM != nil { alongM = nil }
     }
 
-    private func onFix(_ fix: Fix) {
-        guard let guide else { return }
-        let along = guide.locate(fix.latLon, timeMs: fix.timeMs).alongM
+    private func update() {
+        let core = Guidance.shared.core
+        let along = routeId != nil && core.active?.id == routeId ? core.fix?.alongM : nil
+        guard let along else {
+            if alongM != nil { alongM = nil }
+            return
+        }
         if alongM.map({ abs($0 - along) >= 1 }) ?? true { alongM = along }
     }
 }
@@ -116,6 +120,8 @@ final class RouteDetailModel: ObservableObject {
                 }
             }
         } else if loaded {
+            // Kept while another page was on top: catch up with any change to the route meanwhile.
+            reload()
             updateReadiness()
             loadLidar()
             updateCursor()
@@ -161,7 +167,7 @@ final class RouteDetailModel: ObservableObject {
 
     /// The profile's cursor follows you while this route is the one followed.
     func updateCursor() {
-        cursor.track(Prefs.shared.activeRouteId == routeId ? data?.points : nil)
+        cursor.track(Prefs.shared.activeRouteId == routeId && data != nil ? routeId : nil)
     }
 
     // MARK: Facilities

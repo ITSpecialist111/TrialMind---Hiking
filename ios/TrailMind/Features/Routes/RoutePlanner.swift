@@ -122,7 +122,8 @@ final class RoutePlanner: ObservableObject {
     private static let doubleTapMs = 300
     private static let doubleTapSlopPt = 100.0
 
-    func start() {
+    /// Runs once at launch (RoutesFeature.start).
+    func startService() {
         guard !started else { return }
         started = true
         // Leaving the map for another destination stops waiting for paths (MainActivity.showTab).

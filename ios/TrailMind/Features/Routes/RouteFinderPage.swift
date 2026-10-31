@@ -43,9 +43,18 @@ enum WaymarkedTrailsClient {
 /// Waymarked routes from OpenStreetMap, listed near you or found by name, added in one tap (Pages.kt RouteFinderPage).
 struct RouteFinderPage: View {
     @Environment(\.palette) private var p
-    @StateObject private var model = RouteFinderModel()
+    @StateObject private var model: RouteFinderModel
     @ObservedObject private var prefs = Prefs.shared
     @FocusState private var typing: Bool
+
+    init() {
+        _model = StateObject(wrappedValue: RouteFinderModel())
+    }
+
+    /// The page for a model kept by its page route, so its results are still there on coming back to it.
+    init(model: RouteFinderModel) {
+        _model = StateObject(wrappedValue: model)
+    }
 
     var body: some View {
         PageScaffold("Find routes") {

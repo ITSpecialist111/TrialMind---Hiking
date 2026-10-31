@@ -13,7 +13,7 @@ enum RoutesFeature {
         LidarService.shared.start()
         RouteFollow.shared.start()
         TerrainOverlays.shared.start()
-        RoutePlanner.shared.start()
+        RoutePlanner.shared.startService()
         RouteImport.shared.start()
         FeatureHooks.startPlan = { at in RoutePlanner.shared.startPlan(at) }
         FeatureHooks.groundHeight = { at, done in RouteMap.groundHeight(at, done) }
@@ -23,12 +23,17 @@ enum RoutesFeature {
         AppEvents.shared.urlHandlers.append { url in RouteImport.shared.handle(url) }
     }
 
+    /// A route's page. Its model lives as long as the page is in the stack, so coming back to it (from Settings, or a
+    /// page opened from it) finds it as it was left, as Android keeps its pages.
     static func detailRoute(_ id: Int64) -> PageRoute {
-        PageRoute("route-detail-\(id)") { RouteDetailPage(routeId: id) }
+        let model = RouteDetailModel(routeId: id)
+        return PageRoute("route-detail-\(id)") { RouteDetailPage(model: model) }
     }
 
+    /// The route finder, keeping its results while it is in the stack (back from a route it added).
     static func finderRoute() -> PageRoute {
-        PageRoute("route-finder") { RouteFinderPage() }
+        let model = RouteFinderModel()
+        return PageRoute("route-finder") { RouteFinderPage(model: model) }
     }
 
     /// Shows a route's page on the Routes tab (after importing, saving a plan, or from another feature).
