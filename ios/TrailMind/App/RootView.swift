@@ -11,6 +11,9 @@ struct RootView: View {
     @ObservedObject private var location = LocationHub.shared
     @Environment(\.palette) private var p
     @Environment(\.scenePhase) private var scenePhase
+    /// Layout changes animate only once the window has settled, so launch doesn't slide the menu across as the
+    /// display's details (vertical bars, fold) arrive.
+    @State private var animateLayout = false
 
     var body: some View {
         // The outer reader keeps to the safe area, so it reports the insets (status bar, home indicator, and iPhone
@@ -39,7 +42,10 @@ struct RootView: View {
             if phase != .active { map.saveCamera() }
             if phase == .active { TileLoader.shared.purgeExpiredPremium() }
         }
-        .onAppear { location.setForeground(true) }
+        .onAppear {
+            location.setForeground(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { animateLayout = true }
+        }
         .fullScreenCover(isPresented: Binding(get: { !prefs.onboardingAccepted }, set: { _ in })) {
             PaletteProvider { OnboardingPage() }
         }
@@ -89,7 +95,7 @@ struct RootView: View {
             }
             ToastHost(app: app, bottom: g.usesCapsule ? g.size.height - g.capsuleFrame.minY + 12 : g.safe.bottom + 24)
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: g)
+        .animation(animateLayout ? .spring(response: 0.35, dampingFraction: 0.9) : nil, value: g)
     }
 
     // MARK: Pages

@@ -14,6 +14,8 @@ final class DuoState: ObservableObject {
     @Published var allDivisions: [CGRect] = []
     /// Camera areas that cover content (`.occlusion` reserved regions), in window coordinates.
     @Published var occlusions: [CGRect] = []
+    /// Every camera region, covering content or not (the inner camera only covers it while in use), for diagnostics.
+    @Published var allOcclusions: [CGRect] = []
     /// Where the system places vertical bars (status bar, toolbars, tab bars), or nil where it never does.
     @Published var verticalBarEdge: HorizontalEdge? = nil
     @Published var hinge: Hinge = .unavailable
@@ -21,6 +23,8 @@ final class DuoState: ObservableObject {
     @Published var hingeAngle: Double? = nil
     @Published var windowSize: CGSize = .zero
     @Published var safeArea: UIEdgeInsets = .zero
+    /// Where the status bar is (a column on the side where iPhone Duo stands its bars vertically), in window coordinates.
+    @Published var statusBar: CGRect = .zero
     @Published var sizeClass: String = ""
 
     /// The iOS 27.1 foldable APIs exist on this system.
@@ -32,10 +36,11 @@ final class DuoState: ObservableObject {
     /// The fold splits the window left and right (book pose) rather than top and bottom (tabletop).
     var foldIsVertical: Bool { fold.map { $0.height >= $0.width } ?? false }
 
-    func update(fold: CGRect?, allDivisions: [CGRect], occlusions: [CGRect]) {
+    func update(fold: CGRect?, allDivisions: [CGRect], occlusions: [CGRect], allOcclusions: [CGRect]) {
         if self.fold != fold { self.fold = fold }
         if self.allDivisions != allDivisions { self.allDivisions = allDivisions }
         if self.occlusions != occlusions { self.occlusions = occlusions }
+        if self.allOcclusions != allOcclusions { self.allOcclusions = allOcclusions }
     }
 }
 
@@ -56,6 +61,8 @@ final class DuoProbeView: UIView {
         if #available(iOS 27.1, *) {
             let interaction = UIHingeInteraction { [weak self] _, update in
                 guard let self else { return }
+                // A probe that SwiftUI is removing reports a nil hinge as it leaves; only the one on screen speaks.
+                guard self.window != nil else { return }
                 let state = DuoState.shared
                 if let hinge = update.hinge {
                     let status: DuoState.Hinge
@@ -118,6 +125,8 @@ final class DuoProbeView: UIView {
         guard let window else { return }
         if state.windowSize != window.bounds.size { state.windowSize = window.bounds.size }
         if state.safeArea != window.safeAreaInsets { state.safeArea = window.safeAreaInsets }
+        let statusBar = window.windowScene?.statusBarManager?.statusBarFrame ?? .zero
+        if state.statusBar != statusBar { state.statusBar = statusBar }
         let classes = "w:\(traitCollection.horizontalSizeClass == .regular ? "regular" : "compact") h:\(traitCollection.verticalSizeClass == .regular ? "regular" : "compact")"
         if state.sizeClass != classes { state.sizeClass = classes }
         if let scene = window.windowScene { LocationHub.shared.setInterfaceOrientation(scene.effectiveGeometry.interfaceOrientation) }
@@ -130,11 +139,12 @@ final class DuoProbeView: UIView {
         }
         if state.verticalBarEdge != edge { state.verticalBarEdge = edge }
         let divisions = reservedRegions(kind: .division, options: .includeInactive)
-        let occlusions = reservedRegions(kind: .occlusion)
+        let occlusions = reservedRegions(kind: .occlusion, options: .includeInactive)
         func toWindow(_ r: CGRect) -> CGRect { convert(r, to: window) }
         state.update(fold: divisions.first(where: { $0.isActive }).map { toWindow($0.frame) },
                      allDivisions: divisions.map { toWindow($0.frame) },
-                     occlusions: occlusions.filter { $0.isActive }.map { toWindow($0.frame) })
+                     occlusions: occlusions.filter { $0.isActive }.map { toWindow($0.frame) },
+                     allOcclusions: occlusions.map { toWindow($0.frame) })
         DuoLog.state(state)
     }
 }
@@ -148,11 +158,13 @@ extension DuoState {
             ("Window", "\(Int(windowSize.width))×\(Int(windowSize.height)) pt"),
             ("Size classes", sizeClass),
             ("Safe area", "top \(Int(safeArea.top)) left \(Int(safeArea.left)) bottom \(Int(safeArea.bottom)) right \(Int(safeArea.right))"),
+            ("Status bar", statusBar.isEmpty ? "Hidden" : r(statusBar)),
             ("Vertical bars", verticalBarEdge.map { $0 == .leading ? "Leading edge" : "Trailing edge" } ?? "Not used here"),
             ("Hinge", hinge.rawValue + (hingeAngle.map { String(format: " · %.0f°", $0) } ?? "")),
             ("Fold", fold.map { r($0) + (foldIsVertical ? " (book)" : " (tabletop)") } ?? "None active"),
             ("Fold regions", allDivisions.isEmpty ? "None" : allDivisions.map(r).joined(separator: "; ")),
-            ("Camera regions", occlusions.isEmpty ? "None" : occlusions.map(r).joined(separator: "; ")),
+            ("Camera regions", allOcclusions.isEmpty ? "None"
+                : allOcclusions.map { r($0) + (occlusions.contains($0) ? " (covering)" : "") }.joined(separator: "; ")),
         ]
     }
 }
