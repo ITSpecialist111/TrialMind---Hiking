@@ -31,6 +31,13 @@ struct MapScreen: View {
                 .onChange(of: area) { _, a in map.visibleArea = a }
 
             if showControls {
+                // The middle of the uncovered map: why the chosen map isn't showing (TileMapView.drawHint).
+                if let hint = hintText {
+                    MapHint(text: hint, opensSettings: keyMissing)
+                        .frame(maxWidth: max(0, area.width * 0.84))
+                        .position(x: area.midX, y: area.midY)
+                }
+
                 // Top: status chips, then cards.
                 VStack(alignment: .leading, spacing: 8) {
                     statusChips
@@ -70,6 +77,19 @@ struct MapScreen: View {
 
     private var currentSource: TileSource {
         TileSources.builtIns().first { $0.id == prefs.baseSourceId } ?? TileSources.builtIns()[0]
+    }
+
+    private var keyMissing: Bool {
+        let s = currentSource
+        return !s.appleMap && s.requiresKey && TileLoader.shared.apiKey(for: s) == nil
+    }
+
+    /// MapScreen.updateHint: a missing key first, then the last tile problem, then the source's own hint.
+    private var hintText: String? {
+        let s = currentSource
+        if s.appleMap { return nil }
+        if keyMissing { return "Add your free \(s.keyKind.label) in Settings to show this map" }
+        return map.tileError ?? map.sourceHint
     }
 
     @ViewBuilder private var statusChips: some View {
@@ -154,6 +174,30 @@ struct MapScreen: View {
             lines.append(old.attribution + "\n" + TileSources.nlsMapsURL)
         }
         return lines.joined(separator: "\n\n")
+    }
+}
+
+/// A note in the middle of the uncovered map (TileMapView.drawHint); with a missing key it opens Settings.
+private struct MapHint: View {
+    @Environment(\.palette) private var p
+    let text: String
+    let opensSettings: Bool
+
+    var body: some View {
+        let label = Text(text)
+            .tm(.body, p)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .glassBackground(p, radius: 12, shadow: 2)
+        if opensSettings {
+            Button { Navigator.shared.open(.settings) } label: { label }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens Settings")
+        } else {
+            label.allowsHitTesting(false)
+        }
     }
 }
 

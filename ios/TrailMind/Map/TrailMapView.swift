@@ -1,6 +1,18 @@
 import MapKit
 import SwiftUI
 
+/// A transparent tile: what a layer shows where it has nothing (outside its coverage, no signal yet), so Apple's map
+/// shows through. Answering with no data instead makes MapKit ask again on every frame, which keeps the map redrawing
+/// (about 60 frames a second, measured on an iPhone 12) and drains the battery.
+enum EmptyTile {
+    static let data: Data = {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256), format: format).image { _ in }.pngData() ?? Data()
+    }()
+}
+
 /// A Web Mercator raster source drawn through TileLoader (packs, cache, network, enlargement).
 final class SourceTileOverlay: MKTileOverlay {
     let source: TileSource
@@ -15,7 +27,11 @@ final class SourceTileOverlay: MKTileOverlay {
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
-        TileLoader.shared.load(source, TileKey(path.z, path.x, path.y)) { data in result(data, nil) }
+        let id = source.id
+        TileLoader.shared.load(source, TileKey(path.z, path.x, path.y)) { data in
+            DuoLog.tiles.debug("overlay \(id, privacy: .public) \(path.z)/\(path.x)/\(path.y) -> \(data?.count ?? -1) bytes")
+            result(data ?? EmptyTile.data, nil)
+        }
     }
 }
 
@@ -23,20 +39,15 @@ final class SourceTileOverlay: MKTileOverlay {
 /// corners (TileMapView's BNG drawing), so routes and the GPS dot line up with the paper-map style.
 final class BngTileOverlay: MKTileOverlay {
     let source: TileSource
-    private static let originE = -238_375.0
-    private static let originN = 1_376_256.0
-    private static let gbMaxE = 700_000.0
-    private static let gbMaxN = 1_300_000.0
-    private static func resolution(_ z: Int) -> Double { 896.0 / Double(1 << z) }
-    private static func span(_ z: Int) -> Double { 256 * resolution(z) }
+    private static func span(_ z: Int) -> Double { Double(BngTiles.tileSize) * BngTiles.resolution(z) }
 
-    init(source: TileSource) {
+    init(source: TileSource, replacesMap: Bool) {
         self.source = source
         super.init(urlTemplate: nil)
         minimumZ = 5
         maximumZ = 21
         tileSize = CGSize(width: 256, height: 256)
-        canReplaceMapContent = true
+        canReplaceMapContent = replacesMap
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
@@ -48,16 +59,16 @@ final class BngTileOverlay: MKTileOverlay {
         let refs = corners.map { OsGrid.project($0) }
         let minE = refs.map(\.easting).min()!, maxE = refs.map(\.easting).max()!
         let minN = refs.map(\.northing).min()!, maxN = refs.map(\.northing).max()!
-        if maxE < 0 || minE > Self.gbMaxE || maxN < 0 || minN > Self.gbMaxN { return result(nil, nil) }
+        if maxE < 0 || minE > BngTiles.gbMaxE || maxN < 0 || minN > BngTiles.gbMaxN { return result(EmptyTile.data, nil) }
         let midLat = (corners[0].lat + corners[3].lat) / 2
         let mpp = WebMercator.metresPerPixel(midLat, z)
-        var bz = Int(floor(log(896.0 / mpp) / log(2.0) + 1e-9)).clamped(source.minZoom, source.maxZoom)
+        var bz = BngTiles.zoomFor(mpp, source.minZoom, source.maxZoom)
         if source.isPremium(bz), TileLoader.shared.premiumDenied(source), let from = source.premiumFromZoom { bz = from - 1 }
-        let col0 = Int(floor((max(minE, 0) - Self.originE) / Self.span(bz)))
-        let col1 = Int(floor((min(maxE, Self.gbMaxE) - Self.originE) / Self.span(bz)))
-        let row0 = Int(floor((Self.originN - min(maxN, Self.gbMaxN)) / Self.span(bz)))
-        let row1 = Int(floor((Self.originN - max(minN, 0)) / Self.span(bz)))
-        guard col1 >= col0, row1 >= row0, (col1 - col0 + 1) * (row1 - row0 + 1) <= 16 else { return result(nil, nil) }
+        let col0 = BngTiles.column(max(minE, 0), bz)
+        let col1 = BngTiles.column(min(maxE, BngTiles.gbMaxE), bz)
+        let row0 = BngTiles.row(min(maxN, BngTiles.gbMaxN), bz)
+        let row1 = BngTiles.row(max(minN, 0), bz)
+        guard col1 >= col0, row1 >= row0, (col1 - col0 + 1) * (row1 - row0 + 1) <= 16 else { return result(EmptyTile.data, nil) }
         let group = DispatchGroup()
         let lock = NSLock()
         var images: [(col: Int, row: Int, image: CGImage)] = []
@@ -71,7 +82,7 @@ final class BngTileOverlay: MKTileOverlay {
             }
         }
         group.notify(queue: .global(qos: .userInitiated)) {
-            guard !images.isEmpty else { return result(nil, nil) }
+            guard !images.isEmpty else { return result(EmptyTile.data, nil) }
             func pixel(_ e: Double, _ n: Double) -> CGPoint {
                 let p = OsGrid.toWgs84(e, n)
                 return CGPoint(x: WebMercator.lonToX(p.lon, z) - x0, y: WebMercator.latToY(p.lat, z) - y0)
@@ -82,8 +93,8 @@ final class BngTileOverlay: MKTileOverlay {
                 let cg = ctx.cgContext
                 cg.interpolationQuality = .medium
                 for tile in images {
-                    let e0 = Self.originE + Double(tile.col) * Self.span(bz)
-                    let n0 = Self.originN - Double(tile.row) * Self.span(bz)
+                    let e0 = BngTiles.easting(tile.col, bz)
+                    let n0 = BngTiles.northing(tile.row, bz)
                     let tl = pixel(e0, n0)
                     let tr = pixel(e0 + Self.span(bz), n0)
                     let bl = pixel(e0, n0 - Self.span(bz))
@@ -97,7 +108,7 @@ final class BngTileOverlay: MKTileOverlay {
                     cg.restoreGState()
                 }
             }
-            result(image.pngData(), nil)
+            result(image.pngData() ?? EmptyTile.data, nil)
         }
     }
 }
@@ -160,6 +171,7 @@ struct TrailMapView: UIViewRepresentable {
         pan.delegate = context.coordinator
         map.addGestureRecognizer(pan)
         controller.mapView = map
+        context.coordinator.attach(map)
         context.coordinator.syncBase(map, force: true)
         context.coordinator.syncContent(map)
         return map
@@ -183,24 +195,58 @@ struct TrailMapView: UIViewRepresentable {
         private var featureAlpha: [ObjectIdentifier: CGFloat] = [:]
         private var lineOverlays: [MKOverlay] = []
         private var annotations: [MKAnnotation] = []
+        private weak var mapView: MKMapView?
+        private var reloadWhenActive = false
 
-        init(_ parent: TrailMapView) { self.parent = parent }
+        init(_ parent: TrailMapView) {
+            self.parent = parent
+            super.init()
+            TileLoader.shared.onRetryDue = { [weak self] in self?.reloadTiles() }
+            NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.reloadWhenActive else { return }
+                self.reloadTiles()
+            }
+        }
+
+        func attach(_ map: MKMapView) { mapView = map }
+
+        /// TileLoader's retry: layers ask again for tiles that failed for a passing reason (MapKit keeps what it was given).
+        func reloadTiles() {
+            guard let map = mapView else { return }
+            guard UIApplication.shared.applicationState == .active else { reloadWhenActive = true; return }
+            reloadWhenActive = false
+            for overlay in [baseOverlay, historicOverlay].compactMap({ $0 }) + Array(featureOverlays.values) {
+                (map.renderer(for: overlay) as? MKTileOverlayRenderer)?.reloadData()
+            }
+        }
 
         // MARK: Layers
 
         func syncBase(_ map: MKMapView, force: Bool) {
             let prefs = parent.prefs
             let source = TileSources.builtIns().first { $0.id == prefs.baseSourceId } ?? TileSources.builtIns()[0]
-            let key = "\(source.id)|\(prefs.osApiKey.isEmpty)|\(prefs.offlineOnly)"
+            let hasKey = !source.requiresKey || TileLoader.shared.apiKey(for: source) != nil
+            let key = "\(source.id)|\(hasKey)|\(prefs.offlineOnly)"
             if force || key != baseKey {
                 baseKey = key
                 if let old = baseOverlay { map.removeOverlay(old) }
                 baseOverlay = nil
-                if !source.appleMap {
+                // Without its key a layer has nothing to draw (the map says so), and MapKit would keep asking for tiles.
+                if !source.appleMap && hasKey {
+                    // Apple's muted map stays underneath, so places a layer doesn't cover (outside Great Britain for
+                    // OS maps) and tiles still on their way show a map rather than an empty grid. Offline-only mode
+                    // replaces it, so MapKit fetches nothing of its own.
+                    let replaces = prefs.offlineOnly
                     let overlay: MKTileOverlay = source.grid == .britishNationalGrid
-                        ? BngTileOverlay(source: source) : SourceTileOverlay(source: source, replacesMap: true)
+                        ? BngTileOverlay(source: source, replacesMap: replaces) : SourceTileOverlay(source: source, replacesMap: replaces)
                     map.insertOverlay(overlay, at: 0, level: .aboveLabels)
                     baseOverlay = overlay
+                }
+                let controller = parent.controller
+                DuoLog.tiles.notice("base \(source.id, privacy: .public) key=\(hasKey) offlineOnly=\(prefs.offlineOnly) overlay=\(self.baseOverlay != nil)")
+                DispatchQueue.main.async {
+                    TileLoader.shared.clearLastError()
+                    controller.updateSourceHint()
                 }
             }
             let historic = TileSources.historic().first { $0.id == prefs.historicOverlayId }

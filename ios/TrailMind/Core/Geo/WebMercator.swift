@@ -57,8 +57,8 @@ enum WebMercator {
 
     static func tileFor(_ p: LatLon, _ z: Int) -> TileKey {
         let maxIndex = (1 << z) - 1
-        let x = Int(floor(lonToX(p.lon, Double(z)) / Double(tileSize))).clamped(0, maxIndex)
-        let y = Int(floor(latToY(p.lat, Double(z)) / Double(tileSize))).clamped(0, maxIndex)
+        let x = kTruncate(floor(lonToX(p.lon, Double(z)) / Double(tileSize))).clamped(0, maxIndex)
+        let y = kTruncate(floor(latToY(p.lat, Double(z)) / Double(tileSize))).clamped(0, maxIndex)
         return TileKey(z, x, y)
     }
 

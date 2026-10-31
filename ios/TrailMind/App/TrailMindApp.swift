@@ -33,12 +33,14 @@ final class AppEvents {
     func start() {
         guard !started else { return }
         started = true
+        #if DEBUG
+        TestLaunch.apply()
+        #endif
         TileLoader.shared.purgeExpiredPremium()
         TileLoader.shared.onProblem = { problem in
-            if problem == "premium" {
-                AppModel.shared.toast("Your OS plan doesn't include Premium detail: showing the last free zoom enlarged.")
-            } else if problem.hasPrefix("key:") {
-                AppModel.shared.toast("A map key was refused. Check it in Settings.")
+            if problem.hasPrefix("premium:") {
+                let name = problem.dropFirst("premium:".count)
+                AppModel.shared.toast("\(name): your OS plan does not include closer detail, so the map enlarges the last available overview tile.")
             }
         }
         FeatureStartup.startAll()
