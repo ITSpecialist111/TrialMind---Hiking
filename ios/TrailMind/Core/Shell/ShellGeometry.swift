@@ -45,7 +45,7 @@ struct ShellGeometry: Equatable {
         let usable = CGRect(x: safe.leading, y: safe.top, width: size.width - safe.leading - safe.trailing,
                             height: size.height - safe.top - safe.bottom)
 
-        if let fold, fold.width > 0 || fold.height > 0 {
+        if let fold, fold.width > 0 || fold.height > 0, ShellGeometry.foldFits(fold, size) {
             g.fold = fold
             if fold.height >= fold.width {
                 // Book pose: the menu fills one side of the fold, the map the other.
@@ -138,6 +138,16 @@ struct ShellGeometry: Equatable {
 
     var usesCapsule: Bool { mode == .compact || mode == .foldTable }
     var usesRail: Bool { mode == .wide || mode == .foldBook }
+
+    /// A fold crosses the whole window: top to bottom (book) or side to side (tabletop). While the phone turns, iOS can
+    /// briefly report the fold for the old orientation; that one doesn't fit the new window and is ignored.
+    static func foldFits(_ fold: CGRect, _ size: CGSize) -> Bool {
+        let tolerance: CGFloat = 2
+        if fold.height >= fold.width {
+            return abs(fold.minY) <= tolerance && abs(fold.height - size.height) <= tolerance && fold.maxX <= size.width + tolerance
+        }
+        return abs(fold.minX) <= tolerance && abs(fold.width - size.width) <= tolerance && fold.maxY <= size.height + tolerance
+    }
 
     /// How far the rail and pane slide to hide for the full-screen map: wholly past the window edge on their side,
     /// whatever sits between them and that edge (iPhone Duo's vertical status bar, a notch).

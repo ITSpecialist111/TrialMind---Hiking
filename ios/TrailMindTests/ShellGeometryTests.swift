@@ -148,6 +148,19 @@ final class ShellGeometryTests: XCTestCase {
         XCTAssertEqual(resolve(832, 900, fold: .zero).mode, .wide)
     }
 
+    /// While the phone turns, iOS briefly reports the fold for the old orientation (seen on iPhone Duo): ignore it.
+    func testFoldFromTheOldOrientationIsIgnored() {
+        // Turned to portrait while folded: the landscape (book) fold arrives with the new portrait window.
+        let turning = resolve(669, 951, safe: G.Insets(top: 82, bottom: 34), fold: CGRect(x: 455, y: 0, width: 40, height: 669))
+        XCTAssertEqual(turning.mode, .wide)
+        XCTAssertNil(turning.fold)
+        // The portrait (tabletop) fold that follows is used.
+        let table = resolve(669, 951, safe: G.Insets(top: 82, bottom: 34), fold: CGRect(x: 0, y: 455, width: 669, height: 40))
+        XCTAssertEqual(table.mode, .foldTable)
+        // And the real book fold in landscape still counts.
+        XCTAssertEqual(resolve(951, 669, fold: CGRect(x: 455, y: 0, width: 40, height: 669)).mode, .foldBook)
+    }
+
     /// The full-screen map slides the menu wholly off screen, past iPhone Duo's vertical status bar or an iPhone notch.
     func testMenuHidesCompletelyForFullScreen() {
         // iPhone Duo open in landscape: bars on the trailing edge, 84 pt status-bar column (measured on the device).
