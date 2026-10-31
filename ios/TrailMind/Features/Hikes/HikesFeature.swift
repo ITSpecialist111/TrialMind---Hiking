@@ -1,28 +1,49 @@
 import SwiftUI
 
-// Placeholders for the hikes feature (recording, history, guidance on the map).
-// The hikes feature replaces this whole file with its real implementation.
+/// Hike recording, the hike library and route guidance on the map. `start()` runs once at launch: it starts the
+/// recorder and guidance services, sets this feature's hooks, registers the auto-pause notification actions and offers
+/// to recover a hike whose recording was interrupted.
+enum HikesFeature {
+    private static var started = false
 
-struct HikesPage: View {
-    var body: some View { FeaturePlaceholder(title: "Hikes", note: "Hike recording and history are being ported.") }
-}
+    static func start() {
+        guard !started else { return }
+        started = true
+        HikeNotifications.shared.install()
+        HikeRecorder.shared.start()
+        Guidance.shared.start()
+        _ = GoToState.shared
+        FeatureHooks.startHike = { name in HikeRecorder.shared.startFromHook(name) }
+        FeatureHooks.recordingNow = {
+            let recorder = HikeRecorder.shared
+            return (recording: recorder.status != .idle, name: recorder.status != .idle ? recorder.hikeName : nil)
+        }
+        FeatureHooks.goTo = { name, position in Guidance.shared.goTo(name, position) }
+        FeatureHooks.retrace = { retraceSteps() }
+        FeatureHooks.openHikeDetail = { id in openHike(id) }
+    }
 
-/// Start hike / the recording card at the foot of the map.
-struct RecordBar: View {
-    var body: some View { EmptyView() }
-}
+    static func detailRoute(_ id: Int64) -> PageRoute {
+        PageRoute("hike-detail-\(id)") { HikeDetailPage(hikeId: id) }
+    }
 
-/// "Following" card for the active route (distance and ascent left, off-route warnings).
-struct GuidanceCard: View {
-    var body: some View { EmptyView() }
-}
+    /// Shows a hike's page on the Hikes tab (after finishing, from a notification or another feature).
+    static func openHike(_ id: Int64) {
+        Navigator.shared.open(.hikes, detailRoute(id))
+    }
 
-/// "Go to" bearing and distance card.
-struct GoToCard: View {
-    var body: some View { EmptyView() }
-}
+    /// "Retrace my steps" (SafetyPage): guidance back along the recorded track to where the hike started.
+    static func retraceSteps() {
+        if Guidance.shared.retrace() {
+            AppModel.shared.toast("Guiding you back along your track to where the hike started.")
+            Navigator.shared.showMap()
+        } else {
+            AppModel.shared.toast("Not enough track recorded yet.")
+        }
+    }
 
-/// Offer to recover an unfinished hike.
-struct RecoverCard: View {
-    var body: some View { EmptyView() }
+    /// A GPX file name from a hike's name, short enough that the extension survives AppModel's file-name limit.
+    static func gpxFileName(_ name: String) -> String {
+        String(AppModel.safeFileName(name).prefix(56)) + ".gpx"
+    }
 }

@@ -11,18 +11,30 @@ struct RootView: View {
     @ObservedObject private var location = LocationHub.shared
     @Environment(\.palette) private var p
     @Environment(\.scenePhase) private var scenePhase
+    /// Layout changes animate only once the window has settled, so launch doesn't slide the menu across as the
+    /// display's details (vertical bars, fold) arrive.
+    @State private var animateLayout = false
 
     var body: some View {
-        GeometryReader { geo in
-            let fold = foldRect(geo)
-            let occlusions = occlusionRects(geo)
-            let g = ShellGeometry.resolve(size: geo.size, safe: geo.safeAreaInsets, fold: fold,
-                                          verticalBarEdge: duo.verticalBarEdge, occlusions: occlusions, fullScreen: prefs.mapFullScreen)
-            shell(g)
-                .onAppear { nav.mapHasPane = !g.usesCapsule || g.mode == .foldTable }
-                .onChange(of: g.mode) { _, _ in nav.mapHasPane = g.mode != .compact }
+        // The outer reader keeps to the safe area, so it reports the insets (status bar, home indicator, and iPhone
+        // Duo's vertical bars); the inner one covers the whole window for the map and the fold's reserved regions.
+        GeometryReader { outer in
+            let safe = outer.safeAreaInsets
+            GeometryReader { geo in
+                let fold = foldRect(geo)
+                let occlusions = occlusionRects(geo)
+                let g = ShellGeometry.resolve(size: geo.size, safe: safe, fold: fold,
+                                              verticalBarEdge: duo.verticalBarEdge, occlusions: occlusions, fullScreen: prefs.mapFullScreen)
+                shell(g)
+                    .onAppear {
+                        nav.mapHasPane = !g.usesCapsule || g.mode == .foldTable
+                        DuoLog.layout(g)
+                    }
+                    .onChange(of: g.mode) { _, _ in nav.mapHasPane = g.mode != .compact }
+                    .onChange(of: g) { _, new in DuoLog.layout(new) }
+            }
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea()
         .background(DuoProbe().ignoresSafeArea().allowsHitTesting(false))
         .modifier(DialogHost(app: app))
         .onChange(of: scenePhase) { _, phase in
@@ -30,7 +42,10 @@ struct RootView: View {
             if phase != .active { map.saveCamera() }
             if phase == .active { TileLoader.shared.purgeExpiredPremium() }
         }
-        .onAppear { location.setForeground(true) }
+        .onAppear {
+            location.setForeground(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { animateLayout = true }
+        }
         .fullScreenCover(isPresented: Binding(get: { !prefs.onboardingAccepted }, set: { _ in })) {
             PaletteProvider { OnboardingPage() }
         }
@@ -80,7 +95,7 @@ struct RootView: View {
             }
             ToastHost(app: app, bottom: g.usesCapsule ? g.size.height - g.capsuleFrame.minY + 12 : g.safe.bottom + 24)
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: g)
+        .animation(animateLayout ? .spring(response: 0.35, dampingFraction: 0.9) : nil, value: g)
     }
 
     // MARK: Pages
@@ -110,7 +125,7 @@ struct RootView: View {
     /// The narrow layout's page: full window over the map, respecting the safe area at the top and sides.
     @ViewBuilder private func pageContainer(_ g: ShellGeometry) -> some View {
         currentPage(g)
-            .environment(\.pageInsets, g.pageInsets)
+            .environment(\.pageInsets, g.pageInsets.edgeInsets)
             .environment(\.pageCanGoBack, nav.canGoBack)
             .padding(.top, g.safe.top)
             .padding(.leading, g.safe.leading)
