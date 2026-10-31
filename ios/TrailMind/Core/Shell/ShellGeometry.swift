@@ -138,4 +138,11 @@ struct ShellGeometry: Equatable {
 
     var usesCapsule: Bool { mode == .compact || mode == .foldTable }
     var usesRail: Bool { mode == .wide || mode == .foldBook }
+
+    /// How far the rail and pane slide to hide for the full-screen map: wholly past the window edge on their side,
+    /// whatever sits between them and that edge (iPhone Duo's vertical status bar, a notch).
+    var menuHideOffset: CGFloat {
+        let left = min(railFrame.minX, paneFrame.minX), right = max(railFrame.maxX, paneFrame.maxX)
+        return menuOnLeading ? -(right + 24) : size.width - left + 24
+    }
 }

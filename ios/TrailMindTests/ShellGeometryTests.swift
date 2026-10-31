@@ -147,4 +147,20 @@ final class ShellGeometryTests: XCTestCase {
         XCTAssertNil(resolve(390, 844, fold: .zero).fold)
         XCTAssertEqual(resolve(832, 900, fold: .zero).mode, .wide)
     }
+
+    /// The full-screen map slides the menu wholly off screen, past iPhone Duo's vertical status bar or an iPhone notch.
+    func testMenuHidesCompletelyForFullScreen() {
+        // iPhone Duo open in landscape: bars on the trailing edge, 84 pt status-bar column (measured on the device).
+        let duo = resolve(951, 669, safe: G.Insets(bottom: 34, trailing: 84), edge: .trailing, fullScreen: true)
+        XCTAssertFalse(duo.menuOnLeading)
+        XCTAssertGreaterThanOrEqual(min(duo.railFrame.minX, duo.paneFrame.minX) + duo.menuHideOffset, 951)
+        // iPhone in landscape: notch inset on the leading side.
+        let phone = resolve(844, 390, safe: G.Insets(leading: 47, bottom: 21, trailing: 47), fullScreen: true)
+        XCTAssertTrue(phone.menuOnLeading)
+        XCTAssertLessThanOrEqual(max(phone.railFrame.maxX, phone.paneFrame.maxX) + phone.menuHideOffset, 0)
+        // Book pose: the menu fills its half up to the fold.
+        let book = resolve(951, 669, safe: G.Insets(bottom: 34, trailing: 84), fold: CGRect(x: 455, y: 0, width: 40, height: 669),
+                           edge: .trailing, fullScreen: true)
+        XCTAssertGreaterThanOrEqual(min(book.railFrame.minX, book.paneFrame.minX) + book.menuHideOffset, 951)
+    }
 }

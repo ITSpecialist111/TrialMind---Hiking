@@ -155,7 +155,7 @@ struct RootView: View {
     /// Wide and book layouts: the rail and the rounded pane over the map (MainActivity wide layout).
     @ViewBuilder private func menu(_ g: ShellGeometry) -> some View {
         let opacity = Double(prefs.menuOpacityPercent) / 100
-        let hiddenOffset = (g.menuOnLeading ? -1.0 : 1.0) * (g.railFrame.width + g.paneFrame.width + 24)
+        let hiddenOffset = g.menuHideOffset
         ZStack(alignment: .topLeading) {
             NavRail(nav: nav, tabs: g.compactTabs ? Tab.compactTabs : Tab.railTabs, logo: !g.compactTabs, opacity: opacity)
                 .padding(.top, g.safe.top)
