@@ -13,6 +13,32 @@ enum BeaconText {
     /// A briefing line as a bullet, as Android lists them.
     static func bullet(_ line: String) -> String { "•  " + line }
 
+    /// The next quarter of an hour after `now` (AssistantPage.nextQuarterHour): the planned start Beacon opens with.
+    static func nextQuarterHour(_ now: Int64) -> Int64 {
+        let q: Int64 = 15 * 60_000
+        return (now / q + 1) * q
+    }
+
+    /// When to set off along `points` to be down before sunset with `marginMinutes` to spare, for a walk starting at
+    /// `forMs` (DaylightText.startByText). `clock` writes a time of day and `finish` a time that may fall on another
+    /// day ("tomorrow 06:41"), both in `zone` and in the phone's own style.
+    static func startBy(_ points: [TrackPoint], pace: PaceSettings, marginMinutes: Int, forMs: Int64, zone: TimeZone,
+                        clock: (Int64) -> String, finish: (Int64) -> String) -> String {
+        guard points.count >= 2 else { return "No route timing available." }
+        let sun = Sun.times(epochDay: CivilDate.localEpochDay(forMs, zone), points[0].latLon())
+        let estimate = Daylight.estimate(nowMs: forMs, remaining: points, walked: [], movingMinutes: nil, pace: pace, sun: sun,
+                                         marginMinutes: max(marginMinutes, 0), zone: zone)
+        if estimate.darkNow == true {
+            return "It's dark now. " + (estimate.nextSunriseMs.map { "Sunrise \(finish($0))." } ?? "No sunrise time available.")
+        }
+        guard let sunset = sun.sunsetMs else {
+            return sun.polarDay ? "No sunset today at this location." : "Daylight times unavailable here."
+        }
+        guard let startBy = estimate.startByMs else { return "No start time today: route is too long to finish before sunset." }
+        return "Start by \(clock(startBy)) to finish before sunset (\(clock(sunset))) with \(marginMinutes) min to spare" +
+            (startBy < forMs ? " (start-by time has passed)." : ".")
+    }
+
     /// What the on-device model is told before it sees the briefing prompt.
     static let writeUpInstructions = "You are an experienced, safety-focused UK hill-walking leader writing a short, friendly " +
         "pre-hike briefing for a walker. Use only the facts you are given. Never invent weather, distances, heights, times or " +

@@ -71,4 +71,69 @@ final class BeaconTextTests: XCTestCase {
         XCTAssertTrue(BeaconText.writeUpInstructions.contains("Use only the facts you are given."))
         XCTAssertTrue(BeaconText.writeUpInstructions.contains("keep every number and time exactly as written"))
     }
+
+    // MARK: Start by
+
+    private let utc = TimeZone(identifier: "UTC")!
+    private let pace = PaceSettings()
+
+    /// About 8.7 km north with 860 m of climb, from Seathwaite towards Scafell Pike.
+    private var climb: [TrackPoint] {
+        (0..<40).map { i in TrackPoint(lat: 54.45 + Double(i) * 0.002, lon: -3.21, ele: 100 + Double(i) * 22) }
+    }
+
+    private func startBy(_ points: [TrackPoint], _ forMs: Int64, margin: Int = 30) -> String {
+        BeaconText.startBy(points, pace: pace, marginMinutes: margin, forMs: forMs, zone: utc,
+                           clock: { "c\($0)" }, finish: { "f\($0)" })
+    }
+
+    private func ms(_ year: Int64, _ month: Int, _ day: Int, _ hour: Int64, _ minute: Int64 = 0) -> Int64 {
+        CivilDate.epochDay(year, month, day) * CivilDate.msPerDay + (hour * 60 + minute) * 60_000
+    }
+
+    func testTheStartByTimeLeavesTheMarginBeforeSunset() throws {
+        let points = climb
+        let forMs = ms(2026, 6, 21, 8)
+        let sun = Sun.times(epochDay: CivilDate.epochDay(2026, 6, 21), points[0].latLon())
+        let sunset = try XCTUnwrap(sun.sunsetMs)
+        let plan = HikeEstimator.estimate(points, pace: pace).planningMinutes
+        let expected = sunset - 30 * 60_000 - kTruncateL(plan * 60_000)
+        XCTAssertEqual("Start by c\(expected) to finish before sunset (c\(sunset)) with 30 min to spare.", startBy(points, forMs))
+        XCTAssertEqual("Start by c\(expected + 30 * 60_000) to finish before sunset (c\(sunset)) with 0 min to spare.",
+                       startBy(points, forMs, margin: 0))
+    }
+
+    func testALateStartIsToldTheTimeHasPassed() {
+        let text = startBy(climb, ms(2026, 6, 21, 20))
+        XCTAssertTrue(text.hasPrefix("Start by c"), text)
+        XCTAssertTrue(text.hasSuffix("with 30 min to spare (start-by time has passed)."), text)
+    }
+
+    func testInTheDarkItGivesTomorrowsSunrise() throws {
+        let points = climb
+        let sunrise = try XCTUnwrap(Sun.times(epochDay: CivilDate.epochDay(2026, 6, 22), points[0].latLon()).sunriseMs)
+        XCTAssertEqual("It's dark now. Sunrise f\(sunrise).", startBy(points, ms(2026, 6, 21, 23, 30)))
+        // Before dawn it's today's sunrise that comes next.
+        let today = try XCTUnwrap(Sun.times(epochDay: CivilDate.epochDay(2026, 12, 21), points[0].latLon()).sunriseMs)
+        XCTAssertEqual("It's dark now. Sunrise f\(today).", startBy(points, ms(2026, 12, 21, 5)))
+    }
+
+    func testARouteTooLongForTheDayHasNoStartTime() {
+        let long = (0..<400).map { i in TrackPoint(lat: 50.0 + Double(i) * 0.01, lon: -3.21, ele: 100) }
+        XCTAssertEqual("No start time today: route is too long to finish before sunset.", startBy(long, ms(2026, 12, 21, 10)))
+    }
+
+    func testThePolesAndShortRoutesSayWhyThereIsNoTime() {
+        let arctic = [TrackPoint(lat: 78.2, lon: 15.6, ele: 10), TrackPoint(lat: 78.21, lon: 15.6, ele: 40)]
+        XCTAssertEqual("No sunset today at this location.", startBy(arctic, ms(2026, 6, 21, 12)))
+        XCTAssertEqual("It's dark now. No sunrise time available.", startBy(arctic, ms(2026, 12, 21, 12)))
+        XCTAssertEqual("No route timing available.", startBy([TrackPoint(lat: 54.45, lon: -3.21)], ms(2026, 6, 21, 8)))
+        XCTAssertEqual("No route timing available.", startBy([], ms(2026, 6, 21, 8)))
+    }
+
+    func testThePlannedStartOpensAtTheNextQuarterHour() {
+        XCTAssertEqual(1_800_000, BeaconText.nextQuarterHour(1_000_000))
+        XCTAssertEqual(1_800_000, BeaconText.nextQuarterHour(900_000))
+        XCTAssertEqual(ms(2026, 10, 31, 11, 30), BeaconText.nextQuarterHour(ms(2026, 10, 31, 11, 19) + 21_787))
+    }
 }

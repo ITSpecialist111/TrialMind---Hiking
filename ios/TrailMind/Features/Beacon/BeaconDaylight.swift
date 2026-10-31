@@ -21,29 +21,15 @@ enum BeaconDaylight {
 
     /// When to set off to be down before sunset with the user's margin, for a walk starting at `forMs`.
     static func startByText(_ points: [TrackPoint], pace: PaceSettings, marginMinutes: Int, forMs: Int64) -> String {
-        guard points.count >= 2 else { return "No route timing available." }
-        let sun = Sun.times(epochDay: CivilDate.localEpochDay(forMs, .current), points[0].latLon())
-        let estimate = Daylight.estimate(nowMs: forMs, remaining: points, walked: [], movingMinutes: nil, pace: pace, sun: sun,
-                                         marginMinutes: max(marginMinutes, 0))
-        if estimate.darkNow == true {
-            return "It's dark now. " + (estimate.nextSunriseMs.map { "Sunrise \(finishTime($0))." } ?? "No sunrise time available.")
-        }
-        guard let sunset = sun.sunsetMs else {
-            return sun.polarDay ? "No sunset today at this location." : "Daylight times unavailable here."
-        }
-        guard let startBy = estimate.startByMs else { return "No start time today: route is too long to finish before sunset." }
-        return "Start by \(clockTime(startBy)) to finish before sunset (\(clockTime(sunset))) with \(marginMinutes) min to spare" +
-            (startBy < forMs ? " (start-by time has passed)." : ".")
+        BeaconText.startBy(points, pace: pace, marginMinutes: marginMinutes, forMs: forMs, zone: .current,
+                           clock: clockTime, finish: finishTime)
     }
 
     /// The planned start as Android shows it on its chip: medium date, short time.
     static func plannedStart(_ ms: Int64) -> String { dateTimeFormatter.string(from: date(ms)) }
 
     /// The next quarter of an hour from now.
-    static func nextQuarterHour(_ now: Int64 = nowMs()) -> Int64 {
-        let q: Int64 = 15 * 60_000
-        return (now / q + 1) * q
-    }
+    static func nextQuarterHour() -> Int64 { BeaconText.nextQuarterHour(nowMs()) }
 
     /// Tomorrow at `hour`:00 on the phone's clock.
     static func tomorrowAt(_ hour: Int) -> Int64 {
