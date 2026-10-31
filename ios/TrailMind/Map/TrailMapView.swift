@@ -25,13 +25,13 @@ final class BngTileOverlay: MKTileOverlay {
     let source: TileSource
     private static func span(_ z: Int) -> Double { Double(BngTiles.tileSize) * BngTiles.resolution(z) }
 
-    init(source: TileSource) {
+    init(source: TileSource, replacesMap: Bool) {
         self.source = source
         super.init(urlTemplate: nil)
         minimumZ = 5
         maximumZ = 21
         tileSize = CGSize(width: 256, height: 256)
-        canReplaceMapContent = true
+        canReplaceMapContent = replacesMap
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
@@ -192,8 +192,12 @@ struct TrailMapView: UIViewRepresentable {
                 if let old = baseOverlay { map.removeOverlay(old) }
                 baseOverlay = nil
                 if !source.appleMap {
+                    // Apple's muted map stays underneath, so places a layer doesn't cover (outside Great Britain for
+                    // OS maps) and tiles still on their way show a map rather than an empty grid. Offline-only mode
+                    // replaces it, so MapKit fetches nothing of its own.
+                    let replaces = prefs.offlineOnly
                     let overlay: MKTileOverlay = source.grid == .britishNationalGrid
-                        ? BngTileOverlay(source: source) : SourceTileOverlay(source: source, replacesMap: true)
+                        ? BngTileOverlay(source: source, replacesMap: replaces) : SourceTileOverlay(source: source, replacesMap: replaces)
                     map.insertOverlay(overlay, at: 0, level: .aboveLabels)
                     baseOverlay = overlay
                 }

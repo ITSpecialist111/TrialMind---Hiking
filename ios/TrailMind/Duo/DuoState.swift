@@ -121,7 +121,7 @@ final class DuoProbeView: UIView {
         let classes = "w:\(traitCollection.horizontalSizeClass == .regular ? "regular" : "compact") h:\(traitCollection.verticalSizeClass == .regular ? "regular" : "compact")"
         if state.sizeClass != classes { state.sizeClass = classes }
         if let scene = window.windowScene { LocationHub.shared.setInterfaceOrientation(scene.effectiveGeometry.interfaceOrientation) }
-        guard #available(iOS 27.1, *) else { return }
+        guard #available(iOS 27.1, *) else { DuoLog.state(state); return }
         let edge: HorizontalEdge?
         switch traitCollection.verticalBarEdge {
         case .leading: edge = .leading
@@ -135,6 +135,7 @@ final class DuoProbeView: UIView {
         state.update(fold: divisions.first(where: { $0.isActive }).map { toWindow($0.frame) },
                      allDivisions: divisions.map { toWindow($0.frame) },
                      occlusions: occlusions.filter { $0.isActive }.map { toWindow($0.frame) })
+        DuoLog.state(state)
     }
 }
 

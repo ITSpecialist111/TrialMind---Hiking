@@ -13,16 +13,25 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        GeometryReader { geo in
-            let fold = foldRect(geo)
-            let occlusions = occlusionRects(geo)
-            let g = ShellGeometry.resolve(size: geo.size, safe: geo.safeAreaInsets, fold: fold,
-                                          verticalBarEdge: duo.verticalBarEdge, occlusions: occlusions, fullScreen: prefs.mapFullScreen)
-            shell(g)
-                .onAppear { nav.mapHasPane = !g.usesCapsule || g.mode == .foldTable }
-                .onChange(of: g.mode) { _, _ in nav.mapHasPane = g.mode != .compact }
+        // The outer reader keeps to the safe area, so it reports the insets (status bar, home indicator, and iPhone
+        // Duo's vertical bars); the inner one covers the whole window for the map and the fold's reserved regions.
+        GeometryReader { outer in
+            let safe = outer.safeAreaInsets
+            GeometryReader { geo in
+                let fold = foldRect(geo)
+                let occlusions = occlusionRects(geo)
+                let g = ShellGeometry.resolve(size: geo.size, safe: safe, fold: fold,
+                                              verticalBarEdge: duo.verticalBarEdge, occlusions: occlusions, fullScreen: prefs.mapFullScreen)
+                shell(g)
+                    .onAppear {
+                        nav.mapHasPane = !g.usesCapsule || g.mode == .foldTable
+                        DuoLog.layout(g)
+                    }
+                    .onChange(of: g.mode) { _, _ in nav.mapHasPane = g.mode != .compact }
+                    .onChange(of: g) { _, new in DuoLog.layout(new) }
+            }
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea()
         .background(DuoProbe().ignoresSafeArea().allowsHitTesting(false))
         .modifier(DialogHost(app: app))
         .onChange(of: scenePhase) { _, phase in
