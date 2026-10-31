@@ -118,6 +118,7 @@ final class PackDownloader {
         let wasBusy: Bool = lock.withLock {
             if busy && id != current && !queue.contains(id) { queue.append(id) }
             let was = busy
+            if !busy { current = id }
             busy = true
             return was
         }
@@ -134,6 +135,9 @@ final class PackDownloader {
     }
 
     func stopRequested() -> Stop? { lock.withLock { stopRequest } }
+
+    /// Whether this pack is downloading or waiting its turn.
+    func isPending(_ id: Int64) -> Bool { lock.withLock { current == id || queue.contains(id) } }
 
     private func drain(_ first: Int64) {
         var next: Int64? = first
@@ -155,7 +159,9 @@ final class PackDownloader {
                     busy = false
                     return nil
                 }
-                return queue.removeFirst()
+                let following = queue.removeFirst()
+                current = following
+                return following
             }
         }
         DispatchQueue.main.async {
@@ -204,8 +210,9 @@ final class PackDownloader {
         UserDefaults.standard.removeObject(forKey: Self.resumeKey)
         let packs = Store.shared.packs()
         for n in ids {
+            // Complete packs here are renewals that were waiting their turn: they still run.
             let id = n.int64Value
-            guard let p = packs.first(where: { $0.id == id }), p.kind == .download, p.status != .complete else { continue }
+            guard packs.contains(where: { $0.id == id && $0.kind == .download }) else { continue }
             download(id)
         }
     }
@@ -237,12 +244,16 @@ final class PackDownloader {
     }
 
     private func stopForBackground() {
-        let stopped: (id: Int64, name: String)? = lock.withLock {
+        let stopped: (id: Int64, name: String, waiting: [Int64])? = lock.withLock {
             guard busy, stopRequest == nil, let id = current else { return nil }
             stopRequest = .background
-            return (id, currentName)
+            return (id, currentName, queue)
         }
-        if let stopped { OfflineNotifications.shared.postPaused(stopped.id, name: stopped.name) }
+        guard let stopped else { return }
+        // Marked now: iOS suspends TrailMind as soon as this returns, and may end it before the download notices.
+        setResume(stopped.id, true)
+        stopped.waiting.forEach { setResume($0, true) }
+        OfflineNotifications.shared.postPaused(stopped.id, name: stopped.name)
     }
 
     private func finishBackgroundWork() {
