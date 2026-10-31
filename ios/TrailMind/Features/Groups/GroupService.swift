@@ -288,8 +288,9 @@ final class GroupService: ObservableObject {
     private func load() {
         guard let row = Store.shared.tripGroup() else { return }
         guard let code = GroupVault.unwrap(row.secret) else {
-            // The Keychain key is gone (a restore to another phone): the user needs to join again.
-            Store.shared.deleteTripGroups()
+            // The Keychain key is gone (a restore to another phone): the user needs to join again. Before the first
+            // unlock after a restart nothing in the Keychain can be read, so the group isn't deleted then.
+            if UIApplication.shared.isProtectedDataAvailable { Store.shared.deleteTripGroups() }
             return
         }
         let g = TripGroup(id: row.id, name: row.name, code: code, memberId: row.memberId, displayName: row.displayName,
@@ -643,6 +644,7 @@ extension GroupService {
     }
 
     /// The members on the map (MapScreen.updateHikers): faded after 2 minutes, hollow after 15, dashed when passed on.
+    /// The marker's name is Android's label: the member's name, with the position's age once it isn't fresh.
     private func updateHikers() {
         guard group != nil, prefs.groupShowOnMap, prefs.frontierEnabled else {
             if !shownMarkers.isEmpty {
@@ -660,8 +662,9 @@ extension GroupService {
             case .stale: freshness = .faded
             case .lastSeen: freshness = .hollow
             }
-            return GroupMarker(id: peer.memberId, name: nameOf(peer), position: LatLon(pos.lat, pos.lon), colour: colourOf(peer),
-                               freshness: freshness, relayed: pos.hops > 0, needsHelp: pos.status.needsHelp)
+            return GroupMarker(id: peer.memberId, name: GroupText.markerLabel(nameOf(peer), position: pos, nowS: s),
+                               position: LatLon(pos.lat, pos.lon), colour: colourOf(peer), freshness: freshness,
+                               relayed: pos.hops > 0, needsHelp: pos.status.needsHelp)
         }
         if markers != shownMarkers {
             shownMarkers = markers

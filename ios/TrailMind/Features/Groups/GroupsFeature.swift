@@ -19,6 +19,7 @@ enum GroupsFeature {
         GroupAlerts.shared.onOpenMember = { memberId in GroupFlows.focusMember(memberId) }
         // MainActivity's ACTION_GROUP_FIND: the Safety tab with the find on top.
         GroupAlerts.shared.onOpenFind = { memberId in Navigator.shared.open(.safety, findRoute(memberId)) }
+        GroupAlerts.shared.onStopFind = { GroupService.shared.finder.stop() }
 
         FeatureHooks.groupSummary = {
             let service = GroupService.shared
