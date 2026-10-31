@@ -70,7 +70,7 @@ struct GroupDiagnosticsPage: View {
         }
         lines.append("iPhone link: " + (link.running ? "on as \(link.name ?? "?")" + (link.advertising ? ", advertising" : ", listening only") : "off"))
         lines.append("iPhones: \(link.nearbyCount) of the group nearby, \(link.connectedPeers.count) connected")
-        lines.append("Sent \(link.sent) messages, received \(link.received)")
+        lines.append("Sent \(link.sent) messages" + (link.sendFailures > 0 ? " (\(link.sendFailures) failed)" : "") + ", received \(link.received)")
         let scanFor = bt.scanStartedAt.map { GroupText.age(Int64(-$0.timeIntervalSinceNow)) } ?? "?"
         lines.append("Scan: " + (bt.scanning ? "on for \(scanFor)" : "off") + (bt.problem.map { " · \($0)" } ?? ""))
         lines.append("Heard \(bt.received) Bluetooth adverts from Android phones")

@@ -17,6 +17,8 @@ enum GroupsFeature {
         started = true
         GroupAlerts.shared.install()
         GroupAlerts.shared.onOpenMember = { memberId in GroupFlows.focusMember(memberId) }
+        // MainActivity's ACTION_GROUP_FIND: the Safety tab with the find on top.
+        GroupAlerts.shared.onOpenFind = { memberId in Navigator.shared.open(.safety, findRoute(memberId)) }
 
         FeatureHooks.groupSummary = {
             let service = GroupService.shared
@@ -25,6 +27,7 @@ enum GroupsFeature {
         }
         FeatureHooks.fitGroup = { GroupFlows.fitGroup() }
         FeatureHooks.openGroup = { Navigator.shared.push(groupRoute) }
+        FeatureHooks.groupSafetyCard = { AnyView(GroupSafetyCard()) }
         FeatureHooks.hikeStartedListeners.append { _, _ in GroupService.shared.setRecording(true) }
         FeatureHooks.hikeFinishedListeners.append { _ in
             GroupService.shared.hikeFinished()

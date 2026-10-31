@@ -1,12 +1,13 @@
 import Foundation
 import MultipeerConnectivity
+import Network
 
 /// The iPhones' direct link for the trip group: MultipeerConnectivity, which joins iPhones over peer-to-peer Wi-Fi and
 /// Bluetooth with no network, pairing or prompts. iPhones in the group find each other by the group's rotating tag in
 /// their discovery info, one of each pair invites the other with a frame sealed under the group's key (anyone else is
 /// turned away), and they then exchange exactly the sealed adverts Android phones broadcast. iOS runs this while
 /// TrailMind is open and pauses it in the background. A new random name and tag every 15 minutes, as Android's
-/// Bluetooth address changes with its tag, so the group can't be followed for long.
+/// Bluetooth address changes with its tag, so the group can't be followed for long. A session holds up to 8 iPhones.
 final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNearbyServiceBrowserDelegate {
     var onData: ((Data, MCPeerID) -> Void)?
     var onConnected: ((MCPeerID) -> Void)?
@@ -20,22 +21,37 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
 
     private(set) var running = false
     private(set) var advertising = false
-    private(set) var error: String?
     private(set) var received: Int64 = 0
     private(set) var sent: Int64 = 0
+    private(set) var sendFailures: Int64 = 0
     private(set) var startedAt: Date?
+
+    /// Why other iPhones can't reach this one, or nil.
+    var error: String? { localNetworkDenied ? "Local Network access is off for TrailMind" : linkError }
 
     private static let inviteTimeoutS: TimeInterval = 20
     private static let reinviteS: TimeInterval = 30
+    /// After this long without a connection, the other phone of a pair invites too: discovery can be one-sided.
+    private static let fallbackInviteS: TimeInterval = 12
+    /// kDNSServiceErr_PolicyDenied: the user turned Local Network off for TrailMind.
+    private static let policyDenied: Int32 = -65570
+    /// NSNetServicesMissingRequiredConfigurationError: the app's Info.plist lacks the Bonjour service type.
+    private static let missingConfiguration = -72008
 
     private var me: MCPeerID?
     private var session: MCSession?
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
+    /// Browses the same Bonjour service only to learn whether iOS allows TrailMind on the local network: Multipeer
+    /// Connectivity just finds nobody when it doesn't.
+    private var probe: NWBrowser?
+    private var linkError: String?
+    private var localNetworkDenied = false
     private var tag = ""
     private var epoch = Int64.min
     /// Group iPhones found nearby (their tag matched), to invite and re-invite.
     private var nearby = Set<MCPeerID>()
+    private var foundAt: [MCPeerID: Date] = [:]
     private var invitedAt: [MCPeerID: Date] = [:]
     private var memberOfPeer: [MCPeerID: Int] = [:]
 
@@ -78,11 +94,14 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         session?.disconnect()
         session?.delegate = nil
         session = nil
+        probe?.cancel()
+        probe = nil
         me = nil
         running = false
         advertising = false
         startedAt = nil
         nearby.removeAll()
+        foundAt.removeAll()
         invitedAt.removeAll()
         memberOfPeer.removeAll()
         onChanged?()
@@ -95,7 +114,8 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
             try session.send(data, toPeers: session.connectedPeers, with: .reliable)
             sent += 1
         } catch {
-            self.error = error.localizedDescription
+            // A peer dropping as it is sent to; the next send goes to whoever is still connected.
+            sendFailures += 1
         }
     }
 
@@ -106,6 +126,7 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
             sent += 1
             return true
         } catch {
+            sendFailures += 1
             return false
         }
     }
@@ -126,10 +147,11 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         me = peer
         self.session = session
         self.browser = browser
-        error = nil
+        linkError = nil
         running = true
         startedAt = Date()
         browser.startBrowsingForPeers()
+        startProbe()
         onChanged?()
     }
 
@@ -149,20 +171,54 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         }
     }
 
-    /// One of each pair invites: the one that isn't advertising, or else the one whose random name sorts first.
+    /// One of each pair invites: the one that isn't advertising, or else the one whose random name sorts first. If no
+    /// connection comes of that within a few seconds (one phone may not have seen the other yet), the other invites too.
     private func inviteIfNeeded(_ peer: MCPeerID) {
         guard let session, let browser, let me, !session.connectedPeers.contains(peer) else { return }
-        guard !advertising || me.displayName < peer.displayName else { return }
-        if let at = invitedAt[peer], Date().timeIntervalSince(at) < GroupPeerLink.reinviteS { return }
-        invitedAt[peer] = Date()
+        let now = Date()
+        let first = !advertising || me.displayName < peer.displayName
+        let waited = now.timeIntervalSince(foundAt[peer] ?? now) >= GroupPeerLink.fallbackInviteS
+        guard first || waited else { return }
+        if let at = invitedAt[peer], now.timeIntervalSince(at) < GroupPeerLink.reinviteS { return }
+        invitedAt[peer] = now
         browser.invitePeer(peer, to: session, withContext: inviteContext?(), timeout: GroupPeerLink.inviteTimeoutS)
     }
 
     private func failed(_ error: Error) {
         let ns = error as NSError
-        // NSNetServicesErrorCode -72008 (kDNSServiceErr_PolicyDenied): Local Network access was refused.
-        self.error = ns.code == -72008 ? "Local Network access is off for TrailMind" : ns.localizedDescription
+        if ns.code == Int(GroupPeerLink.policyDenied) {
+            localNetworkDenied = true
+        } else if ns.code == GroupPeerLink.missingConfiguration {
+            linkError = "this copy of TrailMind isn't set up for it (Bonjour service missing)"
+        } else {
+            linkError = ns.localizedDescription
+        }
         onChanged?()
+    }
+
+    private func startProbe() {
+        guard probe == nil else { return }
+        let parameters = NWParameters()
+        parameters.includePeerToPeer = true
+        let probe = NWBrowser(for: .bonjour(type: "_\(GroupIPhone.serviceType)._tcp", domain: nil), using: parameters)
+        probe.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            var denied = self.localNetworkDenied
+            switch state {
+            case .ready:
+                denied = false
+            case .waiting(let error), .failed(let error):
+                if case .dns(let code) = error, code == GroupPeerLink.policyDenied { denied = true }
+            default:
+                break
+            }
+            if denied != self.localNetworkDenied {
+                self.localNetworkDenied = denied
+                self.onChanged?()
+            }
+        }
+        probe.start(queue: .main)
+        self.probe = probe
     }
 
     // MARK: MCNearbyServiceBrowserDelegate
@@ -171,6 +227,7 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         DispatchQueue.main.async { [weak self] in
             guard let self, browser === self.browser, self.tagMatches?(info?[GroupPeerTag.key]) == true else { return }
             self.nearby.insert(peerID)
+            if self.foundAt[peerID] == nil { self.foundAt[peerID] = Date() }
             self.inviteIfNeeded(peerID)
             self.onChanged?()
         }
@@ -180,6 +237,7 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         DispatchQueue.main.async { [weak self] in
             guard let self, browser === self.browser else { return }
             self.nearby.remove(peerID)
+            self.foundAt[peerID] = nil
             self.onChanged?()
         }
     }
@@ -213,10 +271,12 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
             switch state {
             case .connected:
                 self.invitedAt[peerID] = nil
-                self.error = nil
+                self.linkError = nil
                 self.onConnected?(peerID)
             case .notConnected:
                 self.memberOfPeer[peerID] = nil
+                // Lost: the phone whose turn it is invites again first.
+                if self.nearby.contains(peerID) { self.foundAt[peerID] = Date() }
             default:
                 break
             }

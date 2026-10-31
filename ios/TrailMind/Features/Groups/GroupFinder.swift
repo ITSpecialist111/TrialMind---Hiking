@@ -89,6 +89,8 @@ final class GroupFinder: NSObject, ObservableObject, NISessionDelegate {
     /// The finder's own token for the find in progress, re-sent while it asks.
     private var myToken: [UInt8]?
     private var tokenSentMs: Int64 = 0
+    /// The find this phone's "being found" notice is for.
+    private var noticedNonce: Int64?
 
     /// This iPhone can measure distance with UWB.
     static var supported: Bool { NISession.deviceCapabilities.supportsPreciseDistanceMeasurement }
@@ -364,7 +366,21 @@ final class GroupFinder: NSObject, ObservableObject, NISessionDelegate {
 
     private func setState(_ s: State?) {
         state = s
+        syncNotice()
         publish()
+    }
+
+    /// The found phone's notice that someone is finding it: posted once when a find starts, gone when it ends.
+    private func syncNotice() {
+        if let s = state, s.active, s.role == .found {
+            if noticedNonce != s.nonce {
+                noticedNonce = s.nonce
+                GroupAlerts.shared.postFind(name: name(s.memberId), memberId: s.memberId)
+            }
+        } else if noticedNonce != nil {
+            noticedNonce = nil
+            GroupAlerts.shared.cancelFind()
+        }
     }
 
     private func publish() {

@@ -705,18 +705,17 @@ extension GroupService {
     /// MainActivity.offerGroupHike: starts recording straight away when that needs nothing from the user, otherwise
     /// (or if they chose to be asked) asks first.
     private func offerGroupHike(_ who: String, memberId: Int) {
-        guard prefs.onboardingAccepted, prefs.groupHikes, !hikeUnderWay(), let start = FeatureHooks.startHike else { return }
-        let join = { [weak self] in
-            guard let self else { return }
-            LocationHub.shared.requestPermission()
-            GroupAlerts.shared.requestAuthorization()
-            if start(self.groupHikeName()) {
+        guard prefs.onboardingAccepted, prefs.groupHikes, !hikeUnderWay(), FeatureHooks.startHike != nil else { return }
+        let join = {
+            // No name: the hike feature names it after the group, as TrackingService does. It asks for location itself.
+            if FeatureHooks.startHike?("") == true {
                 AppModel.shared.toast("\(who) started a group hike, so TrailMind is recording yours too.")
             } else {
                 AppModel.shared.toast("Couldn't start recording. Tap Start hike on the map to join \(who).")
             }
         }
-        if !prefs.groupHikesAsk && LocationHub.shared.hasPermission {
+        let hub = LocationHub.shared
+        if !prefs.groupHikesAsk && hub.hasPermission && hub.fullAccuracy {
             join()
             return
         }
@@ -728,13 +727,6 @@ extension GroupService {
         AppModel.shared.choose("\(who) started a group hike",
                                "Record your own copy of it? It is saved on this phone, with your own track, time and distance.",
                                options: [("Start my hike", join)], cancel: "Not now")
-    }
-
-    /// Group hikes are named after the group, as TrackingService names them.
-    func groupHikeName() -> String {
-        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short)
-        if let g = group, prefs.groupHikes { return "\(g.name) · \(stamp)" }
-        return "Hike \(stamp)"
     }
 }
 

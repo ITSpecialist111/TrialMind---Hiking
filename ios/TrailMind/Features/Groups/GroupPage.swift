@@ -226,7 +226,7 @@ private struct MemberRow: View {
     }
 }
 
-/// Explains trip groups and offers Create and Join (groupIntroCard).
+/// Explains trip groups and offers Create and Join (groupIntroCard): on the Safety page and the empty Trip group page.
 struct GroupIntroCard: View {
     var done: () -> Void
 
@@ -244,6 +244,29 @@ struct GroupIntroCard: View {
                 TMButton("Create group", icon: .add, style: .filled) { GroupFlows.startCreate(done) }
                 TMButton("Join with code", style: .tonal) { GroupFlows.startJoin(done) }
             }
+        }
+    }
+}
+
+/// The trip group on the Safety page (SafetyPage.groupCard): its status and anyone calling for help, or the intro card.
+struct GroupSafetyCard: View {
+    @Environment(\.palette) private var p
+    @ObservedObject private var service = GroupService.shared
+
+    init() {}
+
+    var body: some View {
+        if let g = service.group {
+            TMCard(spacing: 8) {
+                TMText("Trip group · \(g.name)", .title)
+                TMText(service.statusLine(), .body, color: service.readiness() == .ready ? p.primary : p.danger)
+                ForEach(service.members.filter { $0.position?.status.needsHelp == true }, id: \.memberId) { peer in
+                    TMBanner(message: "\(service.nameOf(peer)) needs help. Open the trip group to see where.", danger: true)
+                }
+                TMButton("Open trip group", style: .tonal) { Navigator.shared.push(GroupsFeature.groupRoute) }
+            }
+        } else {
+            GroupIntroCard { Navigator.shared.push(GroupsFeature.groupRoute) }
         }
     }
 }
