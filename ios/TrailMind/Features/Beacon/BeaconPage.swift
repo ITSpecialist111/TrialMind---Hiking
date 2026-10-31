@@ -31,7 +31,7 @@ struct BeaconPage: View {
         }
         .onAppear {
             aiAvailability = BeaconAI.availability
-            model.reloadRoutes()
+            model.reloadRoutes(refresh: true)
         }
         .onChange(of: store.revision) { _, _ in model.reloadRoutes() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
@@ -66,9 +66,12 @@ struct BeaconPage: View {
             case .available:
                 TMToggle(label: "Write it up with Apple Intelligence", isOn: $prefs.beaconUseAppleIntelligence,
                          detail: "On this iPhone, from the offline briefing")
+            case .notReady:
+                TMToggle(label: "Write it up with Apple Intelligence", isOn: $prefs.beaconUseAppleIntelligence,
+                         detail: "Apple Intelligence is still getting ready on this iPhone. The write-up appears once it is.")
             case .turnedOff:
                 TMText("Turn on Apple Intelligence in Settings to have the briefing written up on this iPhone.", .caption)
-            case .notReady, .unsupported:
+            case .unsupported:
                 EmptyView()
             }
         }
@@ -95,12 +98,16 @@ struct BeaconPage: View {
             TMChip("Now") { model.startMs = BeaconDaylight.nextQuarterHour() }
             TMChip("Tomorrow 09:00") { model.startMs = BeaconDaylight.tomorrowAt(9) }
         }
-        if let d = model.data, let b = model.briefing(prefs) {
-            TMText(b.startBy, .body)
-            weatherCard(d.meta.id, b.input.highPoint)
-            briefingCard(b)
-            if aiRequest != nil && (model.writing || model.writeUp != nil) { writeUpCard }
-            gemmaCard(b.prompt)
+        if let d = model.data, d.meta.id == model.routeId {
+            if let b = model.briefing(prefs) {
+                TMText(b.startBy, .body)
+                weatherCard(d.meta.id, b.input.highPoint)
+                briefingCard(b)
+                if aiRequest != nil && (model.writing || model.writeUp != nil) { writeUpCard }
+                gemmaCard(b.prompt)
+            } else {
+                TMText("This route has no track, so there's nothing to brief.", .caption)
+            }
         } else {
             TMText("Loading…", .caption)
         }
@@ -133,7 +140,7 @@ struct BeaconPage: View {
         TMCard(spacing: 8) {
             TMText("Offline briefing", .title)
             ForEach(Array(b.lines.enumerated()), id: \.offset) { _, line in
-                TMText("•  " + line, .body, color: Self.warns(line) ? p.danger : p.onSurface)
+                TMText(BeaconText.bullet(line), .body, color: BeaconText.warns(line) ? p.danger : p.onSurface)
             }
             if !b.input.facilities.isEmpty { TMText(BeaconFeature.facilitiesAttribution, .caption) }
         }
@@ -186,12 +193,6 @@ struct BeaconPage: View {
     }
 
     // MARK: Helpers
-
-    /// Lines Android shows in the danger colour.
-    static func warns(_ line: String) -> Bool {
-        line.hasPrefix("⚠") || line.range(of: "after sunset", options: .caseInsensitive) != nil
-            || line.range(of: "dark", options: .caseInsensitive) != nil
-    }
 
     /// "5 minutes ago", "yesterday"... as Android's relative time span.
     static func ago(_ ms: Int64) -> String {

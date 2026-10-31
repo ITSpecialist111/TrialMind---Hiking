@@ -33,19 +33,21 @@ final class BeaconModel: ObservableObject {
 
     // MARK: Routes
 
-    /// Reads the routes (on show, and whenever the store changes) and loads the chosen one if it changed.
-    func reloadRoutes() {
+    /// Reads the routes and loads the chosen one: on show (`refresh`: its saved forecast and facilities may have changed
+    /// on the route's page meanwhile, as AssistantPage.onShow reloads them), and whenever the store changes.
+    func reloadRoutes(refresh: Bool = false) {
         DispatchQueue.global(qos: .userInitiated).async {
             let list = Store.shared.routes()
-            DispatchQueue.main.async { self.routesLoaded(list) }
+            DispatchQueue.main.async { self.apply(routes: list, refresh: refresh) }
         }
     }
 
-    private func routesLoaded(_ list: [RouteMeta]) {
+    private func apply(routes list: [RouteMeta], refresh: Bool) {
         routes = list
         routesLoaded = true
         let known = Set(list.map(\.id))
         if routeId == nil || !known.contains(routeId ?? -1) {
+            // The route being followed, else the newest (app.nav.active, else routes.first).
             let active = Prefs.shared.activeRouteId
             routeId = known.contains(active) ? active : list.first?.id
         }
@@ -54,7 +56,7 @@ final class BeaconModel: ObservableObject {
             return
         }
         // Reload when the route itself changed (renamed, heights added) or hasn't been read yet.
-        if data?.meta.id != id || list.first(where: { $0.id == id }) != data?.meta { load() }
+        if refresh || data?.meta.id != id || list.first(where: { $0.id == id }) != data?.meta { load() }
     }
 
     func select(_ id: Int64) {
@@ -82,22 +84,17 @@ final class BeaconModel: ObservableObject {
 
     // MARK: Forecast
 
+    /// Gets the forecast for the route's high point and saves it on the phone; a failure is told in a toast.
     func fetchForecast(_ id: Int64, _ high: HighPoint) {
         guard !fetching else { return }
         fetching = true
-        Task.detached {
-            do {
-                let fresh = try await MountainForecasts.fetch(routeId: id, at: high.position, eleM: high.eleM)
-                DispatchQueue.main.async {
-                    self.fetching = false
-                    if id == self.routeId { self.forecast = fresh }
-                }
-            } catch {
-                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                DispatchQueue.main.async {
-                    self.fetching = false
-                    AppModel.shared.toast("Couldn't get the forecast: \(message.isEmpty ? "no connection" : message)")
-                }
+        MountainForecasts.fetch(routeId: id, at: high.position, eleM: high.eleM) { result in
+            self.fetching = false
+            switch result {
+            case .success(let fresh):
+                if id == self.routeId { self.forecast = fresh }
+            case .failure(let error):
+                AppModel.shared.toast("Couldn't get the forecast: \(MountainForecasts.message(error))")
             }
         }
     }

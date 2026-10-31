@@ -209,13 +209,13 @@ final class StravaService: ObservableObject {
     /// "Upload to Strava" on a hike's page (FeatureHooks.stravaUploadHike): posted through Strava's API when linked,
     /// otherwise the GPX is saved for Strava's own upload page, the way in that needs no subscription.
     func uploadHike(_ hikeId: Int64) {
-        if linked { postNow(hikeId) } else { StravaHandUpload.start(hikeId) }
+        if linked { postFromHikePage(hikeId) } else { StravaHandUpload.start(hikeId) }
     }
 
     /// "Post now" / "Try again" on a hike's page (FeatureHooks.stravaPostNow).
     func postNowFromHikePage(_ hikeId: Int64) {
         if linked {
-            postNow(hikeId)
+            postFromHikePage(hikeId)
         } else if needsReconnect {
             AppModel.shared.choose("Strava needs you to connect again",
                                    "Strava stopped accepting TrailMind, so this hike can't be posted by itself.",
@@ -224,6 +224,20 @@ final class StravaService: ObservableObject {
         } else {
             StravaHandUpload.start(hikeId)
         }
+    }
+
+    /// Queues a finished hike whatever its length (a retry keeps any upload Strava already has), and says so.
+    private func postFromHikePage(_ hikeId: Int64) {
+        if let hike = store.hike(hikeId), hike.status != .done {
+            AppModel.shared.toast("You can post it once it's finished.")
+            return
+        }
+        if store.stravaPost(hikeId)?.state == StravaPostState.posted.rawValue {
+            AppModel.shared.toast("This hike is already on Strava.")
+            return
+        }
+        postNow(hikeId)
+        AppModel.shared.toast(StravaNetwork.shared.usable ? "Posting to Strava…" : "It goes to Strava as soon as the phone has signal.")
     }
 
     // MARK: - Posting
@@ -552,24 +566,28 @@ final class StravaService: ObservableObject {
 }
 
 /// A little more time when TrailMind goes to the background mid-post, so an upload in flight can finish. Begun and
-/// ended on the main thread, in order.
+/// ended on the main thread, in order; when iOS wants the time back, posting is told to stop and the time is handed
+/// back before the expiry handler returns, as iOS requires.
 private final class BackgroundTime {
+    /// Main thread only.
     private var id = UIBackgroundTaskIdentifier.invalid
 
     init(onExpiry: @escaping () -> Void) {
-        DispatchQueue.main.async {
-            self.id = UIApplication.shared.beginBackgroundTask(withName: "Strava posting") { [weak self] in
+        DispatchQueue.main.async { [self] in
+            id = UIApplication.shared.beginBackgroundTask(withName: "Strava posting") { [self] in
                 onExpiry()
-                self?.end()
+                endNow()
             }
         }
     }
 
     func end() {
-        DispatchQueue.main.async {
-            guard self.id != .invalid else { return }
-            UIApplication.shared.endBackgroundTask(self.id)
-            self.id = .invalid
-        }
+        DispatchQueue.main.async { [self] in endNow() }
+    }
+
+    private func endNow() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }

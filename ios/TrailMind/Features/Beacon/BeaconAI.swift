@@ -11,7 +11,7 @@ enum BeaconAI {
         case available
         /// The iPhone can do it once Apple Intelligence is turned on in Settings.
         case turnedOff
-        /// Apple Intelligence is still downloading its model.
+        /// Apple Intelligence is still getting its model ready.
         case notReady
         /// This iPhone or iOS can't run it.
         case unsupported
@@ -31,29 +31,24 @@ enum BeaconAI {
         return .unsupported
     }
 
-    private static let instructions = """
-        You are an experienced, safety-focused UK hill-walking leader writing a short, friendly pre-hike briefing for a walker. \
-        Use only the facts you are given. Never invent weather, distances, heights, times or place names, and keep every number \
-        and time exactly as written. Where something is missing, such as the weather, say what to check instead. \
-        Write plain text in short paragraphs or simple lists, under 250 words, with no headings or tables.
-        """
-
     /// Write-ups already made while the app runs, by prompt, so going back to a route doesn't run the model again.
     private static var made: [String: String] = [:]
 
     static func cached(_ prompt: String) -> String? { made[prompt] }
 
-    /// The model's write-up of `prompt` (the briefing's facts), or nil when the model isn't there or anything goes wrong.
+    /// The model's write-up of `prompt` (the briefing's facts), or nil when the model isn't there or anything goes wrong
+    /// (not enabled, a language it doesn't speak, its guardrails, or the page closing first).
     static func writeUp(_ prompt: String) async -> String? {
         if let done = made[prompt] { return done }
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             guard case .available = SystemLanguageModel.default.availability else { return nil }
-            let rules: String = instructions
+            let rules: String = BeaconText.writeUpInstructions
             let session = LanguageModelSession(instructions: rules)
             do {
-                let response = try await session.respond(to: prompt)
-                let text = tidy(response.content)
+                // A cool temperature keeps the model close to the facts it was given.
+                let response = try await session.respond(to: prompt, options: GenerationOptions(temperature: 0.4))
+                let text = BeaconText.tidyWriteUp(response.content)
                 guard !text.isEmpty else { return nil }
                 made[prompt] = text
                 return text
@@ -63,18 +58,5 @@ enum BeaconAI {
         }
         #endif
         return nil
-    }
-
-    /// Drops Markdown headings and rules the model may still add; inline emphasis is rendered by the page.
-    nonisolated static func tidy(_ text: String) -> String {
-        text.components(separatedBy: "\n").map { line -> String in
-            let trimmed = line.drop(while: { $0 == " " })
-            if trimmed.count >= 3 && trimmed.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" }) { return "" }
-            if trimmed.hasPrefix("#") { return String(trimmed.drop(while: { $0 == "#" }).drop(while: { $0 == " " })) }
-            return line
-        }
-        .joined(separator: "\n")
-        .replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
