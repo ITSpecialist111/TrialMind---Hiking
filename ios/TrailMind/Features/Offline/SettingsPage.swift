@@ -23,6 +23,10 @@ struct SettingsPage: View {
             }
             UnitsCard()
             NavigationCard()
+            TMCard(spacing: 6) {
+                TMText("Watch companion", .title)
+                TMText("TrailMind's watch app runs on Wear OS watches, which pair with Android phones only. On iPhone, the map, guidance and alerts stay on the phone.", .caption)
+            }
             EmergencyContactCard()
             FallAndSosCard()
             CustomSourceCard()

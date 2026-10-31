@@ -159,6 +159,8 @@ final class PackDownloader {
             }
         }
         DispatchQueue.main.async {
+            // The new tiles show: the map asks for its tiles again.
+            OfflinePacks.refreshMap()
             guard !self.isBusy else { return }
             self.finishBackgroundWork()
             if UIApplication.shared.applicationState == .active { self.resumeInterrupted() }

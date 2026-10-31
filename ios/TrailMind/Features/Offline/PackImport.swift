@@ -57,6 +57,7 @@ extension OfflinePacks {
         importFile(url) { result in
             switch result {
             case .success(let pack):
+                OfflinePacks.refreshMap()
                 AppModel.shared.choose("Offline map ready", "\"\(pack.name)\" was imported. Show it on the map now?",
                                        options: [("Use it", { OfflineFeature.showImported(pack.id) })], cancel: "Later")
             case .failure(let error):
