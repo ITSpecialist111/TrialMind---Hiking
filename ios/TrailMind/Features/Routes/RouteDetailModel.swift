@@ -101,7 +101,8 @@ final class RouteDetailModel: ObservableObject {
             facilityListener = OverpassFacilities.shared.addListener(routeId) { [weak self] result in self?.facilitiesArrived(result) }
         }
         refreshDevice()
-        if !loading && !loaded {
+        // Facilities found while the page was away are read again each time it shows, as Android does.
+        if !loading {
             loading = true
             let id = routeId
             DispatchQueue.global(qos: .userInitiated).async {
@@ -109,7 +110,7 @@ final class RouteDetailModel: ObservableObject {
                 let saved = OverpassFacilities.shared.saved(id)
                 let hasSaved = OverpassFacilities.shared.hasSaved(id)
                 DispatchQueue.main.async {
-                    self.setData(data)
+                    if !self.loaded || data != self.data { self.setData(data) }
                     self.facilities = saved
                     self.facilityCacheUnreadable = hasSaved && saved == nil
                     self.loaded = true
@@ -119,9 +120,8 @@ final class RouteDetailModel: ObservableObject {
                     self.updateCursor()
                 }
             }
-        } else if loaded {
-            // Kept while another page was on top: catch up with any change to the route meanwhile.
-            reload()
+        }
+        if loaded {
             updateReadiness()
             loadLidar()
             updateCursor()

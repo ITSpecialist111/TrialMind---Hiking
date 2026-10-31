@@ -116,9 +116,8 @@ enum RouteText {
         return "\(location ? "Location ready" : "Location permission or services off"); \(alerts ? "alerts allowed" : "allow notifications")"
     }
 
-    /// The OS Maps API British National Grid tile holding a grid position at `z` (core `BngTiles` column and row).
+    /// The OS Maps API British National Grid tile holding a grid position at `z` (TileKey(z, BngTiles.column, BngTiles.row)).
     static func bngTile(_ grid: OsGridRef, _ z: Int) -> TileKey {
-        let span = 256 * (896.0 / Double(1 << z))
-        return TileKey(z, kTruncate(floor((grid.easting - -238_375.0) / span)), kTruncate(floor((1_376_256.0 - grid.northing) / span)))
+        TileKey(z, BngTiles.column(grid.easting, z), BngTiles.row(grid.northing, z))
     }
 }
