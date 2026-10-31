@@ -19,7 +19,8 @@ final class OfflineNet: NSObject, URLSessionTaskDelegate {
     private var pathSatisfied = true
     private var started = false
     private let lock = NSLock()
-    private lazy var tileSession: URLSession = {
+    // Created up front: tiles are fetched from the download thread and the map's tile threads at once.
+    private let tileSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -28,14 +29,14 @@ final class OfflineNet: NSObject, URLSessionTaskDelegate {
         config.timeoutIntervalForRequest = 15
         return URLSession(configuration: config)
     }()
-    /// what3words answers must not be redirected anywhere else.
+    /// what3words answers must not be redirected anywhere else. Search runs one lookup at a time.
     private lazy var noRedirectSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
-    private lazy var plainSession: URLSession = {
+    private let plainSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
