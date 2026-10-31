@@ -20,7 +20,14 @@ struct BeaconPage: View {
     }
 
     private static let edgeGalleryUrl = URL(string: "https://apps.apple.com/app/id6749645337")!
-    private static let gpxTypes: [UTType] = [UTType("com.topografix.gpx") ?? .xml, .xml]
+    /// GPX files, and XML files that may hold GPX (as the route import offers).
+    private static let gpxTypes: [UTType] = {
+        var types: [UTType] = []
+        for t in [UTType("com.topografix.gpx"), UTType(filenameExtension: "gpx"), UTType.xml] {
+            if let t, !types.contains(t) { types.append(t) }
+        }
+        return types
+    }()
 
     var body: some View {
         PageScaffold("Beacon") {
@@ -210,22 +217,31 @@ struct BeaconPage: View {
             ?? AttributedString(text)
     }
 
+    /// Hands the picked file to the route import (Routes handles GPX files opened in TrailMind, adding heights where
+    /// needed), as Android's Import GPX does. An XML file that may hold GPX goes under a .gpx name.
     private func importGpx(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
+        if url.pathExtension.lowercased() == "gpx" {
+            AppEvents.shared.open(url)
+            return
+        }
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        var data: Data?
+        var coordination: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordination) { readURL in
+            data = try? Data(contentsOf: readURL)
+        }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("imports", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = url.pathExtension.lowercased() == "gpx" ? url.lastPathComponent : url.lastPathComponent + ".gpx"
-        let copy = dir.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: copy)
+        let copy = dir.appendingPathComponent(AppModel.safeFileName(url.deletingPathExtension().lastPathComponent) + ".gpx")
         do {
-            try FileManager.default.copyItem(at: url, to: copy)
+            guard let data else { throw CocoaError(.fileReadUnknown) }
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: copy, options: .atomic)
         } catch {
             AppModel.shared.toast("Couldn't read \(url.lastPathComponent)")
             return
         }
-        // GPX import (with heights added where needed) belongs to Routes, which handles opened GPX files.
         AppEvents.shared.open(copy)
     }
 }
