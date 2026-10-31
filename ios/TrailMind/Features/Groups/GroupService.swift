@@ -664,7 +664,7 @@ extension GroupService {
             }
             return GroupMarker(id: peer.memberId, name: GroupText.markerLabel(nameOf(peer), position: pos, nowS: s),
                                position: LatLon(pos.lat, pos.lon), colour: colourOf(peer), freshness: freshness,
-                               relayed: pos.hops > 0, needsHelp: pos.status.needsHelp)
+                               relayed: pos.hops > 0, needsHelp: pos.status.needsHelp, initials: GroupText.initials(nameOf(peer)))
         }
         if markers != shownMarkers {
             shownMarkers = markers

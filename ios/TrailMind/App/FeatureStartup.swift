@@ -4,6 +4,7 @@ import Foundation
 enum FeatureStartup {
     static func startAll() {
         MapHeadingDriver.shared.start()
+        GroupsFeature.start()
         // Hikes chains to any notification delegate set before it, so it starts after the other features.
         HikesFeature.start()
     }

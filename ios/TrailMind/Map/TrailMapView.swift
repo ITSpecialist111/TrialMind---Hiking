@@ -375,6 +375,7 @@ struct TrailMapView: UIViewRepresentable {
                     ?? MemberAnnotationView(annotation: annotation, reuseIdentifier: "member")
                 view.annotation = annotation
                 view.configure(member.marker, danger: UIColor(p.danger))
+                view.showsCaption = (MapController.zoom(of: mapView) ?? parent.controller.zoom) >= MemberAnnotationView.captionMinZoom
                 return view
             }
             guard let pa = annotation as? PinAnnotation else { return nil }
@@ -410,6 +411,10 @@ struct TrailMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             let c = mapView.centerCoordinate
             let zoom = MapController.zoom(of: mapView) ?? parent.controller.zoom
+            let captions = zoom >= MemberAnnotationView.captionMinZoom
+            for case let member as MemberAnnotation in mapView.annotations {
+                (mapView.view(for: member) as? MemberAnnotationView)?.showsCaption = captions
+            }
             DispatchQueue.main.async {
                 self.parent.controller.cameraChanged(center: LatLon(c.latitude, c.longitude), zoom: zoom, heading: mapView.camera.heading)
             }
@@ -442,10 +447,13 @@ struct TrailMapView: UIViewRepresentable {
 }
 
 /// A trip-group member: a coloured disc with initials, faded after 2 minutes, hollow after 15, dashed when passed on by
-/// another phone, red when they need help.
+/// another phone, red when they need help; from zoom 11 the name (with the position's age) beside it.
 final class MemberAnnotationView: MKAnnotationView {
+    static let captionMinZoom = 11.0
     private let label = UILabel()
     private let ring = CAShapeLayer()
+    private let caption = UILabel()
+    var showsCaption = false { didSet { caption.isHidden = !showsCaption } }
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -455,6 +463,14 @@ final class MemberAnnotationView: MKAnnotationView {
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 13, weight: .bold)
         addSubview(label)
+        caption.font = .systemFont(ofSize: 12, weight: .semibold)
+        caption.textColor = UIColor(white: 0.1, alpha: 1)
+        caption.backgroundColor = UIColor(white: 1, alpha: 0.88)
+        caption.textAlignment = .center
+        caption.layer.cornerRadius = 6
+        caption.layer.masksToBounds = true
+        caption.isHidden = true
+        addSubview(caption)
         displayPriority = .required
         canShowCallout = false
     }
@@ -474,8 +490,12 @@ final class MemberAnnotationView: MKAnnotationView {
         case .faded: ring.fillColor = colour.cgColor; alpha = 0.55
         case .hollow: ring.fillColor = UIColor.clear.cgColor; ring.strokeColor = colour.cgColor; alpha = 0.8
         }
-        label.text = String(m.name.prefix(2)).uppercased()
+        label.text = m.initials.isEmpty ? String(m.name.prefix(2)).uppercased() : m.initials
         label.textColor = m.freshness == .hollow ? colour : .white
+        caption.text = m.name
+        caption.sizeToFit()
+        let w = caption.bounds.width + 10, h = caption.bounds.height + 4
+        caption.frame = CGRect(x: bounds.maxX + 4, y: (bounds.height - h) / 2, width: w, height: h)
         accessibilityLabel = "\(m.name)\(m.needsHelp ? ", needs help" : "")"
     }
 }

@@ -5,6 +5,7 @@ import SwiftUI
 struct GroupMarker: Identifiable, Hashable {
     enum Freshness: Hashable { case live, faded, hollow }
     var id: Int
+    /// The caption: the member's name, with the position's age once it isn't fresh ("Sam · 4 min").
     var name: String
     var position: LatLon
     var colour: UInt32
@@ -12,6 +13,8 @@ struct GroupMarker: Identifiable, Hashable {
     /// Heard through another member rather than directly (drawn dashed).
     var relayed = false
     var needsHelp = false
+    /// Up to two letters on the disc ("SJ" for Sam Jones); the name's first two letters when empty.
+    var initials = ""
 }
 
 /// A point of interest drawn on the map (facility, waypoint, LiDAR hazard...).
