@@ -1,5 +1,6 @@
 import CoreLocation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The map tab's pane in the wide layout (Pages2.kt DashboardPage), the first thing iPhone Duo shows open: where you
 /// are now, the hike recording and the route you follow, quick actions, safety and the offline maps for this map.
@@ -10,6 +11,7 @@ struct DashboardPage: View {
     @ObservedObject private var guidance = Guidance.shared
     @ObservedObject private var recorder = HikeRecorder.shared
     @ObservedObject private var offline = OfflinePacks.shared
+    @State private var pickingGpx = false
 
     var body: some View {
         PageScaffold("TrailMind", showBack: false) {
@@ -119,8 +121,30 @@ struct DashboardPage: View {
             TMCard(spacing: 10) {
                 TMText("No route loaded", .title)
                 TMText("Import a GPX to follow it, or just start recording.", .caption)
-                TMButton("Import GPX", icon: .upload) { Navigator.shared.open(.routes) }
+                TMButton("Import GPX", icon: .upload) { pickingGpx = true }
             }
+            .fileImporter(isPresented: $pickingGpx, allowedContentTypes: Self.gpxTypes) { result in
+                if case .success(let url) = result { Self.openGpx(url) }
+            }
+        }
+    }
+
+    private static let gpxTypes: [UTType] = [UTType("com.topografix.gpx"), UTType(filenameExtension: "gpx"), .xml].compactMap { $0 }
+
+    /// Hands a picked GPX file to the routes feature as "Open in TrailMind" does, from a copy TrailMind can read later.
+    private static func openGpx(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("gpx-import", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = url.pathExtension.lowercased() == "gpx" ? url.lastPathComponent : url.deletingPathExtension().lastPathComponent + ".gpx"
+        let copy = dir.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: copy)
+        do {
+            try FileManager.default.copyItem(at: url, to: copy)
+            AppEvents.shared.open(copy)
+        } catch {
+            AppModel.shared.info("Import failed", error.localizedDescription)
         }
     }
 
