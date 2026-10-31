@@ -152,6 +152,18 @@ final class SafetyReadoutTests: XCTestCase {
         XCTAssertTrue(text.hasPrefix("SOS from TrailMind: Possible fall, no response at 14:05."), text)
     }
 
+    func testEmergencyGuidanceCallsPoliceThenMountainRescue() {
+        let lines = SafetyText.emergencyGuidance.components(separatedBy: "\n")
+        XCTAssertEqual("• Call 999 or 112 and ask for Police, then Mountain Rescue.", lines[0])
+        XCTAssertEqual("• Give your grid reference, what happened, number of people and injuries.", lines[1])
+        XCTAssertTrue(lines.contains("• Stay put, keep warm, and save battery once help is on the way."))
+        // The page links the first 999 and 112 to the phone: both must come in the first line.
+        XCTAssertNotNil(lines[0].range(of: "999"))
+        XCTAssertNotNil(lines[0].range(of: "112"))
+        XCTAssertTrue(SafetyText.satelliteNote.contains("Emergency SOS via satellite"))
+        XCTAssertTrue(SafetyText.cannotSendNote.hasSuffix("you tap Send."))
+    }
+
     // MARK: Fall alarm and check-in wording
 
     func testContactNameFallsBackAsAndroidDoes() {

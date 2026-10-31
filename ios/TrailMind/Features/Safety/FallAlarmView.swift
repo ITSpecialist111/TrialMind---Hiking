@@ -6,6 +6,8 @@ import UIKit
 final class FallAlarmWindow {
     static let shared = FallAlarmWindow()
     private var window: UIWindow?
+    /// The idle timer as it was before the alarm kept the screen on (Android's FLAG_KEEP_SCREEN_ON).
+    private var idleTimerWasDisabled = false
 
     var isShowing: Bool { window.map { !$0.isHidden } ?? false }
 
@@ -20,6 +22,8 @@ final class FallAlarmWindow {
         w.rootViewController = host
         w.makeKeyAndVisible()
         window = w
+        idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
         UIAccessibility.post(notification: .screenChanged, argument: nil)
     }
 
@@ -27,6 +31,7 @@ final class FallAlarmWindow {
         guard let w = window else { return }
         window = nil
         w.isHidden = true
+        UIApplication.shared.isIdleTimerDisabled = idleTimerWasDisabled
         // Presentations and the keyboard go back to TrailMind's own window.
         w.windowScene?.windows.first(where: { $0 !== w && !$0.isHidden && $0.windowLevel == .normal })?.makeKey()
         UIAccessibility.post(notification: .screenChanged, argument: nil)
@@ -91,8 +96,9 @@ struct FallAlarmView: View {
                     TMButton(state.stage == .none ? "Close" : "Back to TrailMind", style: .text) { alarm.putAway() }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 560, alignment: .leading)
             .padding(24)
+            .frame(maxWidth: .infinity)
         }
         .background(p.bg.ignoresSafeArea())
         .onChange(of: state.stage) { _, stage in if stage == .none { FallAlarmWindow.shared.hide() } }

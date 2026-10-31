@@ -23,7 +23,7 @@ struct TelemetryPage: View {
                 TMBanner(message: "Allow precise location to see GPS telemetry.")
                 TMButton("Allow precise location", icon: .myLocation) { SafetyUI.allowLocation(position.authorization) }
             }
-            TMButton("Check Location Services are on", icon: .myLocation, style: .text) { AppModel.shared.openSettings() }
+            TMButton("Open TrailMind's location settings", icon: .myLocation, style: .text) { AppModel.shared.openSettings() }
             TMCard(spacing: 10) {
                 TMText(summary(fix, now))
                 StatGrid(items: [

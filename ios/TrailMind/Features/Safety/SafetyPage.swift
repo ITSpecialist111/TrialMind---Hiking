@@ -232,7 +232,8 @@ struct SafetyPage: View {
         return TMCard(spacing: 6) {
             TMText("Check-in", .title)
             TMText(SafetyText.checkIn(dueTime: due > 0 ? SafetyFormat.clock(due) : nil, route: prefs.checkInRoute))
-            TMText("TrailMind reminds you on this phone at your return time and again half an hour later. It does not send a text for you; Text opens Messages for you to send it.", .caption)
+            TMText("TrailMind reminds you on this phone at your return time and again half an hour later. It does not send a text for you; Text opens Messages for you to send it." +
+                   (KotlinText.isBlank(prefs.emergencyContact) ? " Set an emergency contact to get the Text button." : ""), .caption)
             if due > 0 && notifications.allowed == false {
                 TMBanner(message: "Check-in notifications are off. Allow notifications for TrailMind in Settings to receive this alert.")
                 TMButton("Fix", style: .text) { AppModel.shared.openSettings() }
