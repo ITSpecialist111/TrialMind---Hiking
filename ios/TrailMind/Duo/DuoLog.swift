@@ -5,6 +5,8 @@ import os
 /// (read with `idevicesyslog -p TrailMind` or Console.app): for checking iPhone Duo poses on a device and for bug reports.
 enum DuoLog {
     private static let logger = Logger(subsystem: "com.trailmind.ios", category: "display")
+    /// Map layers and tile requests, at debug level (only kept while a log stream is attached).
+    static let tiles = Logger(subsystem: "com.trailmind.ios", category: "tiles")
     private static var lastState = ""
     private static var lastLayout = ""
 
