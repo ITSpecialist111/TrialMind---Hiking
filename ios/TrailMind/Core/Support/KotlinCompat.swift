@@ -120,8 +120,9 @@ func javaFixed(_ x: Double, _ digits: Int) -> String {
     return (negative ? "-" : "") + intDigits + (digits > 0 ? "." + fracDigits : "")
 }
 
-@inline(__always) func toRadians(_ deg: Double) -> Double { deg * .pi / 180.0 }
-@inline(__always) func toDegrees(_ rad: Double) -> Double { rad * 180.0 / .pi }
+/// Java's `Math.toRadians`/`toDegrees` multiply by these constants (not `* .pi / 180`), so use them for identical results.
+@inline(__always) func toRadians(_ deg: Double) -> Double { deg * 0.017453292519943295 }
+@inline(__always) func toDegrees(_ rad: Double) -> Double { rad * 57.29577951308232 }
 
 extension Comparable {
     /// Kotlin's `coerceIn`.
