@@ -119,7 +119,9 @@ scripts/ios-xtool.sh logs --udid <UDID>    # TrailMind's log; "display ..." and 
   open. The phone must be unlocked: locked screens capture black.
 - Each fold, unfold or rotation logs one `display` line (window, safe area, status bar, vertical-bar edge, hinge,
   fold and camera regions) and one `layout` line (the shell's mode and every frame), the same facts as More →
-  Display & fold.
+  Display & fold. A `layout` line ends `active=false` when iOS laid TrailMind out in the background (for the app
+  switcher on the other display) while another app was on screen: don't take screenshots for those, they show the
+  other app.
 - `run` stops a running TrailMind before installing: installing over a running copy can stall at
   "Installing 100%" on iOS 27.
 - If an install ends with `noDevice`, or a phone vanishes from `devices`, close every Apple Devices process and reopen

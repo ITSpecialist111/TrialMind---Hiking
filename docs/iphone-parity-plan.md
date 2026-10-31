@@ -21,7 +21,7 @@ the iOS 27.1 SDK and Apple's iPhone Duo documentation. Status is tracked at the 
 | | Cover display (closed) | Inner display (open) |
 |---|---|---|
 | Panel | 1398×2034 px at 3× (466×678 pt), about 5.4″ | 1878×2670 px at 3× (626×890 pt), about 7.6″ |
-| TrailMind layout | narrow: capsule standing on the vertical-bar edge | wide: rail and side pane (portrait and landscape) |
+| TrailMind layout | narrow: capsule standing on the vertical-bar edge (iOS lays it out at 466×678 pt, safe area top 82 pt, bottom 34 pt, bars on the trailing edge) | wide: rail and side pane (portrait and landscape) |
 | Landscape, open | | window 951×669 pt; status bar stands on the trailing edge (safe area right 84 pt, bottom 34 pt); the top of that column (84×124 pt) is reserved |
 | Portrait, open | | window 669×951 pt; bars horizontal again (safe area top 82 pt for the camera area, bottom 34 pt) |
 | Fold | | a 40 pt division region down the middle, active only when partly folded: in landscape it splits left and right (book, x 455), in portrait top and bottom (tabletop, y 455) |
@@ -29,7 +29,10 @@ the iOS 27.1 SDK and Apple's iPhone Duo documentation. Status is tracked at the 
 Seen on the device: folding to about 108° in landscape switches TrailMind to the book layout (menu on the
 vertical-bar side of the fold, map on the other); turning it to portrait while folded switches to tabletop (map above
 the fold, pages and the navigation capsule below); unfolding returns to the rail and pane. The status bar frame iOS
-reports is a 2 pt strip even when the bar stands vertically, so layouts rely on the safe area instead.
+reports is a 2 pt strip even when the bar stands vertically, so layouts rely on the safe area instead. For the cover
+display iOS laid TrailMind out at 466×678 pt (safe area top 82 pt, bottom 34 pt, vertical bars on the trailing edge):
+the narrow layout with the navigation capsule standing on the trailing edge; that pass was in the background, so the
+cover display still needs a look with TrailMind in front.
 
 The device's screens, logs and app launches can be driven from Windows/WSL (see
 [iphone-development.md](iphone-development.md#testing-on-iphone-duo-from-windows)), which is how these were measured.
