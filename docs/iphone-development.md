@@ -125,7 +125,12 @@ scripts/ios-xtool.sh logs --udid <UDID>    # TrailMind's log; "display ..." and 
 - If an install ends with `noDevice`, or a phone vanishes from `devices`, close every Apple Devices process and reopen
   the Apple Devices app (see above).
 - `pymobiledevice3 developer core-device` also offers `launch-application` (with `--env`), `location` (simulated
-  position) and `get-display-info`.
+  position), `rotate` (turns the interface; the iPhone 12 obeyed, iPhone Duo did not) and `get-display-info`.
+- Debug builds read launch settings, so a check can be set up without touching the phone:
+  `launch-application --env TM_BASE=osm --env TM_CENTER=54.4542,-3.2116,13 --env TM_TAB=hikes <bundle id>`
+  (also `TM_OFFLINE_ONLY`, `TM_HEADING_UP`, `TM_ONBOARDED=1`, `TM_PAGE=display`; see `App/TestLaunch.swift`).
+- An idle map should not redraw: `logs` output with a steady stream of VectorKit "Heavy Frame" lines means a layer
+  keeps MapKit busy (for example a tile overlay answering without data), which costs battery on a hike.
 
 ## MacinCloud setup
 
