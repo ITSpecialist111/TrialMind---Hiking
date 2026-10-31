@@ -3,7 +3,7 @@ import Foundation
 #if DEBUG
 /// Developer launches set up a check without touching the phone (iPhone Duo poses, screenshots), for example
 /// `pymobiledevice3 developer core-device launch-application --env TM_TAB=routes --env TM_BASE=osm <bundle id>`:
-/// TM_BASE=<map source id>, TM_OFFLINE_ONLY=0|1, TM_CENTER=lat,lon[,zoom], TM_HEADING_UP=0|1, TM_ONBOARDED=1,
+/// TM_BASE=<map source id>, TM_OFFLINE_ONLY=0|1, TM_CENTER=lat,lon[,zoom], TM_HEADING_UP=0|1, TM_ONBOARDED=0|1,
 /// TM_TAB=<tab>, TM_PAGE=display|group|strava|checkin|telemetry|search, TM_LOCATE=1. Debug builds only.
 enum TestLaunch {
     static func apply() {
@@ -20,7 +20,7 @@ enum TestLaunch {
                 if parts.count >= 3 { prefs.mapZoom = parts[2] }
             }
         }
-        if env["TM_ONBOARDED"] == "1" { prefs.onboardingAccepted = true }
+        if let onboarded = env["TM_ONBOARDED"] { prefs.onboardingAccepted = onboarded == "1" }
         DispatchQueue.main.async {
             if let tab = env["TM_TAB"], let t = Tab(rawValue: tab) { Navigator.shared.open(t) }
             switch env["TM_PAGE"] {

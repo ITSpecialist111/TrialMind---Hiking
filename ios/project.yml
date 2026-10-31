@@ -35,7 +35,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortraitUpsideDown
         UIBackgroundModes: [location, audio, processing, fetch]
-        BGTaskSchedulerPermittedIdentifiers: [com.trailmind.ios.strava]
+        BGTaskSchedulerPermittedIdentifiers: [com.trailmind.ios.strava, com.trailmind.ios.offline-purge, "com.trailmind.ios.beta.offline.*", "com.trailmind.ios.offline.*"]
         NSLocationWhenInUseUsageDescription: TrailMind shows your position on the map, records your hikes, guides you along routes and lets you share where you are.
         NSLocationAlwaysAndWhenInUseUsageDescription: While a hike is recording, TrailMind keeps logging your track and checking you are on route with the screen off.
         NSMotionUsageDescription: TrailMind uses the barometer for accurate climb and the motion sensors to notice a possible fall while a hike records.

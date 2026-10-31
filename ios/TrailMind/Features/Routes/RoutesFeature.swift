@@ -21,6 +21,16 @@ enum RoutesFeature {
         FeatureHooks.showOldMap = { box, at in RouteMap.showOldMap(box: box, at: at) }
         FeatureHooks.refreshTerrainOverlays = { TerrainOverlays.shared.refresh() }
         FeatureHooks.openRouteDetail = { id in openDetail(id) }
+        // Offline packs save terrain heights and 1 m LiDAR along a route through these services.
+        FeatureHooks.saveTerrainTiles = { tiles, isCancelled in
+            let r = TerrainService.shared.download(AnySequence(tiles), cancelled: isCancelled)
+            return (saved: r.saved, unavailable: r.failed)
+        }
+        FeatureHooks.lidarMissing = { squares in LidarService.shared.missing(squares) }
+        FeatureHooks.saveLidarSquares = { squares, isCancelled, progress in
+            let r = LidarService.shared.download(squares, cancelled: isCancelled, progress: progress)
+            return (saved: r.ok, failed: r.failed)
+        }
         AppEvents.shared.urlHandlers.append { url in RouteImport.shared.handle(url) }
     }
 

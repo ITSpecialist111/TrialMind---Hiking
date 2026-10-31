@@ -10,6 +10,8 @@ enum FeatureStartup {
         SafetyFeature.start()
         // Beacon registers the Strava background task, which iOS only allows during launch.
         BeaconFeature.start()
+        // Offline maps register their Premium purge and download tasks during launch too.
+        OfflineFeature.start()
         // Hikes chains to any notification delegate set before it, so it starts after the other features.
         HikesFeature.start()
     }

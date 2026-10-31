@@ -47,6 +47,9 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.trailmind.ios.strava</string>
+		<string>com.trailmind.ios.offline-purge</string>
+		<string>com.trailmind.ios.beta.offline.*</string>
+		<string>com.trailmind.ios.offline.*</string>
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>TrailMind shows your position on the map, records your hikes, guides you along routes and lets you share where you are.</string>
