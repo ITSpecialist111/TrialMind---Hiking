@@ -2,3 +2,4 @@ version: 1
 bundleID: com.trailmind.ios.beta
 product: TrailMind
 infoPath: Info-xtool.plist
+iconPath: AppIcon.png

@@ -4,20 +4,27 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>TrailMind Preview</string>
+	<string>TrailMind</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
+	<key>DTPlatformName</key>
+	<string>iphoneos</string>
+	<key>DTPlatformVersion</key>
+	<string>27.1</string>
+	<key>DTSDKName</key>
+	<string>iphoneos27.1</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Show your position, direction and location to share while TrailMind is open.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
@@ -30,6 +37,118 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>audio</string>
+		<string>processing</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.trailmind.ios.strava</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TrailMind shows your position on the map, records your hikes, guides you along routes and lets you share where you are.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>While a hike is recording, TrailMind keeps logging your track and checking you are on route with the screen off.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>TrailMind uses the barometer for accurate climb and the motion sensors to notice a possible fall while a hike records.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>In a trip group, TrailMind listens for the rest of your party over Bluetooth so everyone shows on the map with no signal.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>In a trip group, nearby iPhones share positions directly with each other, with no signal needed.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_trailmind-grp._tcp</string>
+		<string>_trailmind-grp._udp</string>
+	</array>
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>Find a trip-group member up close: TrailMind shows the distance and direction to their iPhone.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Pick your emergency contact for check-in and SOS texts.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.trailmind.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>trailmind</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>GPX route or track</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.topografix.gpx</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>MBTiles map</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.trailmind.mbtiles</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.topografix.gpx</string>
+			<key>UTTypeDescription</key>
+			<string>GPS Exchange Format</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.xml</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>gpx</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/gpx+xml</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.trailmind.mbtiles</string>
+			<key>UTTypeDescription</key>
+			<string>MBTiles map</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.database</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mbtiles</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

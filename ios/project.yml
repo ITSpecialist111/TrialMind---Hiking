@@ -7,30 +7,68 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     CODE_SIGN_STYLE: Automatic
 targets:
   TrailMind:
     type: application
     platform: iOS
-    sources: [TrailMind]
+    sources:
+      - path: TrailMind
+      - path: XcodeAssets/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.trailmind.ios.beta
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
+      # Keep in step with Info-xtool.plist (the xtool build); XcodeGen writes Generated/Info.plist from these.
       path: Generated/Info.plist
       properties:
-        CFBundleDisplayName: TrailMind Preview
+        CFBundleDisplayName: TrailMind
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        NSLocationWhenInUseUsageDescription: Show your position, direction and location to share while TrailMind is open.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortraitUpsideDown
+        UIBackgroundModes: [location, audio, processing, fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.trailmind.ios.strava]
+        NSLocationWhenInUseUsageDescription: TrailMind shows your position on the map, records your hikes, guides you along routes and lets you share where you are.
+        NSLocationAlwaysAndWhenInUseUsageDescription: While a hike is recording, TrailMind keeps logging your track and checking you are on route with the screen off.
+        NSMotionUsageDescription: TrailMind uses the barometer for accurate climb and the motion sensors to notice a possible fall while a hike records.
+        NSBluetoothAlwaysUsageDescription: In a trip group, TrailMind listens for the rest of your party over Bluetooth so everyone shows on the map with no signal.
+        NSLocalNetworkUsageDescription: In a trip group, nearby iPhones share positions directly with each other, with no signal needed.
+        NSBonjourServices: [_trailmind-grp._tcp, _trailmind-grp._udp]
+        NSNearbyInteractionUsageDescription: "Find a trip-group member up close: TrailMind shows the distance and direction to their iPhone."
+        NSContactsUsageDescription: Pick your emergency contact for check-in and SOS texts.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.trailmind.ios
+            CFBundleURLSchemes: [trailmind]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: GPX route or track
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.topografix.gpx]
+          - CFBundleTypeName: MBTiles map
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.trailmind.mbtiles]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.topografix.gpx
+            UTTypeDescription: GPS Exchange Format
+            UTTypeConformsTo: [public.xml]
+            UTTypeTagSpecification:
+              public.filename-extension: [gpx]
+              public.mime-type: [application/gpx+xml]
+          - UTTypeIdentifier: com.trailmind.mbtiles
+            UTTypeDescription: MBTiles map
+            UTTypeConformsTo: [public.database, public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [mbtiles]
+        LSSupportsOpeningDocumentsInPlace: false
         ITSAppUsesNonExemptEncryption: false
   TrailMindTests:
     type: bundle.unit-test
