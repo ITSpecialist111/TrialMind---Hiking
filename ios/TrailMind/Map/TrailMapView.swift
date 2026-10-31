@@ -23,12 +23,7 @@ final class SourceTileOverlay: MKTileOverlay {
 /// corners (TileMapView's BNG drawing), so routes and the GPS dot line up with the paper-map style.
 final class BngTileOverlay: MKTileOverlay {
     let source: TileSource
-    private static let originE = -238_375.0
-    private static let originN = 1_376_256.0
-    private static let gbMaxE = 700_000.0
-    private static let gbMaxN = 1_300_000.0
-    private static func resolution(_ z: Int) -> Double { 896.0 / Double(1 << z) }
-    private static func span(_ z: Int) -> Double { 256 * resolution(z) }
+    private static func span(_ z: Int) -> Double { Double(BngTiles.tileSize) * BngTiles.resolution(z) }
 
     init(source: TileSource) {
         self.source = source
@@ -48,15 +43,15 @@ final class BngTileOverlay: MKTileOverlay {
         let refs = corners.map { OsGrid.project($0) }
         let minE = refs.map(\.easting).min()!, maxE = refs.map(\.easting).max()!
         let minN = refs.map(\.northing).min()!, maxN = refs.map(\.northing).max()!
-        if maxE < 0 || minE > Self.gbMaxE || maxN < 0 || minN > Self.gbMaxN { return result(nil, nil) }
+        if maxE < 0 || minE > BngTiles.gbMaxE || maxN < 0 || minN > BngTiles.gbMaxN { return result(nil, nil) }
         let midLat = (corners[0].lat + corners[3].lat) / 2
         let mpp = WebMercator.metresPerPixel(midLat, z)
-        var bz = Int(floor(log(896.0 / mpp) / log(2.0) + 1e-9)).clamped(source.minZoom, source.maxZoom)
+        var bz = BngTiles.zoomFor(mpp, source.minZoom, source.maxZoom)
         if source.isPremium(bz), TileLoader.shared.premiumDenied(source), let from = source.premiumFromZoom { bz = from - 1 }
-        let col0 = Int(floor((max(minE, 0) - Self.originE) / Self.span(bz)))
-        let col1 = Int(floor((min(maxE, Self.gbMaxE) - Self.originE) / Self.span(bz)))
-        let row0 = Int(floor((Self.originN - min(maxN, Self.gbMaxN)) / Self.span(bz)))
-        let row1 = Int(floor((Self.originN - max(minN, 0)) / Self.span(bz)))
+        let col0 = BngTiles.column(max(minE, 0), bz)
+        let col1 = BngTiles.column(min(maxE, BngTiles.gbMaxE), bz)
+        let row0 = BngTiles.row(min(maxN, BngTiles.gbMaxN), bz)
+        let row1 = BngTiles.row(max(minN, 0), bz)
         guard col1 >= col0, row1 >= row0, (col1 - col0 + 1) * (row1 - row0 + 1) <= 16 else { return result(nil, nil) }
         let group = DispatchGroup()
         let lock = NSLock()
@@ -82,8 +77,8 @@ final class BngTileOverlay: MKTileOverlay {
                 let cg = ctx.cgContext
                 cg.interpolationQuality = .medium
                 for tile in images {
-                    let e0 = Self.originE + Double(tile.col) * Self.span(bz)
-                    let n0 = Self.originN - Double(tile.row) * Self.span(bz)
+                    let e0 = BngTiles.easting(tile.col, bz)
+                    let n0 = BngTiles.northing(tile.row, bz)
                     let tl = pixel(e0, n0)
                     let tr = pixel(e0 + Self.span(bz), n0)
                     let bl = pixel(e0, n0 - Self.span(bz))

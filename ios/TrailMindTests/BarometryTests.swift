@@ -61,15 +61,11 @@ final class BarometryTests: XCTestCase {
     }
 
     func testTracBackReversesAndThinsTheTrack() throws {
-        #if CORE_PORTS_MERGED
         let recorded = (0..<10_000).map { TrackPoint(lat: 54.0 + Double($0) * 1e-5, lon: -3.0, ele: 100.0 + Double($0)) }
         let back = try XCTUnwrap(TracBack.line(recorded, maxPoints: 1000))
         XCTAssertTrue(back.count <= 1001)
         XCTAssertEqual(recorded.last!.lat, back.first!.lat)
         XCTAssertEqual(recorded.first!.lat, back.last!.lat)
         XCTAssertNil(TracBack.line(Array(recorded.prefix(1))))
-        #else
-        throw XCTSkip("Needs TracBack (nav/TracBack.kt), which the port/core-stats branch ports: drop this #if once merged")
-        #endif
     }
 }

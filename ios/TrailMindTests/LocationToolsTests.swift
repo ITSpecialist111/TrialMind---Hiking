@@ -28,7 +28,6 @@ final class LocationToolsTests: XCTestCase {
     }
 
     func testEmergencyWordsNeverReplaceCoordinatesOrBreakSingleSms() throws {
-        #if CORE_PORTS_MERGED
         let here = LatLon(51.521251, -0.203586)
         let text = SosText.contact("I need help", location: here, altitudeM: 24, time: "12:34", batteryPercent: 67,
                                    words: "filled.count.soap")
@@ -40,8 +39,5 @@ final class LocationToolsTests: XCTestCase {
         XCTAssertTrue(emergency.contains("Grid ") && emergency.contains("lat ") && emergency.contains("///filled.count.soap"))
         XCTAssertTrue(!SosText.contact("Help", location: nil, altitudeM: nil, time: "12:34", batteryPercent: 50,
                                        words: "filled.count.soap").contains("///"))
-        #else
-        throw XCTSkip("Needs SosText (frontier/SosText.kt), which the port/core-frontier branch ports: drop this #if once merged")
-        #endif
     }
 }

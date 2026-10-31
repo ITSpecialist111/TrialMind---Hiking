@@ -1,32 +1,6 @@
 import XCTest
 @testable import TrailMind
 
-/// Stand-in for `BngTiles`, which another branch ports: the same API and values as BngTiles.kt. Delete it once the
-/// real one is merged, so these tests check that instead (this file-private copy would otherwise shadow it).
-private enum BngTiles {
-    static let originE = -238_375.0
-    static let originN = 1_376_256.0
-    static let tileSize = 256
-    static let gbMaxE = 700_000.0
-    static let gbMaxN = 1_300_000.0
-
-    static func resolution(_ z: Int) -> Double { 896.0 / Double(1 << z) }
-
-    private static func span(_ z: Int) -> Double { Double(tileSize) * resolution(z) }
-
-    static func column(_ easting: Double, _ z: Int) -> Int { Int(floor((easting - originE) / span(z))) }
-
-    static func row(_ northing: Double, _ z: Int) -> Int { Int(floor((originN - northing) / span(z))) }
-
-    static func easting(_ column: Int, _ z: Int) -> Double { originE + Double(column) * span(z) }
-
-    static func northing(_ row: Int, _ z: Int) -> Double { originN - Double(row) * span(z) }
-
-    static func zoomFor(_ metresPerPixel: Double, _ minZoom: Int, _ maxZoom: Int) -> Int {
-        Int(floor(log(896.0 / metresPerPixel) / log(2.0) + 1e-9)).clamped(minZoom, maxZoom)
-    }
-}
-
 final class TileCoverageTests: XCTestCase {
     func testBoxMatchesCount() {
         let box = BoundingBox(54.40, -3.20, 54.50, -3.00)

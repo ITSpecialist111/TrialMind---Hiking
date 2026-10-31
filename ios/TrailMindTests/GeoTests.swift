@@ -160,7 +160,6 @@ final class GeoTests: XCTestCase {
     }
 
     func testSunsetInLondonMidsummer() throws {
-        #if CORE_PORTS_MERGED
         let t = Sun.times(date(2025, 6, 21), LatLon(51.5074, -0.1278))
         let set = at(try XCTUnwrap(t.sunsetMs), utc)
         // Actual: 20:21 UTC (21:21 BST).
@@ -168,13 +167,9 @@ final class GeoTests: XCTestCase {
         XCTAssertTrue(abs(minutes - (20 * 60 + 21)) <= 5, "sunset was \(set)")
         let rise = at(try XCTUnwrap(t.sunriseMs), utc)
         XCTAssertTrue(abs(rise.hour! * 60 + rise.minute! - (3 * 60 + 43)) <= 5, "sunrise was \(rise)")
-        #else
-        throw XCTSkip(Self.needsSun)
-        #endif
     }
 
     func testLondonSeptemberSunsetAndCivilDusk() throws {
-        #if CORE_PORTS_MERGED
         let times = Sun.times(date(2026, 9, 26), LatLon(51.5074, -0.1278))
         let sunset = try XCTUnwrap(times.sunsetMs)
         let dusk = try XCTUnwrap(times.civilDuskMs)
@@ -183,13 +178,9 @@ final class GeoTests: XCTestCase {
         XCTAssertEqual([2026, 9, 26], localDate(dusk))
         XCTAssertTrue(abs(minutes(sunset) - (18 * 60 + 50)) <= 1, "sunset \(minutes(sunset))")
         XCTAssertTrue(abs(minutes(dusk) - (19 * 60 + 23)) <= 1, "dusk \(minutes(dusk))")
-        #else
-        throw XCTSkip(Self.needsSun)
-        #endif
     }
 
     func testForestOfDeanAndLerwickCivilDusk() throws {
-        #if CORE_PORTS_MERGED
         let forest = Sun.times(date(2026, 9, 26), LatLon(51.78, -2.54))
         XCTAssertTrue(abs(minutes(try XCTUnwrap(forest.sunsetMs)) - (19 * 60 + 2)) <= 4)
         XCTAssertTrue(abs(minutes(try XCTUnwrap(forest.civilDuskMs)) - (19 * 60 + 33)) <= 3)
@@ -204,12 +195,8 @@ final class GeoTests: XCTestCase {
         let lerwickDusk = try XCTUnwrap(lerwick.civilDuskMs)
         XCTAssertEqual([2026, 6, 22], localDate(lerwickDusk))
         XCTAssertTrue(abs(minutes(lerwickDusk) - 26) <= 5)
-        #else
-        throw XCTSkip(Self.needsSun)
-        #endif
     }
 
-    #if CORE_PORTS_MERGED
     private let utc = TimeZone(identifier: "UTC")!
     private let london = TimeZone(identifier: "Europe/London")!
 
@@ -236,9 +223,6 @@ final class GeoTests: XCTestCase {
         let local = at(ms, london)
         return [local.year!, local.month!, local.day!]
     }
-    #else
-    private static let needsSun = "Needs Sun (geo/Sun.kt), which the port/core-stats branch ports: drop the #if once merged"
-    #endif
 
     // Lydney: about 49.2 µT, dipping 66.3°. In east/north/up that is (0, 19.8, -45.1).
     func testMagneticCheckAcceptsTheEarthsFieldFlatOrUpright() {

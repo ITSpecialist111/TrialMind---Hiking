@@ -12,8 +12,8 @@ struct OsGridRef: Hashable {
         guard let letters = OsGrid.letters(easting, northing) else { return nil }
         let per = (digits / 2).clamped(1, 5)
         let div = pow(10.0, Double(5 - per))
-        let e = Int(floor(easting.truncatingRemainder(dividingBy: 100_000) / div))
-        let n = Int(floor(northing.truncatingRemainder(dividingBy: 100_000) / div))
+        let e = kTruncate(floor(easting.truncatingRemainder(dividingBy: 100_000) / div))
+        let n = kTruncate(floor(northing.truncatingRemainder(dividingBy: 100_000) / div))
         return "\(letters) \(String(e).padStart(per, "0")) \(String(n).padStart(per, "0"))"
     }
 }
@@ -155,8 +155,8 @@ enum OsGrid {
 
     /// Two-letter 100 km square for an easting/northing, or nil outside the grid.
     static func letters(_ easting: Double, _ northing: Double) -> String? {
-        let e100k = Int(floor(easting / 100_000))
-        let n100k = Int(floor(northing / 100_000))
+        let e100k = kTruncate(floor(easting / 100_000))
+        let n100k = kTruncate(floor(northing / 100_000))
         if e100k < 0 || e100k > 6 || n100k < 0 || n100k > 12 { return nil }
         var l1 = (19 - n100k) - (19 - n100k) % 5 + (e100k + 10) / 5
         var l2 = (19 - n100k) * 5 % 25 + e100k % 5
