@@ -43,7 +43,6 @@ struct MapScreen: View {
                     statusChips
                     GuidanceCard()
                     GoToCard()
-                    PlannerCard()
                     RecoverCard()
                 }
                 .frame(width: max(0, area.width - 76), alignment: .topLeading)
@@ -53,9 +52,10 @@ struct MapScreen: View {
                 toolCapsule
                     .offset(x: area.maxX - 56, y: area.minY + 8)
 
-                // Foot: record bar above credits and scale.
+                // Foot: the planner or record bar above credits and scale (Android puts both at the bottom).
                 VStack(alignment: .leading, spacing: 8) {
                     Spacer(minLength: 0)
+                    PlannerCard()
                     RecordBar()
                     HStack(alignment: .bottom, spacing: 8) {
                         credits
@@ -153,11 +153,15 @@ struct MapScreen: View {
         Button { AppModel.shared.info("Map data", creditsText(source)) } label: {
             HStack(alignment: .center, spacing: 6) {
                 if source.showsOsLogo, let logo = OSLogo.image { Image(uiImage: logo).accessibilityLabel("Ordnance Survey") }
-                Text(source.appleMap ? "Apple Maps" : source.attribution)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(p.onSurface)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mainCredit(source))
+                    // TileMapView.drawScaleAndAttribution: the overlays' credits under the map's own.
+                    ForEach(overlayCredits, id: \.self) { Text($0) }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(p.onSurface)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -166,13 +170,34 @@ struct MapScreen: View {
         .buttonStyle(.plain)
     }
 
+    private var facilitiesShown: Bool { !(map.pins["facilities"] ?? []).isEmpty }
+
+    private func mainCredit(_ s: TileSource) -> String {
+        let base = s.appleMap ? "Apple Maps" : s.attribution
+        return base + (facilitiesShown && map.zoom >= 13 ? " · Facilities: © OpenStreetMap contributors" : "")
+    }
+
+    private var overlayCredits: [String] {
+        var lines: [String] = []
+        if let old = TileSources.historic().first(where: { $0.id == prefs.historicOverlayId }), !prefs.mapTilerKey.isEmpty {
+            lines.append(old.attribution)
+        }
+        if prefs.showSteepGround && map.zoom >= TerrainSource.steepMinZoom { lines.append(TerrainSource.credit) }
+        if prefs.showLidar && map.zoom >= LidarSource.minZoom { lines.append(LidarSource.credit) }
+        return lines
+    }
+
     private func creditsText(_ s: TileSource) -> String {
         var lines = [s.attribution]
         if s.showsOsLogo { lines.append("OS terms: \(TileSources.osTermsURL)\nReport an error: \(TileSources.osErrorsURL)") }
         if s.id == TileSources.osm { lines.append("Licence: \(TileSources.osmCopyrightURL)\nFix the map: \(TileSources.osmFixTheMapURL)") }
         if let old = TileSources.historic().first(where: { $0.id == prefs.historicOverlayId }) {
-            lines.append(old.attribution + "\n" + TileSources.nlsMapsURL)
+            lines.append(old.attribution + "\n" + TileSources.nlsMapsURL +
+                         "\nScanned and georeferenced: features may sit a little off their true position.")
         }
+        if facilitiesShown { lines.append(Overpass.attribution) }
+        if prefs.showSteepGround { lines.append(TerrainSource.credit) }
+        if prefs.showLidar { lines.append(LidarSource.credit) }
         return lines.joined(separator: "\n\n")
     }
 }
