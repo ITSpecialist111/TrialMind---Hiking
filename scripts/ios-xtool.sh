@@ -42,8 +42,9 @@ die() { echo "error: $*" >&2; exit 1; }
 need_linux() { [[ "$(uname -s)" == Linux ]] || die "run this inside Linux or WSL (see docs/iphone-development.md)"; }
 
 # A project on /mnt/c is very slow for SwiftPM and loses Unix permissions, so build from a Linux-side copy.
+# TM_BUILD_DIR lets several checkouts (git worktrees) build side by side without sharing a copy.
 sync_ios() {
-  local dest="$HOME/trailmind-ios"
+  local dest="${TM_BUILD_DIR:-$HOME/trailmind-ios}"
   if [[ "$IOS_DIR" == /mnt/* ]]; then
     mkdir -p "$dest"
     rsync -a --delete --exclude .build --exclude xtool --exclude .bsp --exclude Generated \
@@ -132,19 +133,30 @@ pmd3_python313() {
 cmd_test() {
   need_linux
   command -v swift >/dev/null || die "swift not found; run setup first"
-  local tmp; tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/Sources/TrailMind" "$tmp/Tests/TrailMindTests"
-  cp "$IOS_DIR/TrailMind/LocationText.swift" "$IOS_DIR/TrailMind/MapLayer.swift" "$tmp/Sources/TrailMind/"
-  cp "$IOS_DIR/TrailMindTests/LocationTextTests.swift" "$IOS_DIR/TrailMindTests/MapLayerTests.swift" "$tmp/Tests/TrailMindTests/"
-  cat > "$tmp/Package.swift" <<'EOF'
+  # A persistent directory keeps SwiftPM's build and the swift-crypto checkout between runs; TM_TEST_DIR keeps
+  # parallel checkouts apart.
+  local dir="${TM_TEST_DIR:-$HOME/trailmind-tests}"
+  mkdir -p "$dir/Sources/TrailMind" "$dir/Tests/TrailMindTests"
+  # Only the Foundation-only code in TrailMind/Core builds on Linux, so the tests may use nothing else.
+  rsync -a --delete "$IOS_DIR/TrailMind/Core/" "$dir/Sources/TrailMind/Core/"
+  rsync -a --delete "$IOS_DIR/TrailMindTests/" "$dir/Tests/TrailMindTests/"
+  local resources=""
+  [[ -d "$dir/Tests/TrailMindTests/Fixtures" ]] && resources=', resources: [.copy("Fixtures")]'
+  # CryptoKit is Apple-only; swift-crypto is the same API on Linux (Core imports whichever exists).
+  cat > "$dir/Package.swift.new" <<EOF
 // swift-tools-version: 6.0
 import PackageDescription
 let package = Package(name: "TrailMind",
-  targets: [.target(name: "TrailMind"), .testTarget(name: "TrailMindTests", dependencies: ["TrailMind"])],
+  dependencies: [.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0")],
+  targets: [
+    .target(name: "TrailMind", dependencies: [.product(name: "Crypto", package: "swift-crypto")]),
+    .testTarget(name: "TrailMindTests", dependencies: ["TrailMind"]$resources),
+  ],
   swiftLanguageModes: [.v5])
 EOF
-  (cd "$tmp" && swift test)
+  cmp -s "$dir/Package.swift.new" "$dir/Package.swift" || mv "$dir/Package.swift.new" "$dir/Package.swift"
+  rm -f "$dir/Package.swift.new"
+  (cd "$dir" && swift test ${1:+--filter "$1"})
 }
 
 xtool_env() {
