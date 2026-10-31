@@ -457,7 +457,8 @@ struct ActionRow<Content: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: spacing) { content() }
+            // Side by side only when every label fits on one line; otherwise stacked (wrapped labels look broken).
+            HStack(spacing: spacing) { content() }.fixedSize(horizontal: true, vertical: false)
             VStack(alignment: .leading, spacing: spacing) { content() }
         }
     }
