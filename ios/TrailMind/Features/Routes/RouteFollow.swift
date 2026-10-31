@@ -70,12 +70,17 @@ final class RouteFollow: ObservableObject {
         Prefs.shared.activeRouteId = -1
     }
 
-    /// Follows the route if need be, then centres the map on a point of it.
-    func show(_ routeId: Int64, at point: LatLon, zoom: Double) {
+    /// Follows the route if need be, then centres the map on a point of it; `then` runs once the route is on the map.
+    func show(_ routeId: Int64, at point: LatLon, zoom: Double, then: (() -> Void)? = nil) {
         if isFollowing(routeId) {
+            then?()
             RouteMap.centerOn(point, zoom: zoom)
         } else {
-            follow(routeId) { if $0 != nil { RouteMap.centerOn(point, zoom: zoom) } }
+            follow(routeId) {
+                guard $0 != nil else { return }
+                then?()
+                RouteMap.centerOn(point, zoom: zoom)
+            }
         }
     }
 

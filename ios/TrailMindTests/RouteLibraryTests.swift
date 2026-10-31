@@ -173,7 +173,7 @@ final class RouteLibraryTextTests: XCTestCase {
 
     func testWaypointLine() {
         let w = Waypoint(lat: 54.527, lon: -3.0165, name: "Helvellyn", ele: 950, description: "Summit shelter")
-        XCTAssertEqual(RouteText.waypointDetail(w, imperial: false), "\(OsGrid.fromWgs84(w.latLon())!.format(6)) · 950 m · Summit shelter")
+        XCTAssertEqual(RouteText.waypointDetail(w, imperial: false), "\(OsGrid.fromWgs84(w.latLon())!.format(6)!) · 950 m · Summit shelter")
         let abroad = Waypoint(lat: 45.8326, lon: 6.8652, name: "Mont Blanc")
         XCTAssertEqual(RouteText.waypointDetail(abroad, imperial: false), Units.latLon(45.8326, 6.8652))
     }

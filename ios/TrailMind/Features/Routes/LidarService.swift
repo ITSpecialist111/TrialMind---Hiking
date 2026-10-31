@@ -98,18 +98,17 @@ final class LidarService {
         if write(file, bytes) { _ = lock.withLock { saved.insert(square) } }
         remember(square, values)
         // Neighbours shaded before this square arrived repeated their own edge: shade them again with its heights.
-        var any = false
         for dy in -1...1 {
             for dx in -1...1 {
                 let near = Lidar.Square(square.col + dx, square.row + dy)
                 cragsCache.removeObject(forKey: Self.name(near))
                 if near != square, shades.object(forKey: Self.name(near)) != nil {
                     _ = lock.withLock { stale.insert(near) }
-                    any = true
                 }
             }
         }
-        if any { DispatchQueue.main.async { self.onStale?() } }
+        // The map may have drawn this place without it (zoomed out, or before the download): draw it again.
+        DispatchQueue.main.async { self.onStale?() }
         return values
     }
 
@@ -175,21 +174,27 @@ final class LidarService {
 
     // MARK: Shading
 
-    /// The square's shading for the map, built if need be: nil while its heights are unavailable or where LiDAR has
-    /// no data.
-    func shade(_ square: Lidar.Square, allowNetwork: Bool) -> CGImage? {
+    /// The square's shading for the map, built if need be: no image where LiDAR has no data or while its heights are
+    /// unavailable, and `missing` in that last case (the square isn't on the phone and couldn't be fetched).
+    func shade(_ square: Lidar.Square, allowNetwork: Bool) -> (image: CGImage?, missing: Bool) {
         let isStale = lock.withLock { stale.contains(square) }
-        if !isStale, let cached = shades.object(forKey: Self.name(square)) { return cached.image }
-        if !square.inExtent { return nil }
-        if lock.withLock({ (retryAt[square] ?? 0) > nowMs() }) { return shades.object(forKey: Self.name(square))?.image }
+        if !isStale, let cached = shades.object(forKey: Self.name(square)) { return (cached.image, false) }
+        if !square.inExtent { return (nil, false) }
+        if lock.withLock({ (retryAt[square] ?? 0) > nowMs() }) {
+            let old = shades.object(forKey: Self.name(square))
+            return (old?.image, old == nil)
+        }
         _ = lock.withLock { stale.remove(square) }
         guard let centre = heights(square, allowNetwork: allowNetwork) else {
             if allowNetwork { lock.withLock { retryAt[square] = nowMs() + LidarSource.retryMs } }
-            return shades.object(forKey: Self.name(square))?.image
+            // The old shading on screen still lacks its neighbour's edge until a rebuild succeeds.
+            if isStale { _ = lock.withLock { stale.insert(square) } }
+            let old = shades.object(forKey: Self.name(square))
+            return (old?.image, old == nil)
         }
         if centre.isEmpty {
             shades.setObject(Shade(nil), forKey: Self.name(square))
-            return nil
+            return (nil, false)
         }
         let p = padded(square, centre)
         // Always worked out afresh: a cached mask may predate a neighbour that has just arrived.
@@ -198,7 +203,7 @@ final class LidarService {
         let image = RouteImages.image(argb: Lidar.overlay(p, mask), width: Lidar.size, height: Lidar.size)
         shades.setObject(Shade(image), forKey: Self.name(square))
         lock.withLock { retryAt[square] = nil }
-        return image
+        return (image, false)
     }
 
     // MARK: Files
@@ -263,7 +268,8 @@ final class LidarService {
 
 /// 1 m LiDAR hill shading and crags over the map (TileMapView.drawLidar). Squares already on the phone show from
 /// zoom 15; missing ones are downloaded only from zoom 17, where a screen needs a few megabytes, not tens. Each square is
-/// drawn through its own corners on the National Grid, edge to edge, so translucent shading never doubles up.
+/// drawn through its own corners on the National Grid, edge to edge, so translucent shading never doubles up. Where
+/// there is nothing to shade it answers with a transparent tile, never with no data, so MapKit doesn't keep asking.
 final class LidarOverlay: MKTileOverlay {
     static let showZoom = 15
     static let fetchZoom = 17
@@ -279,7 +285,7 @@ final class LidarOverlay: MKTileOverlay {
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
-        guard path.z >= Self.showZoom else { return result(nil, nil) }
+        guard path.z >= Self.showZoom else { return result(EmptyTile.data, nil) }
         TerrainService.overlayQueue.addOperation { [lidar] in
             let z = Double(path.z)
             let x0 = Double(path.x) * 256
@@ -293,10 +299,20 @@ final class LidarOverlay: MKTileOverlay {
                     minN = min(minN, g.northing); maxN = max(maxN, g.northing)
                 }
             }
-            guard let squares = Lidar.box(minE, minN, maxE, maxN, LidarSource.maxVisible), !squares.isEmpty else { return result(nil, nil) }
+            guard let squares = Lidar.box(minE, minN, maxE, maxN, LidarSource.maxVisible), !squares.isEmpty else {
+                return result(EmptyTile.data, nil)
+            }
             let fetch = path.z >= Self.fetchZoom && RouteNetwork.shared.networkAllowed
-            let shaded = squares.compactMap { s in lidar.shade(s, allowNetwork: fetch).map { (s, $0) } }
-            guard !shaded.isEmpty else { return result(nil, nil) }
+            var shaded: [(Lidar.Square, CGImage)] = []
+            var missing = false
+            for s in squares {
+                let shade = lidar.shade(s, allowNetwork: fetch)
+                if let image = shade.image { shaded.append((s, image)) }
+                missing = missing || shade.missing
+            }
+            // A square that couldn't be fetched is tried again after a while, as on Android.
+            if missing && fetch { TerrainOverlays.shared.retryLater(TerrainOverlays.lidarId) }
+            guard !shaded.isEmpty else { return result(EmptyTile.data, nil) }
             let pixels = 512
             let scale = Double(pixels) / 256
             func point(_ e: Int, _ n: Int) -> CGPoint {
@@ -320,7 +336,7 @@ final class LidarOverlay: MKTileOverlay {
                     cg.restoreGState()
                 }
             }
-            result(data, nil)
+            result(data ?? EmptyTile.data, nil)
         }
     }
 }

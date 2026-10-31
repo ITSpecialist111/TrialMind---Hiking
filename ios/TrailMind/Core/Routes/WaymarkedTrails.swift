@@ -116,7 +116,7 @@ enum WaymarkedTrails {
         let lengthM = route.optDouble("length", 0.0)
         var pieces: [[TrackPoint]] = []
         try collect(route, heights, &pieces)
-        let points = join(pieces, ordered: route.optString("linear") != "no")
+        let points = PathJoin.join(pieces, ordered: route.optString("linear") != "no")
         guard points.count >= 2 else { throw NoLine() }
         let name = details.optString("name")
         return Download(name: name.isBlank ? trail.name : name, points: points, lengthM: lengthM,
@@ -178,50 +178,4 @@ enum WaymarkedTrails {
     private static func objects(_ array: [RoutesJSON.Value]?) -> [RoutesJSON.Value] {
         (array ?? []).filter { $0.objectValue != nil }
     }
-
-    // MARK: Joining pieces
-
-    /// Joins the pieces of a route (the sections of an OpenStreetMap route relation) into one line, as core
-    /// `PathJoin` does: a piece is flipped when that puts its start nearer to where the line so far ends; when
-    /// `ordered` is false the pieces are also chained nearest-end-first, because relations with gaps list their
-    /// sections in no particular order.
-    static func join(_ pieces: [[TrackPoint]], ordered: Bool = true) -> [TrackPoint] {
-        var todo = pieces.filter { !$0.isEmpty }
-        if todo.isEmpty { return [] }
-        var out: [TrackPoint] = []
-        var first = todo.removeFirst()
-        if let next = todo.first {
-            let fromStart = min(d(first[0], next[0]), d(first[0], next[next.count - 1]))
-            let fromEnd = min(d(first[first.count - 1], next[0]), d(first[first.count - 1], next[next.count - 1]))
-            if fromStart < fromEnd { first = first.reversed() }
-        }
-        append(&out, first)
-        while !todo.isEmpty {
-            let end = out[out.count - 1]
-            let i = ordered ? 0 : nearest(todo, end)
-            let piece = todo.remove(at: i)
-            append(&out, d(end, piece[piece.count - 1]) < d(end, piece[0]) ? piece.reversed() : piece)
-        }
-        return out
-    }
-
-    /// The piece with an end nearest `end`; the first such piece on a tie, as Kotlin's `minBy`.
-    private static func nearest(_ todo: [[TrackPoint]], _ end: TrackPoint) -> Int {
-        var best = 0
-        var bestDistance = Double.infinity
-        for (i, piece) in todo.enumerated() {
-            let distance = min(d(end, piece[0]), d(end, piece[piece.count - 1]))
-            if i == 0 || distance < bestDistance {
-                best = i
-                bestDistance = distance
-            }
-        }
-        return best
-    }
-
-    private static func append(_ out: inout [TrackPoint], _ piece: [TrackPoint]) {
-        for p in piece where out.isEmpty || d(out[out.count - 1], p) > 0.5 { out.append(p) }
-    }
-
-    private static func d(_ a: TrackPoint, _ b: TrackPoint) -> Double { Geo.distanceM(a.lat, a.lon, b.lat, b.lon) }
 }

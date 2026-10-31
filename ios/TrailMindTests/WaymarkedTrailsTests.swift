@@ -104,21 +104,4 @@ final class WaymarkedTrailsTests: XCTestCase {
         }
         XCTAssertThrowsError(try WaymarkedTrails.download(details: RoutesJSON.parse("{}"), heights: nil, trail: trail()))
     }
-
-    /// GeoTest.pathJoinOrientsAndChainsPieces, on the copy of core PathJoin that Waymarked Trails downloads use.
-    func testPathJoinOrientsAndChainsPieces() {
-        func pt(_ lon: Double) -> TrackPoint { TrackPoint(lat: 54.0, lon: lon) }
-        let a = [pt(0.000), pt(0.001)]
-        let bReversed = [pt(0.003), pt(0.002), pt(0.001)]
-        XCTAssertEqual(WaymarkedTrails.join([a, bReversed]).map(\.lon), [0.000, 0.001, 0.002, 0.003])
-        // A first piece stored backwards is flipped so the line does not start with a jump.
-        XCTAssertEqual(WaymarkedTrails.join([Array(a.reversed()), [pt(0.002), pt(0.003)]]).map(\.lon), [0.000, 0.001, 0.002, 0.003])
-        // Unordered sections are chained nearest end first.
-        let far = [pt(0.010), pt(0.011)]
-        let near = [pt(0.002), pt(0.003)]
-        XCTAssertEqual(WaymarkedTrails.join([a, far, near], ordered: false).map(\.lon), [0.000, 0.001, 0.002, 0.003, 0.010, 0.011])
-        // Ordered sections keep their order and are only flipped.
-        XCTAssertEqual(WaymarkedTrails.join([a, far, near]).map(\.lon), [0.000, 0.001, 0.010, 0.011, 0.003, 0.002])
-        XCTAssertEqual(WaymarkedTrails.join([[], []]), [])
-    }
 }

@@ -10,4 +10,7 @@ extension FeatureHooks {
     /// route name, planning minutes, route id, and a callback once it changed. Without it the route page opens the
     /// check-in (`openCheckIn`) or the Safety tab.
     static var checkInForRoute: ((String, Double, Int64, @escaping () -> Void) -> Void)?
+    /// Safety: clear the check-in, cancelling its reminders (Android's `CheckIn.clear`), when its route is deleted.
+    /// Without it the route page clears the check-in settings itself.
+    static var clearCheckIn: (() -> Void)?
 }

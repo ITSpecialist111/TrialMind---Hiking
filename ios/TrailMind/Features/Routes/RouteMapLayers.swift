@@ -4,6 +4,7 @@ import UIKit
 
 /// Steep ground and 1 m LiDAR shading over the map while Map layers or Settings turn them on (TileMapView's
 /// showSteepGround and showLidar), drawn as MapKit tile overlays above the base map: LiDAR first, steep ground on top.
+/// MapKit keeps the tile it was given, so a tile drawn before its data arrived is asked for again once it may have come.
 final class TerrainOverlays {
     static let shared = TerrainOverlays()
     static let steepId = "steep-ground"
@@ -12,13 +13,14 @@ final class TerrainOverlays {
     private var steep: SteepGroundOverlay?
     private var lidar: LidarOverlay?
     private var started = false
-    private var staleWork: DispatchWorkItem?
+    private var reloads: [String: DispatchWorkItem] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     func start() {
         guard !started else { return }
         started = true
-        LidarService.shared.onStale = { [weak self] in self?.lidarStale() }
+        // Squares that arrived change shading already drawn: draw the layer again once the downloads settle.
+        LidarService.shared.onStale = { [weak self] in self?.reloadSoon(Self.lidarId, after: 1.5, restart: true) }
         Prefs.shared.$showSteepGround.combineLatest(Prefs.shared.$showLidar)
             .dropFirst()
             .removeDuplicates { $0 == $1 }
@@ -54,18 +56,33 @@ final class TerrainOverlays {
         }
     }
 
-    /// Squares that arrived change the edges of shading already drawn beside them: draw the layer again once the
-    /// downloads settle (a new overlay makes MapKit ask for its tiles afresh; the shading itself is cached).
-    private func lidarStale() {
-        staleWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, Prefs.shared.showLidar, self.lidar != nil else { return }
-            let overlay = LidarOverlay(lidar: LidarService.shared)
-            self.lidar = overlay
-            MapController.shared.setTileOverlay(Self.lidarId, overlay, alpha: 1, order: 1)
+    /// A tile went without data for a reason that may pass (no signal, a busy server): ask again in 30 seconds, as the
+    /// Android map retries a missing tile on its next redraw after that. Any thread.
+    func retryLater(_ id: String) { reloadSoon(id, after: 30, restart: false) }
+
+    /// Reloads a layer's tiles after `delay`; `restart` waits for things to settle, else the earliest reload stands.
+    private func reloadSoon(_ id: String, after delay: TimeInterval, restart: Bool) {
+        DispatchQueue.main.async {
+            if let pending = self.reloads[id] {
+                if !restart { return }
+                pending.cancel()
+            }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.reloads[id] = nil
+                self.reload(id)
+            }
+            self.reloads[id] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
-        staleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    private func reload(_ id: String) {
+        let overlay: MKTileOverlay? = id == Self.lidarId ? lidar : steep
+        guard let overlay, let map = MapController.shared.mapView else { return }
+        // In the background the map isn't drawn; try again later rather than fetch for nobody.
+        guard UIApplication.shared.applicationState == .active else { return retryLater(id) }
+        (map.renderer(for: overlay) as? MKTileOverlayRenderer)?.reloadData()
     }
 }
 

@@ -58,6 +58,9 @@ final class RouteDetailModel: ObservableObject {
     /// Notifications allowed (nil until known), and Location Services switched on.
     @Published private(set) var alertsAllowed: Bool? = nil
     @Published private(set) var locationServicesOn = true
+    /// Battery percentage (-1 when the phone doesn't say) and whether it is charging or full.
+    @Published private(set) var batteryLevel = -1
+    @Published private(set) var charging = false
     let cursor = RouteCursor()
 
     private var loading = false
@@ -65,6 +68,8 @@ final class RouteDetailModel: ObservableObject {
     private var facilityListener: UUID?
     private var estimateKey: PaceSettings?
     private var estimateValue: HikeEstimate?
+    private var highKey: PaceSettings?
+    private var highValue: HighPoint?
 
     init(routeId: Int64) { self.routeId = routeId }
 
@@ -75,6 +80,14 @@ final class RouteDetailModel: ObservableObject {
         estimateKey = pace
         estimateValue = value
         return value
+    }
+
+    /// The route's highest point and when you would get there, for the weather check.
+    func highPoint(_ pace: PaceSettings) -> HighPoint? {
+        if highKey == pace { return highValue }
+        highValue = HikeEstimator.highPoint(data?.points ?? [], pace: pace)
+        highKey = pace
+        return highValue
     }
 
     // MARK: Showing and hiding (Page.onShow / onHide)
@@ -139,6 +152,9 @@ final class RouteDetailModel: ObservableObject {
         if d?.points != data?.points {
             profile = RouteProfileSample.of(d?.points ?? [])
             estimateValue = nil
+            estimateKey = nil
+            highValue = nil
+            highKey = nil
         }
         data = d
     }
@@ -267,8 +283,18 @@ final class RouteDetailModel: ObservableObject {
         }
     }
 
+    /// The battery as the readiness check reads it (Android's battery-changed broadcast). Call on the main queue.
+    func readBattery() {
+        let device = UIDevice.current
+        if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
+        let level = device.batteryLevel
+        batteryLevel = level < 0 ? -1 : Int((Double(level) * 100).rounded())
+        charging = device.batteryState == .charging || device.batteryState == .full
+    }
+
     /// Whether notifications may alert and Location Services are on; asked off the main thread, as iOS wants.
     func refreshDevice() {
+        readBattery()
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             let allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
             DispatchQueue.main.async { self.alertsAllowed = allowed }

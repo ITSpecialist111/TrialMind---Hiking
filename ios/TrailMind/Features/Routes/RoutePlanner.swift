@@ -139,8 +139,8 @@ final class RoutePlanner: ObservableObject {
         if active && !plan.controlPoints.isEmpty {
             // After a moment, so a sheet that asked for this (the long-press menu) has gone first.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                AppModel.shared.confirm("Start a new plan?", "The unsaved plan will be discarded.", ok: "Discard", danger: true) { [weak self] in
-                    self?.begin(at)
+                AppModel.shared.confirm("Start a new plan?", "The unsaved plan will be discarded.", ok: "Discard", danger: true) {
+                    self.begin(at)
                 }
             }
         } else {
@@ -158,8 +158,8 @@ final class RoutePlanner: ObservableObject {
         if plan.controlPoints.isEmpty {
             close()
         } else {
-            AppModel.shared.confirm("Discard this plan?", "The unsaved points will be lost.", ok: "Discard", danger: true) { [weak self] in
-                self?.close()
+            AppModel.shared.confirm("Discard this plan?", "The unsaved points will be lost.", ok: "Discard", danger: true) {
+                self.close()
             }
         }
     }
@@ -174,8 +174,7 @@ final class RoutePlanner: ObservableObject {
     }
 
     private func promptForName(_ initial: String, message: String?) {
-        AppModel.shared.prompt("Save route", initial: initial, hint: "Route name", message: message, ok: "Save") { [weak self] title in
-            guard let self else { return }
+        AppModel.shared.prompt("Save route", initial: initial, hint: "Route name", message: message, ok: "Save") { title in
             if title.isEmpty {
                 // Android keeps its dialog open with the error under the box; an alert closes, so ask again.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.promptForName("", message: "Give the walk a name.") }

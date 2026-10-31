@@ -167,7 +167,8 @@ final class TerrainService {
 }
 
 /// Steep ground (25° and steeper) shaded over the map from zoom 13 (TileMapView.drawSteepGround): each requested
-/// tile is cut from the zoom-13 slope tile above it and enlarged.
+/// tile is cut from the zoom-13 slope tile above it and enlarged. Where there is nothing to shade yet it answers with a
+/// transparent tile, never with no data, so MapKit doesn't keep asking.
 final class SteepGroundOverlay: MKTileOverlay {
     private let terrain: TerrainService
 
@@ -181,11 +182,15 @@ final class SteepGroundOverlay: MKTileOverlay {
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
-        guard path.z >= Terrain.zoom else { return result(nil, nil) }
+        guard path.z >= Terrain.zoom else { return result(EmptyTile.data, nil) }
         TerrainService.overlayQueue.addOperation { [terrain] in
             let dz = path.z - Terrain.zoom
             let parent = TileKey(Terrain.zoom, path.x >> dz, path.y >> dz)
-            guard let slope = terrain.slopeTile(parent) else { return result(nil, nil) }
+            guard let slope = terrain.slopeTile(parent) else {
+                // Its heights aren't on the phone: with signal they may come, so ask again then.
+                if RouteNetwork.shared.networkAllowed { TerrainOverlays.shared.retryLater(TerrainOverlays.steepId) }
+                return result(EmptyTile.data, nil)
+            }
             let n = 1 << dz
             let part = Double(Terrain.tileSize) / Double(n)
             let crop = CGRect(x: Double(path.x - parent.x * n) * part, y: Double(path.y - parent.y * n) * part, width: part, height: part)
@@ -197,7 +202,7 @@ final class SteepGroundOverlay: MKTileOverlay {
                                   height: Double(Terrain.tileSize) * scale)
                 UIImage(cgImage: slope).draw(in: rect)
             }
-            result(data, nil)
+            result(data ?? EmptyTile.data, nil)
         }
     }
 }
