@@ -24,8 +24,15 @@ final class TileLoader {
     private let lock = NSLock()
     private var premiumDeniedIds = Set<String>()
     private var retryAfter: [String: Date] = [:]
-    /// Called on the main queue when the OS project refuses Premium, or a key is rejected.
+    private var lastErrorValue: String?
+    /// Called on the main queue when the OS project refuses Premium (with the map's name), or a key is rejected.
     var onProblem: ((String) -> Void)?
+    /// Called on the main queue with the latest `lastError` whenever it changes.
+    var onErrorChanged: ((String?) -> Void)?
+    /// Called on the main queue, 30 seconds after tiles failed for a reason that may pass (no signal, a busy server),
+    /// at most once per 30 seconds: the map reloads its layers, as MapKit doesn't ask again for a tile it was given.
+    var onRetryDue: (() -> Void)?
+    private var retryScheduled = false
 
     init() {
         let config = URLSessionConfiguration.default
@@ -39,7 +46,39 @@ final class TileLoader {
 
     func premiumDenied(_ source: TileSource) -> Bool { lock.withLock { premiumDeniedIds.contains(source.id) } }
 
-    func clearErrors() { lock.withLock { premiumDeniedIds.removeAll(); retryAfter.removeAll() } }
+    func clearErrors() {
+        lock.withLock { premiumDeniedIds.removeAll(); retryAfter.removeAll() }
+        setError(nil)
+    }
+
+    /// The last problem fetching tiles (TileProvider.lastError), shown on the map; the next tile that loads clears it.
+    var lastError: String? { lock.withLock { lastErrorValue } }
+
+    /// Forgets the last problem (another map was chosen).
+    func clearLastError() { setError(nil) }
+
+    private func setError(_ message: String?) {
+        let changed: Bool = lock.withLock {
+            guard lastErrorValue != message else { return false }
+            lastErrorValue = message
+            return true
+        }
+        if changed { DispatchQueue.main.async { self.onErrorChanged?(self.lastError) } }
+    }
+
+    /// Android retries a failed tile after 30 s; MapKit needs telling, so ask the map to reload then.
+    private func scheduleRetry() {
+        let first: Bool = lock.withLock {
+            guard !retryScheduled else { return false }
+            retryScheduled = true
+            return true
+        }
+        guard first else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            self.lock.withLock { self.retryScheduled = false }
+            self.onRetryDue?()
+        }
+    }
 
     func apiKey(for source: TileSource) -> String? {
         guard source.requiresKey else { return nil }
@@ -76,11 +115,18 @@ final class TileLoader {
         }
         if premium, age != Int64.max { try? FileManager.default.removeItem(at: file) }
         let netAllowed = allowNetwork && !Prefs.shared.offlineOnly
+        if netAllowed, source.requiresKey, apiKey(for: source) == nil {
+            setError("Add your \(source.keyKind.label) in Settings to load \(source.name).")
+            return completion(!premium ? (try? Data(contentsOf: file)) : nil)
+        }
         guard netAllowed, let url = source.url(key, apiKey: apiKey(for: source)) else {
             return completion(!premium ? (try? Data(contentsOf: file)) : nil)
         }
         let retryKey = "\(source.id)/\(key)"
-        if let until = lock.withLock({ retryAfter[retryKey] }), until > Date() { return completion(nil) }
+        if let until = lock.withLock({ retryAfter[retryKey] }), until > Date() {
+            scheduleRetry()
+            return completion(!premium ? (try? Data(contentsOf: file)) : nil)
+        }
         var request = URLRequest(url: url)
         request.setValue(TileLoader.userAgent, forHTTPHeaderField: "User-Agent")
         if !premium, age != Int64.max, let m = modifiedMs(file) {
@@ -92,27 +138,40 @@ final class TileLoader {
         }
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return completion(nil) }
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            DuoLog.tiles.debug("fetch \(source.id, privacy: .public) \(key.z)/\(key.x)/\(key.y) status \(status) bytes \(data?.count ?? -1) error \((error as NSError?)?.code ?? 0)")
+            // OSM serves its "Access blocked" image with HTTP 200; it must never be cached as a tile.
+            if http?.value(forHTTPHeaderField: "x-blocked") != nil {
+                self.setError("\(source.name): the tile server blocked this app. Try another map source.")
+                return completion(!premium ? (try? Data(contentsOf: file)) : nil)
+            }
             if status == 200, let data, !data.isEmpty {
+                self.setError(nil)
                 try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? data.write(to: file, options: .atomic)
                 return completion(data)
             }
             if status == 304 {
+                self.setError(nil)
                 try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
                 return completion(try? Data(contentsOf: file))
             }
             if premium && (status == 401 || status == 403) {
                 let first = self.lock.withLock { self.premiumDeniedIds.insert(source.id).inserted }
-                if first { DispatchQueue.main.async { Prefs.shared.osPremium = false; self.onProblem?("premium") } }
+                if first { DispatchQueue.main.async { Prefs.shared.osPremium = false; self.onProblem?("premium:\(source.name)") } }
                 if let from = source.premiumFromZoom, from - 1 >= source.minZoom {
                     return self.enlarged(source, key, fromZoom: from - 1, allowNetwork: allowNetwork, completion: completion)
                 }
                 return completion(nil)
             }
-            if status == 401 || status == 403 { DispatchQueue.main.async { self.onProblem?("key:\(source.keyKind.rawValue)") } }
+            if status == 401 || status == 403 {
+                self.setError("\(source.name): access denied (HTTP \(status)). Check your API key/plan.")
+            }
+            if status == 429 { self.setError("\(source.name): rate limited (HTTP 429). Slow down or try later.") }
             if error != nil || status == 429 || status >= 500 {
                 self.lock.withLock { self.retryAfter[retryKey] = Date().addingTimeInterval(30) }
+                self.scheduleRetry()
             }
             if premium, status == 200 { DispatchQueue.main.async { Prefs.shared.osPremium = true } }
             completion(!premium ? (try? Data(contentsOf: file)) : nil)
