@@ -43,6 +43,13 @@ final class OfflineNotifications: NSObject, UNUserNotificationCenterDelegate {
         center.getNotificationCategories { existing in
             self.center.setNotificationCategories(existing.filter { !ids.contains($0.identifier) }.union(mine))
         }
+        // Other features merge their categories at launch too; if one wrote over these meanwhile, add them again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            self.center.getNotificationCategories { existing in
+                guard !ids.isSubset(of: Set(existing.map(\.identifier))) else { return }
+                self.center.setNotificationCategories(existing.filter { !ids.contains($0.identifier) }.union(mine))
+            }
+        }
     }
 
     /// Asks once for permission to notify (Android's requestNotificationPermissionIfNeeded before a download).
