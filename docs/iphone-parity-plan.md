@@ -22,8 +22,14 @@ the iOS 27.1 SDK and Apple's iPhone Duo documentation. Status is tracked at the 
 |---|---|---|
 | Panel | 1398×2034 px at 3× (466×678 pt), about 5.4″ | 1878×2670 px at 3× (626×890 pt), about 7.6″ |
 | TrailMind layout | narrow: capsule standing on the vertical-bar edge | wide: rail and side pane (portrait and landscape) |
-| Landscape, open | | window 951×669 pt; status bar stands on the trailing edge (safe area right 84 pt, bottom 34 pt) |
-| Fold | | a 40 pt division region down the middle (x 455), active only when partly folded |
+| Landscape, open | | window 951×669 pt; status bar stands on the trailing edge (safe area right 84 pt, bottom 34 pt); the top of that column (84×124 pt) is reserved |
+| Portrait, open | | window 669×951 pt; bars horizontal again (safe area top 82 pt for the camera area, bottom 34 pt) |
+| Fold | | a 40 pt division region down the middle, active only when partly folded: in landscape it splits left and right (book, x 455), in portrait top and bottom (tabletop, y 455) |
+
+Seen on the device: folding to about 108° in landscape switches TrailMind to the book layout (menu on the
+vertical-bar side of the fold, map on the other); turning it to portrait while folded switches to tabletop (map above
+the fold, pages and the navigation capsule below); unfolding returns to the rail and pane. The status bar frame iOS
+reports is a 2 pt strip even when the bar stands vertically, so layouts rely on the safe area instead.
 
 The device's screens, logs and app launches can be driven from Windows/WSL (see
 [iphone-development.md](iphone-development.md#testing-on-iphone-duo-from-windows)), which is how these were measured.
@@ -88,7 +94,7 @@ All iOS 27.1 calls are behind `#available(iOS 27.1, *)`; on other iPhones the la
 | Area | State |
 |---|---|
 | Core library | Ported with its tests; all pass on Linux (`ios-xtool.sh test`). |
-| Shell, design system, iPhone Duo layouts | Done. Layout rules unit-tested (phone, Duo cover display, flat, book, tabletop). On iPhone Duo: no compatibility mode, the app fills the inner display and keeps clear of the vertical status bar. Book, tabletop and cover-display poses still to be tried on the device. |
+| Shell, design system, iPhone Duo layouts | Done. Layout rules unit-tested (phone, Duo cover display, flat, book, tabletop). On iPhone Duo: no compatibility mode, the app fills the inner display and keeps clear of the vertical status bar; flat (landscape and portrait), book and tabletop poses switch layouts as designed. The closed cover display is still to be tried on the device. |
 | Map | Done: OS layers including Explorer & Landranger (BNG), OpenStreetMap, Apple Maps underneath where a layer has nothing, Android's map hints, heading-up, centring in the uncovered map area (checked on an iPhone 12 in both layouts), an idle map that doesn't redraw. |
 | Hikes | Done: recording, recovery, guidance, library and detail pages, map cards, Strava card. |
 | Routes | Done: library, finder, detail with profile and checks, planner, GPX import/export, facilities, terrain and LiDAR. |
