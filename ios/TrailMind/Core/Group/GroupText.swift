@@ -200,6 +200,12 @@ enum GroupText {
         default: return "Their phone couldn't start UWB."
         }
     }
+
+    /// The found phone's notice while `name` finds it with UWB (GroupFinder.notification on Android). It goes up once
+    /// per find, so it doesn't carry the distance; the find page does.
+    static func beingFound(_ name: String) -> (title: String, text: String) {
+        ("\(name) is finding you with UWB", "Tap to see how far away they are. Keep TrailMind open on screen until they reach you.")
+    }
 }
 
 /// `trailmind://group/join?code=…&name=…` invites (GroupPage.inviteLink and inviteText, joinGroupFromLink).

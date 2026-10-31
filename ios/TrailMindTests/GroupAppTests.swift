@@ -277,4 +277,30 @@ final class GroupAppTests: XCTestCase {
             memberId: 1, targetId: 2, kind: RangeFrame.request, nonce: 3, timeS: T, configId: GroupIPhone.configNearbyInteraction
         ))
     }
+
+    func testOneOfEachPairOfIPhonesInvitesFirst() {
+        // Both advertising: only the name that sorts first invites, until the fallback.
+        XCTAssertTrue(GroupPeerInvite.shouldInvite(advertising: true, myName: "1a2b", peerName: "9f", waitedS: 0))
+        XCTAssertFalse(GroupPeerInvite.shouldInvite(advertising: true, myName: "9f", peerName: "1a2b", waitedS: 0))
+        XCTAssertFalse(GroupPeerInvite.shouldInvite(advertising: true, myName: "9f", peerName: "1a2b", waitedS: 11.9))
+        XCTAssertTrue(GroupPeerInvite.shouldInvite(advertising: true, myName: "9f", peerName: "1a2b", waitedS: 12))
+        // Listening only: the advertiser can't see this phone, so it always invites.
+        XCTAssertTrue(GroupPeerInvite.shouldInvite(advertising: false, myName: "9f", peerName: "1a2b", waitedS: 0))
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<500 {
+            let a = String(UInt32.random(in: .min ... .max, using: &generator), radix: 16)
+            let b = String(UInt32.random(in: .min ... .max, using: &generator), radix: 16)
+            if a == b { continue }
+            let first = [GroupPeerInvite.shouldInvite(advertising: true, myName: a, peerName: b, waitedS: 0),
+                         GroupPeerInvite.shouldInvite(advertising: true, myName: b, peerName: a, waitedS: 0)]
+            XCTAssertEqual(1, first.filter { $0 }.count, "\(a) and \(b)")
+        }
+    }
+
+    func testTheBeingFoundNoticeNamesTheFinder() {
+        let notice = GroupText.beingFound("Sam")
+        XCTAssertEqual("Sam is finding you with UWB", notice.title)
+        XCTAssertEqual("Tap to see how far away they are. Keep TrailMind open on screen until they reach you.", notice.text)
+        XCTAssertEqual("Hiker 3F2A is finding you with UWB", GroupText.beingFound(GroupText.name(nil, memberId: 0x3F2A)).title)
+    }
 }

@@ -55,6 +55,17 @@ enum GroupPeerTag {
     }
 }
 
+/// Which of two group iPhones that found each other sends the invitation, so they don't both invite at once: the one
+/// that isn't advertising (the other can't see it), or else the one whose random peer name sorts first. Discovery can
+/// be one-sided for a while, so once `fallbackS` has passed without a connection the other phone invites too.
+enum GroupPeerInvite {
+    static let fallbackS: Double = 12
+
+    static func shouldInvite(advertising: Bool, myName: String, peerName: String, waitedS: Double) -> Bool {
+        !advertising || myName < peerName || waitedS >= fallbackS
+    }
+}
+
 /// A Nearby Interaction discovery token for one UWB find between iPhones, sealed for the group and sent over their
 /// direct link. Each iPhone needs the other's token, which is far bigger than a 30-byte frame, so it travels beside the
 /// find's `RangeFrame`s (asked, answered and stopped in the adverts exactly as on Android) rather than in them.

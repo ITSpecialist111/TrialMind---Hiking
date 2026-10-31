@@ -187,7 +187,7 @@ final class GroupService: ObservableObject {
             } else if !link.running {
                 radio = "Starting…"
             } else if bluetooth.scanning {
-                radio = "Sharing with iPhones, hearing Android phones"
+                radio = "Sharing with iPhones, listening for Android phones"
             } else {
                 radio = "Sharing with iPhones"
             }

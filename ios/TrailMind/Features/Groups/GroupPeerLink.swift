@@ -31,8 +31,6 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
 
     private static let inviteTimeoutS: TimeInterval = 20
     private static let reinviteS: TimeInterval = 30
-    /// After this long without a connection, the other phone of a pair invites too: discovery can be one-sided.
-    private static let fallbackInviteS: TimeInterval = 12
     /// kDNSServiceErr_PolicyDenied: the user turned Local Network off for TrailMind.
     private static let policyDenied: Int32 = -65570
     /// NSNetServicesMissingRequiredConfigurationError: the app's Info.plist lacks the Bonjour service type.
@@ -171,14 +169,14 @@ final class GroupPeerLink: NSObject, MCSessionDelegate, MCNearbyServiceAdvertise
         }
     }
 
-    /// One of each pair invites: the one that isn't advertising, or else the one whose random name sorts first. If no
-    /// connection comes of that within a few seconds (one phone may not have seen the other yet), the other invites too.
+    /// One of each pair invites first (GroupPeerInvite); if no connection comes of that within a few seconds, the other
+    /// invites too.
     private func inviteIfNeeded(_ peer: MCPeerID) {
         guard let session, let browser, let me, !session.connectedPeers.contains(peer) else { return }
         let now = Date()
-        let first = !advertising || me.displayName < peer.displayName
-        let waited = now.timeIntervalSince(foundAt[peer] ?? now) >= GroupPeerLink.fallbackInviteS
-        guard first || waited else { return }
+        let waited = now.timeIntervalSince(foundAt[peer] ?? now)
+        guard GroupPeerInvite.shouldInvite(advertising: advertising, myName: me.displayName, peerName: peer.displayName,
+                                           waitedS: waited) else { return }
         if let at = invitedAt[peer], now.timeIntervalSince(at) < GroupPeerLink.reinviteS { return }
         invitedAt[peer] = now
         browser.invitePeer(peer, to: session, withContext: inviteContext?(), timeout: GroupPeerLink.inviteTimeoutS)

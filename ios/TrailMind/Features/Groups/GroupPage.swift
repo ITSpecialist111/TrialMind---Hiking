@@ -122,6 +122,9 @@ struct GroupPage: View {
                 .font(.system(.title2, design: .monospaced))
                 .tracking(1.8)
                 .foregroundStyle(p.onSurface)
+                // One line even in the narrow side pane, where it shrinks rather than breaking the code.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .textSelection(.enabled)
                 .accessibilityLabel("Code " + g.code.formatted.map { String($0) }.joined(separator: " "))
             ActionRow {
@@ -185,7 +188,8 @@ struct GroupPage: View {
     }
 }
 
-/// One member: a disc with their initials in their colour (red when they need help), name and status line.
+/// One member: a disc with their initials in their colour (red when they need help), name and status line, and Find
+/// beside them when there is room, or under the text in a narrow pane.
 private struct MemberRow: View {
     @Environment(\.palette) private var p
     let initials: String
@@ -197,32 +201,51 @@ private struct MemberRow: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Button(action: action) {
+        if let find {
+            ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 12) {
-                    Text(initials)
-                        .font(.system(.footnote, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(help ? p.danger : Color(argb: colour)))
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title).tm(.body, p).multilineTextAlignment(.leading)
-                        Text(subtitle).tm(.caption, p, color: help ? p.danger : nil).multilineTextAlignment(.leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Room for about twenty characters of text a line before Find moves under it.
+                    details.frame(minWidth: 0, idealWidth: 200, maxWidth: .infinity, alignment: .leading)
+                    findButton(find)
                 }
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 4) {
+                    details
+                    findButton(find).padding(.leading, 48)
+                }
             }
-            .buttonStyle(PressScaleStyle())
-            .accessibilityElement(children: .combine)
-            if let find {
-                TMButton("Find", style: .tonal, action: find)
-            }
+        } else {
+            details
         }
+    }
+
+    private var details: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(initials)
+                    .font(.system(.footnote, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(help ? p.danger : Color(argb: colour)))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).tm(.body, p).multilineTextAlignment(.leading)
+                    Text(subtitle).tm(.caption, p, color: help ? p.danger : nil).multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private func findButton(_ find: @escaping () -> Void) -> some View {
+        TMButton("Find", style: .tonal, action: find)
+            .fixedSize()
+            .accessibilityLabel("Find \(title) with UWB")
     }
 }
 

@@ -47,9 +47,10 @@ final class GroupAlerts: NSObject, UNUserNotificationCenterDelegate {
     /// `name` started finding this phone with UWB (GroupFinder.notification on Android, shown while it runs). Quiet:
     /// no sound, and once per find rather than with every measurement.
     func postFind(name: String, memberId: Int) {
+        let notice = GroupText.beingFound(name)
         let content = UNMutableNotificationContent()
-        content.title = "\(name) is finding you with UWB"
-        content.body = "Tap to see how far away they are. Keep TrailMind open on screen until they reach you."
+        content.title = notice.title
+        content.body = notice.text
         content.userInfo = [GroupAlerts.memberKey: memberId]
         content.threadIdentifier = "trailmind.group"
         content.interruptionLevel = .passive
