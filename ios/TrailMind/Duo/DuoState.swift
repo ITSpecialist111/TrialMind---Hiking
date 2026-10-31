@@ -107,6 +107,7 @@ final class DuoProbeView: UIView {
         if state.safeArea != window.safeAreaInsets { state.safeArea = window.safeAreaInsets }
         let classes = "w:\(traitCollection.horizontalSizeClass == .regular ? "regular" : "compact") h:\(traitCollection.verticalSizeClass == .regular ? "regular" : "compact")"
         if state.sizeClass != classes { state.sizeClass = classes }
+        if let scene = window.windowScene { LocationHub.shared.setInterfaceOrientation(scene.effectiveGeometry.interfaceOrientation) }
         guard #available(iOS 27.1, *) else { return }
         let edge: HorizontalEdge?
         switch traitCollection.verticalBarEdge {

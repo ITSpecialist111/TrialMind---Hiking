@@ -87,6 +87,19 @@ final class LocationHub: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Recording in the background works with "While Using"; "Always" only matters for check-in reminders.
     func requestAlways() { manager.requestAlwaysAuthorization() }
 
+    /// The compass is measured against the top of the display in use, so it follows the interface orientation (iPhone
+    /// Duo's inner display is often held in landscape).
+    func setInterfaceOrientation(_ o: UIInterfaceOrientation) {
+        let device: CLDeviceOrientation
+        switch o {
+        case .portraitUpsideDown: device = .portraitUpsideDown
+        case .landscapeLeft: device = .landscapeRight
+        case .landscapeRight: device = .landscapeLeft
+        default: device = .portrait
+        }
+        if manager.headingOrientation != device { manager.headingOrientation = device }
+    }
+
     /// The app is visible: run the GPS and compass for the map.
     func setForeground(_ on: Bool) {
         foreground = on
