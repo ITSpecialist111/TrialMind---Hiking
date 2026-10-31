@@ -44,6 +44,11 @@ final class FallAlarm: ObservableObject {
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.cameToFront()
         }
+        // Leaving TrailMind mid-countdown puts the alarm on the lock screen, where "I'm OK" asks for Face ID or the passcode.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.state.stage == .countdown else { return }
+            self.postCountdown()
+        }
         refresh()
         if state.stage == .countdown {
             startTicking()
@@ -114,17 +119,22 @@ final class FallAlarm: ObservableObject {
         SafetyNotifications.shared.post(.fallReady, title: ready.title, body: ready.body, category: SafetyNotifications.Category.fallReady,
                                         at: Date(timeIntervalSince1970: Double(s.deadlineMs) / 1000),
                                         userInfo: ["alertMs": NSNumber(value: s.alertMs)])
-        let playing = Prefs.shared.fallAlarmSound && sound.start()
+        if Prefs.shared.fallAlarmSound { sound.start() }
         startTicking()
         if UIApplication.shared.applicationState == .active {
             FallAlarmWindow.shared.show()
         } else {
-            let n = FallAlarmText.countdownNotification(name)
-            // With the alarm already sounding, the notification only needs to be seen.
-            let tone: UNNotificationSound? = playing ? nil : (Prefs.shared.fallAlarmSound ? AlarmSound.notificationSound() : .default)
-            SafetyNotifications.shared.post(.fallCountdown, title: n.title, body: n.body, category: SafetyNotifications.Category.fallCountdown,
-                                            userInfo: ["alertMs": NSNumber(value: s.alertMs)], sound: tone)
+            postCountdown()
         }
+    }
+
+    /// "Are you OK?" with I'm OK and Send SOS now, for the lock screen. With the alarm already sounding, it only needs to
+    /// be seen; otherwise it sounds the alarm tone (notification sounds follow the ring/silent switch).
+    private func postCountdown() {
+        let n = FallAlarmText.countdownNotification(contactName)
+        let tone: UNNotificationSound? = sound.isPlaying ? nil : (Prefs.shared.fallAlarmSound ? AlarmSound.notificationSound() : .default)
+        SafetyNotifications.shared.post(.fallCountdown, title: n.title, body: n.body, category: SafetyNotifications.Category.fallCountdown,
+                                        userInfo: ["alertMs": NSNumber(value: state.alertMs)], sound: tone)
     }
 
     /// Catches up with the clock: a countdown that ran out while TrailMind wasn't running gets the text ready.
@@ -306,6 +316,8 @@ final class AlarmSound {
     private var player: AVAudioPlayer?
     private static let tone = Data(AlarmTone.wav())
     private static let soundName = "trailmind-fall-alarm.wav"
+
+    var isPlaying: Bool { player?.isPlaying == true }
 
     /// Starts the loop; false if iOS refused (for example in the background, where a notification sounds instead).
     @discardableResult

@@ -38,12 +38,10 @@ enum SafetyFeature {
 
     static let telemetryRoute = PageRoute("safety-telemetry") { TelemetryPage() }
 
-    /// The dashboard's safety line: the fall alarm, the check-in and whether falls are being watched for.
+    /// The dashboard's safety line: the fall alarm, the check-in and whether falls are being watched for right now.
     static func summary() -> String? {
-        let prefs = Prefs.shared
-        let due = prefs.checkInDueMs
+        let due = Prefs.shared.checkInDueMs
         return SafetyText.summary(alarm: FallAlarm.shared.state.stage, checkInDueMs: due, nowMs: nowMs(),
-                                  dueTime: due > 0 ? SafetyFormat.clock(due) : "",
-                                  fallDetectionOn: prefs.frontierEnabled && prefs.frontierFallDetectionEnabled && FallMonitor.shared.available)
+                                  dueTime: due > 0 ? SafetyFormat.clock(due) : "", fallDetectionOn: FallMonitor.shared.active)
     }
 }
