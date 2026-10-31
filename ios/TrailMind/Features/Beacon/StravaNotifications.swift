@@ -14,7 +14,8 @@ final class StravaNotifications: NSObject, UNUserNotificationCenterDelegate {
     private static let postedId = "trailmind.strava.posted"
     private static let reconnectId = "trailmind.strava.reconnect"
 
-    private weak var previous: UNUserNotificationCenterDelegate?
+    /// The delegate before this one, kept alive here (the notification centre only holds its delegate weakly).
+    private var previous: UNUserNotificationCenterDelegate?
     private var installed = false
 
     /// Becomes the notification centre's delegate, keeping the one before.
