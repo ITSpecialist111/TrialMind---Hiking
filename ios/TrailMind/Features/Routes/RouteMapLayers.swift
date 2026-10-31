@@ -62,7 +62,8 @@ final class TerrainOverlays {
 
     /// Reloads a layer's tiles after `delay`; `restart` waits for things to settle, else the earliest reload stands.
     private func reloadSoon(_ id: String, after delay: TimeInterval, restart: Bool) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
             if let pending = self.reloads[id] {
                 if !restart { return }
                 pending.cancel()

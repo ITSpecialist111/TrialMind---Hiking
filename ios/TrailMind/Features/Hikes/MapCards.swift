@@ -71,6 +71,9 @@ private struct HikeRecordingCard: View {
                 // Check-in as a small chip, so the recording card stays short and the map stays visible.
                 FlowLayout(spacing: 6) {
                     TMChip(prefs.checkInDueMs > 0 ? "Check-in \(HikeTime.time(prefs.checkInDueMs)) · Edit" : "Set check-in") { openCheckIn() }
+                    if prefs.checkInDueMs > 0, let clear = FeatureHooks.clearCheckIn {
+                        TMChip("Cancel check-in  ✕") { clear() }
+                    }
                 }
                 .padding(.top, 8)
             }

@@ -134,21 +134,16 @@ struct SafetyPage: View {
 
     // MARK: Trip group
 
+    /// The trip groups feature's own card (SafetyPage.groupCard: status, help banners, or the intro with Create and
+    /// Join); a plain link when only the group page is available.
     @ViewBuilder private var groupCard: some View {
-        if let open = FeatureHooks.openGroup {
-            if let summary = FeatureHooks.groupSummary?() {
-                TMCard(spacing: 8) {
-                    TMText("Trip group", .title)
-                    TMText(summary, .body, color: p.primary)
-                    TMButton("Open trip group", style: .tonal) { open() }
-                }
-            } else {
-                TMCard(spacing: 8) {
-                    TMText("See your party on the map, with no signal", .title)
-                    TMText("Each phone in the group shares its position straight to the others, sealed with the group's code, and passes on the others' positions so the group reaches further than one phone can. It works while TrailMind is open or a hike is recording, with no mobile signal.")
-                    TMText("Range depends on phones, pockets and ground: tens of metres in woods, more in the open, and further along a strung-out group.", .caption)
-                    TMButton("Create or join a group", icon: .add, style: .tonal) { open() }
-                }
+        if let card = FeatureHooks.groupSafetyCard {
+            card()
+        } else if let open = FeatureHooks.openGroup {
+            TMCard(spacing: 8) {
+                TMText("Trip group", .title)
+                if let summary = FeatureHooks.groupSummary?() { TMText(summary, .body, color: p.primary) }
+                TMButton("Open trip group", style: .tonal) { open() }
             }
         }
     }

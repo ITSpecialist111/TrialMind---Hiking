@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The routes feature: the route library, finder and pages, the planner, GPX import, route checks and the terrain
@@ -80,16 +81,23 @@ enum RoutesFeature {
         Navigator.shared.push(PageRoute("settings") { SettingsPage() })
     }
 
-    /// Set or edit the check-in for a route (CheckInUi.pickCheckIn).
+    /// Set or edit the check-in for a route (CheckInUi.pickCheckIn): the safety feature's dialog, then `changed` once
+    /// the check-in it saves arrives in Prefs.
     static func pickCheckIn(_ routeName: String, planningMinutes: Double, routeId: Int64, changed: @escaping () -> Void) {
-        if let pick = FeatureHooks.checkInForRoute {
-            pick(routeName, planningMinutes, routeId, changed)
+        if let pick = FeatureHooks.pickCheckIn {
+            // @Published fires before the value is stored: hop to the next main-queue turn before refreshing.
+            checkInWatch = Prefs.shared.$checkInDueMs.dropFirst().first().receive(on: DispatchQueue.main).sink { _ in
+                changed()
+                checkInWatch = nil
+            }
+            pick(routeName, planningMinutes, routeId)
         } else if let open = FeatureHooks.openCheckIn {
             open()
         } else {
             Navigator.shared.open(.safety)
         }
     }
+    private static var checkInWatch: AnyCancellable?
 
     /// Clears the check-in of a route that was deleted (CheckIn.clear).
     static func clearCheckIn() {

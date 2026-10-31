@@ -294,31 +294,41 @@ struct HikeDetailPage: View {
                 TMText("Automatic posting needs a Strava subscription: Strava only lets subscribers create the app that posting uses.", .caption)
                 if let open = FeatureHooks.openStrava { TMButton("Set up automatic posting…", icon: .upload, style: .text) { open() } }
             } else {
-                linkedStatus(h, live: live)
-                if let activity = model.post?.activityId, model.post?.state == "POSTED",
-                   let url = URL(string: "https://www.strava.com/activities/\(activity)") {
-                    TMButton("View on Strava", style: .tonal) { AppModel.shared.open(url) }
-                } else {
-                    byHand(h, live: live)
-                }
+                linkedCard(h, live: live)
             }
         }
     }
 
-    /// The post's state for a linked account: the Strava feature's own words when it gives them.
-    @ViewBuilder private func linkedStatus(_ h: HikeMeta, live: Bool) -> some View {
-        if let status = FeatureHooks.stravaStatus?(h.id) {
-            TMText(status, .caption)
-        } else if let row = model.post {
+    /// A linked account (HikeDetailPage.stravaCard): where the post is, and posting it now through Strava.
+    @ViewBuilder private func linkedCard(_ h: HikeMeta, live: Bool) -> some View {
+        if let row = model.post {
             switch row.state {
-            case "QUEUED": TMText("Waiting to post. \(row.message ?? "It goes as soon as the phone has signal.")", .caption)
-            case "PROCESSING": TMText("Strava is processing this hike…", .caption)
-            case "POSTED": TMText(row.activityId != nil ? "Posted to Strava ✓" : row.message ?? "On Strava ✓", .body, color: p.primary)
-            case "FAILED": TMText("Couldn't post this hike. \(row.message ?? "")", .caption, color: p.danger)
-            default: TMText(row.message ?? "Not posted to Strava.", .caption)
+            case "QUEUED":
+                TMText("Waiting to post. \(row.message ?? "It goes as soon as the phone has signal.")", .caption)
+                postButton("Post now", h)
+            case "PROCESSING":
+                TMText("Strava is processing this hike…", .caption)
+            case "POSTED":
+                TMText(row.activityId != nil ? "Posted to Strava ✓" : row.message ?? "On Strava ✓", .body, color: p.primary)
+                if let activity = row.activityId, let url = URL(string: "https://www.strava.com/activities/\(activity)") {
+                    TMButton("View on Strava", style: .tonal) { AppModel.shared.open(url) }
+                }
+            case "FAILED":
+                TMText("Couldn't post this hike. \(row.message ?? "")", .caption, color: p.danger)
+                postButton("Try again", h)
+            default:
+                TMText(row.message ?? "Not posted to Strava.", .caption)
+                if !live { postButton("Post anyway", h) }
             }
         } else {
             TMText(live ? "You can post it once it's finished." : "Not posted to Strava.", .caption)
+            if !live { postButton("Post to Strava", h) }
+        }
+    }
+
+    @ViewBuilder private func postButton(_ label: String, _ h: HikeMeta) -> some View {
+        if let post = FeatureHooks.stravaPostNow {
+            TMButton(label, icon: .upload, style: .tonal) { post(h.id) }
         }
     }
 
@@ -327,7 +337,7 @@ struct HikeDetailPage: View {
         if live {
             TMText("You can upload it to Strava once it's finished.", .caption)
         } else {
-            TMText("Saves the GPX and opens Strava's upload page. Tap Choose file, pick it, then Save.", .caption)
+            TMText("Saves the GPX to Files and opens Strava's upload page. Tap Choose file, pick it, then Save.", .caption)
             TMButton("Upload to Strava", icon: .upload, style: .tonal) {
                 if let upload = FeatureHooks.stravaUploadHike { upload(h.id) } else { stravaHelp(h) }
             }

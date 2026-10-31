@@ -5,6 +5,11 @@ enum FeatureStartup {
     static func startAll() {
         MapHeadingDriver.shared.start()
         GroupsFeature.start()
+        RoutesFeature.start()
+        // Safety must start at launch so check-in and fall-alarm notification actions work when they cold-launch the app.
+        SafetyFeature.start()
+        // Beacon registers the Strava background task, which iOS only allows during launch.
+        BeaconFeature.start()
         // Hikes chains to any notification delegate set before it, so it starts after the other features.
         HikesFeature.start()
     }
