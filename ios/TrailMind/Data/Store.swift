@@ -134,8 +134,8 @@ final class Store: ObservableObject {
             // A database that cannot open is unrecoverable for storage, but the app must still show the map.
             db = try! SQLiteDB(path: ":memory:")
         }
-        try? db.exec("PRAGMA foreign_keys = ON")
-        try? db.exec("PRAGMA journal_mode = WAL")
+        _ = try? db.exec("PRAGMA foreign_keys = ON")
+        _ = try? db.exec("PRAGMA journal_mode = WAL")
         migrate()
     }
 
@@ -155,7 +155,7 @@ final class Store: ObservableObject {
 
     private func migrate() {
         guard db.userVersion < 6 else { return }
-        try? db.exec("""
+        _ = try? db.exec("""
             CREATE TABLE IF NOT EXISTS routes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL,
                distance_m REAL NOT NULL, ascent_m REAL NOT NULL, descent_m REAL NOT NULL, max_ele REAL,
                point_count INTEGER NOT NULL, waypoint_count INTEGER NOT NULL, terrain_derived INTEGER NOT NULL DEFAULT 0);
@@ -250,7 +250,7 @@ final class Store: ObservableObject {
     }
 
     func renameRoute(_ id: Int64, _ name: String) {
-        try? db.run("UPDATE routes SET name=? WHERE id=?", [.text(name), .int(id)])
+        _ = try? db.run("UPDATE routes SET name=? WHERE id=?", [.text(name), .int(id)])
         changed()
     }
 
@@ -300,27 +300,27 @@ final class Store: ObservableObject {
     // MARK: Hikes
 
     func createHike(name: String, startMs: Int64, routeId: Int64?) -> Int64 {
-        try? db.run("INSERT INTO hikes(name, start_ms, status, route_id) VALUES (?,?,?,?)",
+        _ = try? db.run("INSERT INTO hikes(name, start_ms, status, route_id) VALUES (?,?,?,?)",
                     [.text(name), .int(startMs), .text(HikeStatus.recording.rawValue), routeId.map { .int($0) } ?? .null])
         changed()
         return db.lastInsertId
     }
 
     func appendHikePoint(_ hikeId: Int64, seq: Int, segment: Int, _ p: TrackPoint) {
-        try? db.run("INSERT INTO hike_points(hike_id, seq, segment, lat, lon, ele, time_ms, accuracy) VALUES (?,?,?,?,?,?,?,?)",
+        _ = try? db.run("INSERT INTO hike_points(hike_id, seq, segment, lat, lon, ele, time_ms, accuracy) VALUES (?,?,?,?,?,?,?,?)",
                     [.int(hikeId), .int(Int64(seq)), .int(Int64(segment)), .double(p.lat), .double(p.lon),
                      p.ele.map { .double($0) } ?? .null, .int(p.timeMs ?? nowMs()), p.accuracyM.map { .double(Double($0)) } ?? .null])
     }
 
     /// Periodic checkpoint so an interrupted recording keeps sensible stats.
     func updateHikeLive(_ id: Int64, activeMs: Int64, distanceM: Double, ascentM: Double, descentM: Double, points: Int) {
-        try? db.run("UPDATE hikes SET duration_ms=?, distance_m=?, ascent_m=?, descent_m=?, point_count=? WHERE id=?",
+        _ = try? db.run("UPDATE hikes SET duration_ms=?, distance_m=?, ascent_m=?, descent_m=?, point_count=? WHERE id=?",
                     [.int(activeMs), .double(distanceM), .double(ascentM), .double(descentM), .int(Int64(points)), .int(id)])
         changed()
     }
 
     func setHikeStatus(_ id: Int64, _ status: HikeStatus) {
-        try? db.run("UPDATE hikes SET status=? WHERE id=?", [.text(status.rawValue), .int(id)])
+        _ = try? db.run("UPDATE hikes SET status=? WHERE id=?", [.text(status.rawValue), .int(id)])
         changed()
     }
 
@@ -337,7 +337,7 @@ final class Store: ObservableObject {
         let duration = perSeg.reduce(Int64(0)) { $0 + $1.durationMs }
         let moving = perSeg.reduce(Int64(0)) { $0 + $1.movingMs }
         let count = segs.reduce(0) { $0 + $1.count }
-        try? db.run("""
+        _ = try? db.run("""
             UPDATE hikes SET end_ms=?, status=?, distance_m=?, ascent_m=?, descent_m=?, moving_ms=?, duration_ms=?,
               max_ele=COALESCE(?, max_ele), min_ele=COALESCE(?, min_ele), point_count=? WHERE id=?
             """, [.int(endMs), .text(HikeStatus.done.rawValue), .double(distance), .double(ascent), .double(descent),
@@ -385,12 +385,12 @@ final class Store: ObservableObject {
     }
 
     func renameHike(_ id: Int64, _ name: String) {
-        try? db.run("UPDATE hikes SET name=? WHERE id=?", [.text(name), .int(id)])
+        _ = try? db.run("UPDATE hikes SET name=? WHERE id=?", [.text(name), .int(id)])
         changed()
     }
 
     func deleteHike(_ id: Int64) {
-        try? db.run("DELETE FROM hikes WHERE id=?", [.int(id)])
+        _ = try? db.run("DELETE FROM hikes WHERE id=?", [.int(id)])
         changed()
     }
 
@@ -419,7 +419,7 @@ final class Store: ObservableObject {
     }
 
     func saveStravaPost(_ row: StravaPostRow) {
-        try? db.run("""
+        _ = try? db.run("""
             INSERT OR REPLACE INTO strava_posts(hike_id, state, upload_id, activity_id, message, attempts, next_try_ms, updated_ms)
             VALUES (?,?,?,?,?,?,?,?)
             """, [.int(row.hikeId), .text(row.state), row.uploadId.map { .int($0) } ?? .null, row.activityId.map { .int($0) } ?? .null,
@@ -444,14 +444,14 @@ final class Store: ObservableObject {
 
     /// Posts still waiting belong to the account that was just disconnected.
     func dropWaitingStravaPosts() {
-        try? db.run("DELETE FROM strava_posts WHERE state IN ('QUEUED','PROCESSING')")
+        _ = try? db.run("DELETE FROM strava_posts WHERE state IN ('QUEUED','PROCESSING')")
         changed()
     }
 
     // MARK: Frontier mesh heartbeats
 
     func upsertMeshHeartbeat(_ h: HeartbeatRow, receivedMs: Int64 = nowMs()) {
-        try? db.run("""
+        _ = try? db.run("""
             INSERT OR REPLACE INTO mesh_heartbeats(hiker_id, latitude, longitude, altitude_m, battery_percent, timestamp_s, status,
               triage_code, received_ms) VALUES (?,?,?,?,?,?,?,?,?)
             """, [.text(h.hikerId), .double(h.latitude), .double(h.longitude), .int(Int64(h.altitudeM)), .int(Int64(h.batteryPercent)),
@@ -470,7 +470,7 @@ final class Store: ObservableObject {
     }
 
     func pruneMeshHeartbeats(receivedBeforeMs: Int64) {
-        try? db.run("DELETE FROM mesh_heartbeats WHERE received_ms < ?", [.int(receivedBeforeMs)])
+        _ = try? db.run("DELETE FROM mesh_heartbeats WHERE received_ms < ?", [.int(receivedBeforeMs)])
     }
 
     // MARK: Trip groups
@@ -500,7 +500,7 @@ final class Store: ObservableObject {
     }
 
     func deleteTripGroups() {
-        try? db.run("DELETE FROM trip_groups")
+        _ = try? db.run("DELETE FROM trip_groups")
         changed()
     }
 
@@ -515,7 +515,7 @@ final class Store: ObservableObject {
     }
 
     func upsertGroupMember(_ groupId: String, _ m: GroupMemberRow) {
-        try? db.run("""
+        _ = try? db.run("""
             INSERT OR REPLACE INTO group_members(group_id, member_id, name, colour, position, position_ms, heard_ms, direct_ms, rssi, coded)
             VALUES (?,?,?,?,?,?,?,?,?,?)
             """, [.text(groupId), .int(Int64(m.memberId)), m.name.map { .text($0) } ?? .null, m.colour.map { .int(Int64($0)) } ?? .null,
@@ -530,7 +530,7 @@ final class Store: ObservableObject {
     func insertPack(name: String, kind: PackKind, sourceId: String, fileName: String, minZoom: Int, maxZoom: Int,
                     bounds: BoundingBox?, routeId: Int64?, bufferM: Double, tileTotal: Int64, status: PackStatus,
                     format: String, attribution: String, premiumMaxZoom: Int = 0) -> Int64 {
-        try? db.run("""
+        _ = try? db.run("""
             INSERT INTO packs(name, kind, source_id, file_name, min_zoom, max_zoom, premium_max_zoom, min_lat, min_lon, max_lat, max_lon,
               route_id, buffer_m, tile_total, status, format, attribution, created_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(name), .text(kind.rawValue), .text(sourceId), .text(fileName), .int(Int64(minZoom)), .int(Int64(maxZoom)),
@@ -546,7 +546,7 @@ final class Store: ObservableObject {
     func updatePack(_ id: Int64, _ values: [String: SQLiteDB.Value]) {
         guard !values.isEmpty else { return }
         let keys = Array(values.keys)
-        try? db.run("UPDATE packs SET " + keys.map { "\($0)=?" }.joined(separator: ", ") + " WHERE id=?", keys.map { values[$0]! } + [.int(id)])
+        _ = try? db.run("UPDATE packs SET " + keys.map { "\($0)=?" }.joined(separator: ", ") + " WHERE id=?", keys.map { values[$0]! } + [.int(id)])
         changed()
     }
 
@@ -575,7 +575,7 @@ final class Store: ObservableObject {
     func pack(_ id: Int64) -> PackMeta? { (try? db.query("SELECT * FROM packs WHERE id=?", [.int(id)], packMeta))?.first }
 
     func deletePack(_ id: Int64) {
-        try? db.run("DELETE FROM packs WHERE id=?", [.int(id)])
+        _ = try? db.run("DELETE FROM packs WHERE id=?", [.int(id)])
         changed()
     }
 }

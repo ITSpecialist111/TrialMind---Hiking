@@ -125,8 +125,12 @@ func javaFixed(_ x: Double, _ digits: Int) -> String {
 @inline(__always) func toDegrees(_ rad: Double) -> Double { rad * 57.29577951308232 }
 
 extension Comparable {
-    /// Kotlin's `coerceIn`.
-    @inline(__always) func clamped(_ lo: Self, _ hi: Self) -> Self { min(max(self, lo), hi) }
+    /// Kotlin's `coerceIn`: the value itself unless it is below or above the range (so -0.0 stays -0.0 at a 0.0 bound).
+    @inline(__always) func clamped(_ lo: Self, _ hi: Self) -> Self {
+        if self < lo { return lo }
+        if self > hi { return hi }
+        return self
+    }
 }
 
 extension String {
