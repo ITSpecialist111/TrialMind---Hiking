@@ -9,7 +9,8 @@
 
 .EXAMPLE
   scripts\ios-wsl.ps1 setup
-  scripts\ios-wsl.ps1 setup -XcodeXip C:\Users\me\Downloads\Xcode_27.0.xip
+  scripts\ios-wsl.ps1 setup -XcodeXip C:\Users\me\Downloads\Xcode_27.1.xip
+  scripts\ios-wsl.ps1 test -Filter ShellGeometryTests
   scripts\ios-wsl.ps1 auth             # one-time Apple ID sign-in for xtool (interactive)
   scripts\ios-wsl.ps1 devices          # list connected iPhones and their UDIDs
   scripts\ios-wsl.ps1 run -Udid 00008101-000455A21189001E
@@ -22,7 +23,9 @@ param(
     [string]$Distro = 'trailmind-ios',
     [string]$XcodeXip,
     [string]$PhoneIp,
-    [string]$Udid
+    [string]$Udid,
+    # test: only run tests whose name matches (swift test --filter)
+    [string]$Filter
 )
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
@@ -66,6 +69,7 @@ switch ($Command) {
         Invoke-Script @('setup') $prefix
     }
     'auth' { Invoke-Script @('auth') }
+    'test' { Invoke-Script (@('test') + $(if ($Filter) { @($Filter) } else { @() })) }
     'devices' { Start-AppleMobileDevice; Invoke-Script @('devices') }
     'pair-network' { Start-AppleMobileDevice; Invoke-Script @('pair-network') }
     'run' { Start-AppleMobileDevice; Invoke-Script (@('run') + $udidArgs) }
