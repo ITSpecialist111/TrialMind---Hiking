@@ -53,4 +53,6 @@ enum FeatureHooks {
     static var safetySummary: (() -> String?)?
     /// Shows the current position's grid reference and what3words etc. (Safety → share location).
     static var shareLocation: (() -> Void)?
+    /// Retrace my steps: follow the recorded track back to where the hike started.
+    static var retrace: (() -> Void)?
 }
