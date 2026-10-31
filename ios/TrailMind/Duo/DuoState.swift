@@ -42,11 +42,12 @@ final class DuoState: ObservableObject {
 /// Hosts the UIKit-only Duo APIs: `UIHingeInteraction`, `UIView.reservedRegions` and the `verticalBarEdge` trait.
 struct DuoProbe: UIViewRepresentable {
     func makeUIView(context: Context) -> DuoProbeView { DuoProbeView() }
-    func updateUIView(_ uiView: DuoProbeView, context: Context) { uiView.refresh() }
+    func updateUIView(_ uiView: DuoProbeView, context: Context) { uiView.scheduleRefresh() }
 }
 
 final class DuoProbeView: UIView {
     private var registered = false
+    private var refreshQueued = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -71,7 +72,7 @@ final class DuoProbeView: UIView {
                     state.hingeAngle = nil
                 }
                 // Folding changes the division region without changing this view's bounds.
-                self.refresh()
+                self.scheduleRefresh()
             }
             addInteraction(interaction)
         }
@@ -84,20 +85,32 @@ final class DuoProbeView: UIView {
         if #available(iOS 27.1, *), !registered, window != nil {
             registered = true
             registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (view: DuoProbeView, _: UITraitCollection) in
-                view.refresh()
+                view.scheduleRefresh()
             }
         }
-        refresh()
+        scheduleRefresh()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        refresh()
+        scheduleRefresh()
     }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        refresh()
+        scheduleRefresh()
+    }
+
+    /// Publishes on the next turn of the main loop: these callbacks run inside SwiftUI and UIKit layout passes, where
+    /// changing observed state would re-enter the update.
+    func scheduleRefresh() {
+        guard !refreshQueued else { return }
+        refreshQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshQueued = false
+            self.refresh()
+        }
     }
 
     func refresh() {

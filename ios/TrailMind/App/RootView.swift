@@ -110,7 +110,7 @@ struct RootView: View {
     /// The narrow layout's page: full window over the map, respecting the safe area at the top and sides.
     @ViewBuilder private func pageContainer(_ g: ShellGeometry) -> some View {
         currentPage(g)
-            .environment(\.pageInsets, g.pageInsets)
+            .environment(\.pageInsets, g.pageInsets.edgeInsets)
             .environment(\.pageCanGoBack, nav.canGoBack)
             .padding(.top, g.safe.top)
             .padding(.leading, g.safe.leading)
