@@ -5,8 +5,9 @@ import Foundation
 /// The compass's view of the magnetic field (sensor/Compass.kt): the declination where you are, from the World Magnetic
 /// Model as Android's GeomagneticField gives it, and MagneticCheck's interference test. The test compares the strength
 /// and dip of the field the phone measures (Core Motion's calibrated magnetometer, with gravity for "down") with the
-/// model's, so steel, magnets and electronics show up even while iOS reports the compass as calibrated. It runs only
-/// while a page that shows it is open.
+/// model's, so steel, magnets and electronics show up even while iOS reports the compass as calibrated; a phone without
+/// Core Motion's fused field has the strength LocationHub reads (`fieldMicroTesla`) checked alone. It runs only while a
+/// page that shows it is open.
 final class CompassMonitor: ObservableObject {
     static let shared = CompassMonitor()
 
@@ -17,8 +18,11 @@ final class CompassMonitor: ObservableObject {
 
     private let manager = SafetyMotion.manager
     private let check = MagneticCheck()
+    /// Without Core Motion's fused field, the strength of the field the heading reports is checked alone.
+    private let strengthCheck = MagneticCheck(dipToleranceDeg: .infinity)
     private var users = 0
     private var listener: UUID?
+    private var headingListener: UUID?
     private var modelAt: (position: LatLon, timeMs: Int64)?
 
     /// The device has a magnetometer, so there is a compass at all.
@@ -28,11 +32,15 @@ final class CompassMonitor: ObservableObject {
         users += 1
         guard users == 1 else { return }
         check.reset()
+        strengthCheck.reset()
         disturbed = false
         if let fix = LocationHub.shared.latest { updateModel(fix) }
         listener = LocationHub.shared.addListener { [weak self] fix in self?.updateModel(fix) }
         let frames = CMMotionManager.availableAttitudeReferenceFrames()
-        guard manager.isDeviceMotionAvailable, frames.contains(.xMagneticNorthZVertical) else { return }
+        guard manager.isDeviceMotionAvailable, frames.contains(.xMagneticNorthZVertical) else {
+            headingListener = LocationHub.shared.addHeadingListener { [weak self] in self?.checkStrength() }
+            return
+        }
         manager.deviceMotionUpdateInterval = 1.0 / 30
         manager.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { [weak self] motion, _ in
             guard let self, let motion else { return }
@@ -53,9 +61,19 @@ final class CompassMonitor: ObservableObject {
         guard users == 0 else { return }
         manager.stopDeviceMotionUpdates()
         if let id = listener { LocationHub.shared.removeListener(id) }
+        if let id = headingListener { LocationHub.shared.removeHeadingListener(id) }
         listener = nil
+        headingListener = nil
         check.reset()
+        strengthCheck.reset()
         disturbed = false
+    }
+
+    /// The field strength LocationHub reads with each heading against the model's (no dip without Core Motion's gravity).
+    private func checkStrength() {
+        guard let ut = LocationHub.shared.fieldMicroTesla, ut > 0 else { return }
+        strengthCheck.add(ut, 0, 0, 0, 0, 1)
+        if strengthCheck.disturbed != disturbed { disturbed = strengthCheck.disturbed }
     }
 
     /// The model's field where you are (Compass.updateLocation); worked out again after moving a kilometre or an hour on.
@@ -65,5 +83,6 @@ final class CompassMonitor: ObservableObject {
         let field = WorldMagneticModel.field(fix.latLon, altitudeM: fix.altitudeM ?? 0, timeMs: fix.timeMs)
         declinationDeg = field.declinationDeg
         check.expect(field.totalNt / 1000, field.inclinationDeg)
+        strengthCheck.expect(field.totalNt / 1000, field.inclinationDeg)
     }
 }

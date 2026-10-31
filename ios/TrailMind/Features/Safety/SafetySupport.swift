@@ -227,6 +227,11 @@ enum SafetyUI {
     static func call(_ number: String) {
         if let url = URL(string: "tel:" + number) { UIApplication.shared.open(url) }
     }
+
+    /// Asks for location the first time; once the user has answered, only Settings can change it.
+    static func allowLocation(_ status: CLAuthorizationStatus) {
+        if status == .notDetermined { LocationHub.shared.requestPermission() } else { AppModel.shared.openSettings() }
+    }
 }
 
 private struct SafetySheetBackground<Content: View>: View {

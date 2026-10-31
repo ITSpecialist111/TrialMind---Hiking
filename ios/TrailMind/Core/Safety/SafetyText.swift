@@ -248,4 +248,23 @@ enum SafetyText {
     // MARK: Frontier card (FrontierCoordinator.statusText)
 
     static func frontierStatus(enabled: Bool) -> String { enabled ? "Frontier active" : "Frontier safety is off" }
+
+    /// What iPhone can't do that Android's Frontier does with satellite links, and what it does instead.
+    static let satelliteNote = "Satellite data links and watching for satellite networks such as O2 Satellite work only on " +
+        "Android: iOS doesn't let apps see or use a satellite connection. iPhone 14 and later have Emergency SOS via satellite " +
+        "built in, including in the UK: with no signal, call 999 and follow the prompts."
+
+    /// Said wherever TrailMind gets a text ready.
+    static let cannotSendNote = "iPhone lets no app send a text by itself: Messages opens with the text ready, and you tap Send."
+
+    // MARK: Emergency guidance (SafetyPage)
+
+    /// "In an emergency (UK)". The page makes the first 999 and 112 into links that call them.
+    static let emergencyGuidance =
+        "• Call 999 or 112 and ask for Police, then Mountain Rescue.\n" +
+        "• Give your grid reference, what happened, number of people and injuries.\n" +
+        "• No signal for calls? Register in advance for emergencySMS by texting 'register' to 999.\n" +
+        "• No signal at all? iPhone 14 or later can reach 999 by satellite: call 999 and follow the prompts for Emergency SOS via satellite.\n" +
+        "• Stay put, keep warm, and save battery once help is on the way.\n" +
+        "iPhone also sends your location to UK 999 automatically when you call (Emergency Location Service), where supported."
 }
