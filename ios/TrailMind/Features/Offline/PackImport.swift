@@ -83,11 +83,7 @@ extension OfflinePacks {
                 let saved = packs.contains { pack in
                     guard let tile = leisure ? bngTile(point, pack.maxZoom) : WebMercator.tileFor(point, pack.maxZoom) else { return false }
                     var inside = true
-                    if let f = footprints[pack.id], f.zoom == pack.maxZoom {
-                        inside = stride(from: 0, to: f.spans.count - 2, by: 3).contains { i in
-                            f.spans[i] == tile.y && tile.x >= f.spans[i + 1] && tile.x < f.spans[i + 2]
-                        }
-                    }
+                    if let f = footprints[pack.id], f.zoom == pack.maxZoom { inside = f.contains(tile.x, tile.y) }
                     return inside && handle(pack)?.hasTile(tile) == true
                 }
                 guard saved else { return false }

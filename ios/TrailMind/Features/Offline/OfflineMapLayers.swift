@@ -111,7 +111,7 @@ final class OfflineMapLayers {
             var edges: [[LatLon]] = []
             for p in packs {
                 guard let f = OfflinePacks.shared.footprint(p) else { continue }
-                let shape = Self.shape(f, nationalGrid: Self.isNationalGrid(p))
+                let shape = FootprintPolygons.of(f, nationalGrid: Self.isNationalGrid(p))
                 fills += shape.fills
                 edges += shape.edges
             }
@@ -125,21 +125,6 @@ final class OfflineMapLayers {
 
     private static func isNationalGrid(_ p: PackMeta) -> Bool {
         p.kind == .download && TileSources.builtIns().first { $0.id == p.sourceId }?.grid == .britishNationalGrid
-    }
-
-    /// A footprint as map polygons: its cells merged into rectangles to tint, and its outline (with holes) to stroke.
-    /// National Grid tiles are turned slightly against north, so their outlines bend through every tile corner.
-    static func shape(_ f: TileFootprint, nationalGrid: Bool) -> (fills: [[LatLon]], edges: [[LatLon]]) {
-        let z = f.zoom
-        let corner: (FootprintShape.Corner) -> LatLon = nationalGrid
-            ? { c in OsGrid.toWgs84(BngTiles.easting(c.x, z), BngTiles.northing(c.y, z)) }
-            : { c in
-                let size = Double(WebMercator.tileSize)
-                return LatLon(WebMercator.yToLat(Double(c.y) * size, Double(z)), WebMercator.xToLon(Double(c.x) * size, Double(z)))
-            }
-        let fills = FootprintShape.rects(f).map { FootprintShape.ring($0, everyCorner: nationalGrid).map(corner) }
-        let edges = FootprintShape.loops(f, everyCorner: nationalGrid).map { $0.map(corner) }
-        return (fills, edges)
     }
 }
 

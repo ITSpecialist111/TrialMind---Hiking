@@ -44,6 +44,7 @@ final class OfflineModel: ObservableObject {
     @Published private(set) var naming = false
     private var countJob = 0
     private var reloadJob = 0
+    private var expiryWork: DispatchWorkItem?
     private var shownPacksKey = ""
     private var cancellables = Set<AnyCancellable>()
     private static var premiumProbed = false
@@ -120,9 +121,20 @@ final class OfflineModel: ObservableObject {
                 self.routes = routes
                 self.premiumExpiries = expiry
                 self.cacheBytes = bytes
+                self.refreshAtNextExpiry(expiry)
                 self.loadRoute()
             }
         }
+    }
+
+    /// The page reads its packs again when 24-hour detail runs out, so it offers to download it again.
+    private func refreshAtNextExpiry(_ expiry: [Int64: PackPlan.PremiumDetail]) {
+        expiryWork?.cancel()
+        let now = nowMs()
+        guard let next = expiry.values.map(\.expiresAtMs).filter({ $0 > now }).min() else { return }
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        expiryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(next - now) / 1000 + 1, execute: work)
     }
 
     private func loadRoute() {

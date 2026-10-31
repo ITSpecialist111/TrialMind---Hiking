@@ -42,8 +42,7 @@ struct SearchPage: View {
                     ListItemRow(title: place.name, subtitle: "\(place.type) · \(place.area) · \(place.grid ?? "")", icon: .search) { select(place) }
                 }
                 ForEach(Array((results ?? []).enumerated()), id: \.offset) { _, place in
-                    let detail = [place.type, place.area, place.grid ?? ""].filter { !KotlinText.isBlank($0) }.joined(separator: " · ")
-                    ListItemRow(title: place.name, subtitle: detail, icon: .search) { select(place) }
+                    ListItemRow(title: place.name, subtitle: SearchInput.detail(place), icon: .search) { select(place) }
                 }
                 if let error { TMBanner(message: error) }
                 if local == nil && results == nil && error == nil { TMText("Searching places…", .caption) }
@@ -86,11 +85,12 @@ struct SearchPage: View {
         }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         query = t
-        prefs.recentSearches = Array(([t] + prefs.recentSearches.filter { $0.caseInsensitiveCompare(t) != .orderedSame }).prefix(5))
+        prefs.recentSearches = SearchInput.recent(t, prefs.recentSearches)
         cancel()
         let id = job
         credit = nil
-        if ThreeWordAddress.looksLike(t) {
+        switch SearchInput.classify(t, imperial: prefs.imperial) {
+        case .threeWords:
             local = nil
             results = nil
             error = nil
@@ -107,46 +107,35 @@ struct SearchPage: View {
                 }
                 task = nil
             }
-            return
-        }
-        let imperial = prefs.imperial
-        let grid = OsGrid.parse(t)
-        let coordinates = PlaceQuery.coordinates(t)
-        if let grid {
-            local = OsNames.Place(name: t, type: "Grid reference", area: "\(Units.distance(Double(grid.precisionM), imperial: imperial)) square",
-                                  position: grid.position, grid: t.uppercased(), zoom: grid.precisionM >= 100_000 ? 9.0 : 15.0)
-        } else if let coordinates {
-            local = OsNames.Place(name: t, type: "Coordinates", area: "", position: coordinates,
-                                  grid: OsGrid.fromWgs84(coordinates)?.format(6), zoom: 15.0)
-        } else {
+        case .local(let place):
+            local = place
+            results = []
+            error = nil
+        case .invalid(let message):
             local = nil
-        }
-        var invalid: String? = nil
-        if grid == nil && PlaceQuery.looksLikeGrid(t) {
-            invalid = "Invalid OS grid reference. Use two letters (not I) and an even number of digits."
-        } else if coordinates == nil && PlaceQuery.looksLikeCoordinates(t) {
-            invalid = "Coordinates must be within 90° latitude and 180° longitude."
-        }
-        results = local != nil ? [] : nil
-        error = invalid
-        if local != nil || invalid != nil { return }
-        let key = prefs.osApiKey
-        if KotlinText.isBlank(key) {
-            searchApple(t, id)
-            return
-        }
-        task = Task { @MainActor in
-            do {
-                let places = try await OfflineNet.shared.searchOsNames(t, key: key)
-                guard id == job else { return }
-                results = places
-                credit = nil
-            } catch {
-                guard id == job else { return }
-                results = nil
-                self.error = OsNames.userMessage((error as? OsNames.Failure)?.message)
+            results = nil
+            error = message
+        case .places:
+            local = nil
+            results = nil
+            error = nil
+            let key = prefs.osApiKey
+            if KotlinText.isBlank(key) {
+                searchApple(t, id)
+                return
             }
-            task = nil
+            task = Task { @MainActor in
+                do {
+                    let places = try await OfflineNet.shared.searchOsNames(t, key: key)
+                    guard id == job else { return }
+                    results = places
+                } catch {
+                    guard id == job else { return }
+                    results = nil
+                    self.error = OsNames.userMessage((error as? OsNames.Failure)?.message)
+                }
+                task = nil
+            }
         }
     }
 

@@ -46,16 +46,14 @@ struct OfflinePage: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
             if case .success(let url) = result { OfflinePacks.shared.importAndReport(url) }
         }
-        .onAppear {
-            if let request = requests.pending {
+        .onAppear { model.appear() }
+        .onReceive(requests.$pending.compactMap { $0 }) { request in
+            // Taken on the next turn of the main loop: the request can arrive while SwiftUI builds the page.
+            DispatchQueue.main.async {
+                guard requests.pending == request else { return }
                 requests.pending = nil
                 model.take(request)
             }
-            model.appear()
-        }
-        .onReceive(requests.$pending.compactMap { $0 }) { request in
-            requests.pending = nil
-            model.take(request)
         }
     }
 
