@@ -14,18 +14,23 @@
   scripts\ios-wsl.ps1 auth             # one-time Apple ID sign-in for xtool (interactive)
   scripts\ios-wsl.ps1 devices          # list connected iPhones and their UDIDs
   scripts\ios-wsl.ps1 run -Udid 00008101-000455A21189001E
+  scripts\ios-wsl.ps1 screenshot -Udid <UDID> -Display inner -Out .\inner.png   # iPhone Duo's open display
+  scripts\ios-wsl.ps1 logs -Udid <UDID>
   scripts\ios-wsl.ps1 run-network -PhoneIp 192.168.68.12
 #>
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network')]
+    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network', 'screenshot', 'logs')]
     [string]$Command,
     [string]$Distro = 'trailmind-ios',
     [string]$XcodeXip,
     [string]$PhoneIp,
     [string]$Udid,
     # test: only run tests whose name matches (swift test --filter)
-    [string]$Filter
+    [string]$Filter,
+    # screenshot: inner or outer (iPhone Duo), and the PNG to write
+    [string]$Display,
+    [string]$Out
 )
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
@@ -73,6 +78,14 @@ switch ($Command) {
     'devices' { Start-AppleMobileDevice; Invoke-Script @('devices') }
     'pair-network' { Start-AppleMobileDevice; Invoke-Script @('pair-network') }
     'run' { Start-AppleMobileDevice; Invoke-Script (@('run') + $udidArgs) }
+    'screenshot' {
+        if (-not $Out) { throw '-Out <file.png> is required' }
+        $full = [IO.Path]::GetFullPath($Out)
+        $wslOut = '/mnt/' + $full.Substring(0, 1).ToLower() + ($full.Substring(2) -replace '\\', '/')
+        $displayArgs = if ($Display) { @('--display', $Display) } else { @() }
+        Start-AppleMobileDevice; Invoke-Script (@('screenshot') + $udidArgs + $displayArgs + @("'$wslOut'"))
+    }
+    'logs' { Start-AppleMobileDevice; Invoke-Script (@('logs') + $udidArgs) }
     'run-network' {
         if (-not $PhoneIp) { throw '-PhoneIp is required' }
         Invoke-Script @('run-network', $PhoneIp)

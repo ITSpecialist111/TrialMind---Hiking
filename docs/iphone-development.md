@@ -104,6 +104,29 @@ stands in for CryptoKit; `TM_TEST_DIR` picks its build directory) and runs every
 (SwiftUI, MapKit, Core Location...) only compiles against the iOS SDK, so `ios-xtool.sh build` is its check; Xcode
 runs the same tests with `xcodebuild test`.
 
+### Testing on iPhone Duo from Windows
+
+pymobiledevice3 (installed by `setup`) reaches iOS 17+ developer services over a no-root userspace tunnel, so the
+phone's screens and logs can be checked from WSL. The developer disk image is mounted on demand (Developer Mode on).
+
+```sh
+scripts/ios-xtool.sh screenshot --udid <UDID> --display inner inner.png   # the open display
+scripts/ios-xtool.sh screenshot --udid <UDID> --display outer cover.png   # the cover display
+scripts/ios-xtool.sh logs --udid <UDID>    # TrailMind's log; "display ..." and "layout ..." lines per pose change
+```
+
+- iPhone Duo has two displays and a plain screenshot captures the cover display, which is black while the phone is
+  open. The phone must be unlocked: locked screens capture black.
+- Each fold, unfold or rotation logs one `display` line (window, safe area, status bar, vertical-bar edge, hinge,
+  fold and camera regions) and one `layout` line (the shell's mode and every frame), the same facts as More →
+  Display & fold.
+- `run` stops a running TrailMind before installing: installing over a running copy can stall at
+  "Installing 100%" on iOS 27.
+- If an install ends with `noDevice`, or a phone vanishes from `devices`, close every Apple Devices process and reopen
+  the Apple Devices app (see above).
+- `pymobiledevice3 developer core-device` also offers `launch-application` (with `--env`), `location` (simulated
+  position) and `get-display-info`.
+
 ## MacinCloud setup
 
 1. Choose a Mac with a current stable Xcode compatible with the testers' iOS versions. Launch Xcode once,
