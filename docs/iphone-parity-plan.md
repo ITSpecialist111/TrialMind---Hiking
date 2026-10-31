@@ -82,3 +82,20 @@ All iOS 27.1 calls are behind `#available(iOS 27.1, *)`; on other iPhones the la
 2. iOS 27.1 SDK build with xtool; binary checked for `sdk 27.1`.
 3. Smoke test on a non-Duo iPhone if connected; then, with permission, on iPhone Duo: closed, open (portrait and
    landscape), book and tabletop poses, using More → Display & fold to confirm what iOS reports.
+
+## Status
+
+| Area | State |
+|---|---|
+| Core library | Ported with its tests; all pass on Linux (`ios-xtool.sh test`). |
+| Shell, design system, iPhone Duo layouts | Done. Layout rules unit-tested (phone, Duo cover display, flat, book, tabletop). On iPhone Duo: no compatibility mode, the app fills the inner display and keeps clear of the vertical status bar. Book, tabletop and cover-display poses still to be tried on the device. |
+| Map | Done: OS layers including Explorer & Landranger (BNG), OpenStreetMap, Apple Maps underneath where a layer has nothing, Android's map hints, heading-up, centring in the uncovered map area (checked on an iPhone 12 in both layouts), an idle map that doesn't redraw. |
+| Hikes | Done: recording, recovery, guidance, library and detail pages, map cards, Strava card. |
+| Routes | Done: library, finder, detail with profile and checks, planner, GPX import/export, facilities, terrain and LiDAR. |
+| Safety | Done: Safety & location, compass, telemetry, check-in, fall alarm, what3words. |
+| Trip groups | Done for iPhone-to-iPhone (Multipeer) and hearing Android members; Android phones can't see iPhones. |
+| Beacon and Strava | Done: briefing, mountain forecast, Apple Intelligence write-up, Strava posting and retries. |
+| Offline maps, search, settings, More, dashboard, onboarding | Done: area and route packs (MBTiles, resumable, Premium rules, renewal reminders, terrain and LiDAR along routes), MBTiles import, OS Names / grid reference / what3words / Apple search, every Android setting, the More list, the wide layout's dashboard and onboarding. Downloads continue in the background only while a hike records (or with iOS 26's continued-processing tasks). |
+| Watch companion, satellite detection, automatic texts, LE Coded advertising | Not possible or not ported on iOS (see the table above). |
+
+Linux: 485 tests pass. iOS: the xtool build for the iOS 27.1 SDK has no errors or warnings.
