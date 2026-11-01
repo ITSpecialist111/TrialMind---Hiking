@@ -16,7 +16,7 @@ final class TileLoader {
     static let userAgent: String = {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "0"
-        return "TrailMind-iOS/\(version) (\(Bundle.main.bundleIdentifier ?? "com.trailmind.ios"); +https://github.com/ITSpecialist111/HikingApp101)"
+        return "TrailMind-iOS/\(version) (\(Bundle.main.bundleIdentifier ?? "com.trailmind.ios"); +https://github.com/ITSpecialist111/TrialMind---Hiking)"
     }()
 
     private let session: URLSession
