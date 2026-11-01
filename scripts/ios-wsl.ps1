@@ -16,11 +16,13 @@
   scripts\ios-wsl.ps1 run -Udid 00008101-000455A21189001E
   scripts\ios-wsl.ps1 screenshot -Udid <UDID> -Display inner -Out .\inner.png   # iPhone Duo's open display
   scripts\ios-wsl.ps1 logs -Udid <UDID>
+  scripts\ios-wsl.ps1 ship                                # App Store build, validated offline (no account needed)
+  scripts\ios-wsl.ps1 ship -Upload -AscKeyId ABC123DEFG -AscIssuerId <issuer uuid> -AscKeyPath C:\keys\AuthKey_ABC123DEFG.p8
   scripts\ios-wsl.ps1 run-network -PhoneIp 192.168.68.12
 #>
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network', 'screenshot', 'logs')]
+    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network', 'screenshot', 'logs', 'ship')]
     [string]$Command,
     [string]$Distro = 'trailmind-ios',
     [string]$XcodeXip,
@@ -30,7 +32,13 @@ param(
     [string]$Filter,
     # screenshot: inner or outer (iPhone Duo), and the PNG to write
     [string]$Display,
-    [string]$Out
+    [string]$Out,
+    # ship: upload to App Store Connect for TestFlight, with an App Store Connect API key (or $env:ASC_KEY_ID,
+    # $env:ASC_ISSUER_ID and $env:ASC_KEY_PATH)
+    [switch]$Upload,
+    [string]$AscKeyId = $env:ASC_KEY_ID,
+    [string]$AscIssuerId = $env:ASC_ISSUER_ID,
+    [string]$AscKeyPath = $env:ASC_KEY_PATH
 )
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
@@ -86,6 +94,14 @@ switch ($Command) {
         Start-AppleMobileDevice; Invoke-Script (@('screenshot') + $udidArgs + $displayArgs + @("'$wslOut'"))
     }
     'logs' { Start-AppleMobileDevice; Invoke-Script (@('logs') + $udidArgs) }
+    'ship' {
+        if (-not $Upload) { Invoke-Script @('ship'); break }
+        if (-not ($AscKeyId -and $AscIssuerId -and $AscKeyPath)) {
+            throw '-Upload needs -AscKeyId, -AscIssuerId and -AscKeyPath (or $env:ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH)'
+        }
+        $prefix = "ASC_KEY_ID='$AscKeyId' ASC_ISSUER_ID='$AscIssuerId' ASC_KEY_PATH='$(ConvertTo-WslPath $AscKeyPath)'"
+        Invoke-Script @('ship', '--upload') $prefix
+    }
     'run-network' {
         if (-not $PhoneIp) { throw '-PhoneIp is required' }
         Invoke-Script @('run-network', $PhoneIp)

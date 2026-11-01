@@ -9,6 +9,7 @@
 #   scripts/ios-xtool.sh devices          list connected iPhones and their UDIDs
 #   scripts/ios-xtool.sh build            xtool dev build -> ~/trailmind-ios/xtool/TrailMind.app under WSL
 #   scripts/ios-xtool.sh run [--udid ID]  sign with your Apple ID, install and launch on a USB iPhone
+#   scripts/ios-xtool.sh ship [--upload]  App Store build for TestFlight (--upload: ASC_KEY_ID/ISSUER_ID/KEY_PATH set)
 #   scripts/ios-xtool.sh screenshot [--udid ID] [--display inner|outer] FILE.png   capture a screen
 #   scripts/ios-xtool.sh logs [--udid ID] stream TrailMind's log (iPhone Duo display/layout lines)
 #   scripts/ios-xtool.sh pair-network     one-time USB pairing record for cable-free installs (iOS 27)
@@ -197,6 +198,17 @@ cmd_run() {
   (cd "$dir" && "$OAD_DIR/device-run.sh" "$@")
 }
 
+# ship [--upload]: omarchy-apple-dev's App Store build (release build, app icon catalog, Xcode build keys, App Store
+# signing, offline validation) into its own copy, so device builds stay debug. --upload signs with your team and sends
+# the build to App Store Connect for TestFlight; it needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the .p8 file).
+cmd_ship() {
+  need_linux; xtool_env
+  [[ -x "$OAD_DIR/ship.sh" ]] || die "omarchy-apple-dev's ship.sh not found; run setup first"
+  local dir; dir="$(TM_BUILD_DIR="${TM_BUILD_DIR:-$HOME/trailmind-ios-ship}" sync_ios)"
+  (cd "$dir" && "$OAD_DIR/ship.sh" "$@")
+  echo "App Store package: $dir/xtool/TrailMind.ipa"
+}
+
 # --- iPhone checks from Linux (pymobiledevice3; iOS 17+ needs the developer disk image, mounted on demand) ---
 PMD3="$HOME/pymobile3-venv/bin/pymobiledevice3"
 BUNDLE_SUFFIX="com.trailmind.ios.beta"
@@ -294,9 +306,10 @@ case "${1:-}" in
   devices) shift; cmd_devices "$@" ;;
   build) shift; cmd_build "$@" ;;
   run) shift; cmd_run "$@" ;;
+  ship) shift; cmd_ship "$@" ;;
   screenshot) shift; cmd_screenshot "$@" ;;
   logs) shift; cmd_logs "$@" ;;
   pair-network) shift; cmd_pair_network "$@" ;;
   run-network) shift; cmd_run_network "$@" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  *) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "$0"; exit 2 ;;
 esac

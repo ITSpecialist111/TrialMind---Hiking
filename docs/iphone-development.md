@@ -206,18 +206,66 @@ one feature at a time. Keep the shipping Android build working during that migra
 
 ## Friends and family without a public release
 
-- **Recommended: invitation-only TestFlight.** Requires Apple Developer Program/App Store Connect setup.
-  Invite friends as external testers by email; do not enable a public invitation link. External testing
-  normally requires TestFlight Beta App Review. It does not require a public App Store release.
-- Internal TestFlight is for App Store Connect team members (up to 100), not a reason to grant friends
-  developer/account permissions. External testing supports up to 10,000 testers.
-- Ad Hoc distribution is another private option: register tester device identifiers and manage provisioning.
-  It requires paid membership and has device limits. A free personal team is useful for your own local
-  device development, not reliable family distribution.
-- Keep the first preview explicitly non-safety-critical until offline maps, route recovery, location ageing,
-  battery use and emergency UX have been checked on physical iPhones.
+Testers elsewhere can't use the USB install: a free Apple ID only signs 7-day builds for devices plugged into this
+PC. **Invitation-only TestFlight** is the way, and it works from Windows/WSL with no Mac: `ship` builds the App
+Store package with omarchy-apple-dev (release build, app icon catalog, Xcode build keys, App Store signing, privacy
+manifest at the app root) and checks it offline against App Store Connect's rules before uploading.
+
+```powershell
+scripts\ios-wsl.ps1 ship        # dry run: App Store package signed with a test identity, validated offline
+```
+
+Once, as the account holder:
+
+1. Join the paid [Apple Developer Program](https://developer.apple.com/programs/enroll/) with the Apple ID that
+   signs in to xtool. Enrolment can take a day or two to be approved.
+2. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list), register
+   the App ID `com.trailmind.ios.beta` (explicit; no extra capabilities). It is permanent for the App Store Connect
+   record; if Apple says it's taken, change it in `ios/xtool.yml` and `ios/project.yml` together.
+3. In [App Store Connect](https://appstoreconnect.apple.com) → Apps → **+** → New App: iOS, a name (it must be unique
+   on the App Store, for example "TrailMind Hiking"; the name under the icon stays TrailMind), English (UK), the
+   bundle ID above, any SKU. The API can't create apps.
+4. Users and Access → Integrations → App Store Connect API → Team Keys → **+**: role **App Manager** (with access to
+   Certificates, Identifiers & Profiles). Download the `.p8` (only possible once), and note its Key ID and the Issuer
+   ID. Keep the `.p8` outside the repository.
+5. Publish [privacy-policy-ios.md](privacy-policy-ios.md) at a public web address after filling in its placeholders;
+   external testing needs one. The repository is private, so use, for example, a public gist:
+   `gh gist create --public docs/privacy-policy-ios.md` prints its address.
+
+Each build (the build number is the UTC date and time, so it always goes up; the version stays 0.2.0 until changed in
+`ios/Info-xtool.plist` and `ios/project.yml`):
+
+```powershell
+scripts\ios-wsl.ps1 ship -Upload -AscKeyId <Key ID> -AscIssuerId <Issuer ID> -AscKeyPath C:\keys\AuthKey_<Key ID>.p8
+```
+
+The first upload creates the distribution certificate (its private key stays in
+`~/.config/omarchy-apple-dev/distribution/` in WSL) and the App Store profile. Processing takes 5–30 minutes; App
+Store Connect emails if it finds a problem.
+
+Then in App Store Connect → TrailMind → TestFlight:
+
+1. **Test Information:** a beta description (what to try, and that it's a preview not to rely on for safety), a
+   feedback email and the privacy policy address.
+2. **External Testing → +** a group (for example "Friends"), add the build, then **Add testers** by email. The first
+   build of each version goes to Beta App Review, usually within a day; later builds of the same version normally go
+   straight out. Leave the public link off.
+
+Each friend then installs **TestFlight** from the App Store, opens the email invitation on their iPhone (or enters
+the redeem code in TestFlight) and taps Install. Updates arrive in TestFlight; screenshots taken in TrailMind can be
+sent as feedback, and crash reports reach App Store Connect. Each build stops working 90 days after upload, so send
+a new one before then. Testers need their own free [OS Data Hub](https://osdatahub.os.uk/) key (Settings) for OS
+maps; OpenStreetMap works without one.
+
+- Internal testing skips Beta App Review and the privacy policy, but each tester must be added as a user on your App
+  Store Connect team. For friends, external testing is the better fit.
+- Ad Hoc distribution (paid) needs each tester's device identifier and a re-signed build for every new device;
+  TestFlight avoids both.
+- Keep the preview explicitly non-safety-critical until offline maps, route recovery, location ageing, battery use
+  and emergency UX have been checked on testers' iPhones.
 
 Sources: [TestFlight](https://developer.apple.com/testflight/),
+[Invite external testers](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers),
+[omarchy-apple-dev shipping](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/SHIPPING.md),
 [Core Location](https://developer.apple.com/documentation/corelocation),
-[MapKit](https://developer.apple.com/documentation/mapkit),
-[SwiftUI NavigationSplitView](https://developer.apple.com/documentation/swiftui/navigationsplitview).
+[MapKit](https://developer.apple.com/documentation/mapkit).
