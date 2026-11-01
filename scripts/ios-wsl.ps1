@@ -17,12 +17,13 @@
   scripts\ios-wsl.ps1 screenshot -Udid <UDID> -Display inner -Out .\inner.png   # iPhone Duo's open display
   scripts\ios-wsl.ps1 logs -Udid <UDID>
   scripts\ios-wsl.ps1 ship                                # App Store build, validated offline (no account needed)
+  scripts\ios-wsl.ps1 ipa                                 # dist\TrailMind-<version>.ipa for testers to sideload (free)
   scripts\ios-wsl.ps1 ship -Upload -AscKeyId ABC123DEFG -AscIssuerId <issuer uuid> -AscKeyPath C:\keys\AuthKey_ABC123DEFG.p8
   scripts\ios-wsl.ps1 run-network -PhoneIp 192.168.68.12
 #>
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network', 'screenshot', 'logs', 'ship')]
+    [ValidateSet('setup', 'test', 'build', 'auth', 'devices', 'run', 'pair-network', 'run-network', 'screenshot', 'logs', 'ship', 'ipa')]
     [string]$Command,
     [string]$Distro = 'trailmind-ios',
     [string]$XcodeXip,
@@ -30,7 +31,7 @@ param(
     [string]$Udid,
     # test: only run tests whose name matches (swift test --filter)
     [string]$Filter,
-    # screenshot: inner or outer (iPhone Duo), and the PNG to write
+    # screenshot: inner or outer (iPhone Duo), and the PNG to write; ipa: where to write the .ipa
     [string]$Display,
     [string]$Out,
     # ship: upload to App Store Connect for TestFlight, with an App Store Connect API key (or $env:ASC_KEY_ID,
@@ -101,6 +102,15 @@ switch ($Command) {
         }
         $prefix = "ASC_KEY_ID='$AscKeyId' ASC_ISSUER_ID='$AscIssuerId' ASC_KEY_PATH='$(ConvertTo-WslPath $AscKeyPath)'"
         Invoke-Script @('ship', '--upload') $prefix
+    }
+    'ipa' {
+        if ($Out) {
+            $full = [IO.Path]::GetFullPath($Out)
+            $wslOut = '/mnt/' + $full.Substring(0, 1).ToLower() + ($full.Substring(2) -replace '\\', '/')
+            Invoke-Script @('ipa', "'$wslOut'")
+        } else {
+            Invoke-Script @('ipa')
+        }
     }
     'run-network' {
         if (-not $PhoneIp) { throw '-PhoneIp is required' }

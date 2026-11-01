@@ -206,10 +206,32 @@ one feature at a time. Keep the shipping Android build working during that migra
 
 ## Friends and family without a public release
 
-Testers elsewhere can't use the USB install: a free Apple ID only signs 7-day builds for devices plugged into this
-PC. **Invitation-only TestFlight** is the way, and it works from Windows/WSL with no Mac: `ship` builds the App
-Store package with omarchy-apple-dev (release build, app icon catalog, Xcode build keys, App Store signing, privacy
-manifest at the app root) and checks it offline against App Store Connect's rules before uploading.
+Testers elsewhere can't use the USB install: Apple's free signing covers only devices plugged into this PC, and
+only your own. There are two ways to reach them.
+
+### Free: testers install it with their own Apple ID
+
+```powershell
+scripts\ios-wsl.ps1 ipa        # dist\TrailMind-<version>.ipa: unsigned release build with its icons (about 2.5 MB)
+```
+
+Send the `.ipa` with [iphone-sideload.md](iphone-sideload.md). Each tester installs it with Sideloadly (or AltStore
+or SideStore) on their own Windows PC or Mac, which signs it with their own free Apple ID for their own iPhone. The
+app uses no capabilities a free Apple ID can't sign. Their copy stops opening after 7 days until they sign it again
+(their data stays), and they need Developer Mode on.
+
+Testers give their copy a bundle ID of their own (`com.trailmind.ios.beta.<name>`): bundle IDs are unique across
+all Apple accounts, and keeping `com.trailmind.ios.beta` unregistered leaves it free for TestFlight later. With
+another bundle ID, offline map downloads on iOS 26+ don't continue in the background (those task names must start
+with the bundle ID); everything else works the same.
+
+### Paid: TestFlight
+
+**Invitation-only TestFlight** needs the paid Apple Developer Program (US$99 a year), and in return testers install
+from Apple's TestFlight app with no computer, no weekly re-signing and no Developer Mode. It works from Windows/WSL
+with no Mac: `ship` builds the App Store package with omarchy-apple-dev (release build, app icon catalog, Xcode build
+keys, App Store signing, privacy manifest at the app root) and checks it offline against App Store Connect's rules
+before uploading.
 
 ```powershell
 scripts\ios-wsl.ps1 ship        # dry run: App Store package signed with a test identity, validated offline

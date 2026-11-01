@@ -10,6 +10,7 @@
 #   scripts/ios-xtool.sh build            xtool dev build -> ~/trailmind-ios/xtool/TrailMind.app under WSL
 #   scripts/ios-xtool.sh run [--udid ID]  sign with your Apple ID, install and launch on a USB iPhone
 #   scripts/ios-xtool.sh ship [--upload]  App Store build for TestFlight (--upload: ASC_KEY_ID/ISSUER_ID/KEY_PATH set)
+#   scripts/ios-xtool.sh ipa [FILE]       unsigned .ipa for testers to sideload with their own free Apple ID
 #   scripts/ios-xtool.sh screenshot [--udid ID] [--display inner|outer] FILE.png   capture a screen
 #   scripts/ios-xtool.sh logs [--udid ID] stream TrailMind's log (iPhone Duo display/layout lines)
 #   scripts/ios-xtool.sh pair-network     one-time USB pairing record for cable-free installs (iOS 27)
@@ -209,6 +210,26 @@ cmd_ship() {
   echo "App Store package: $dir/xtool/TrailMind.ipa"
 }
 
+# ipa [FILE]: an unsigned release .ipa (app icons compiled) for testers to install with their own free Apple ID
+# through Sideloadly, AltStore or SideStore, which sign it for their own iPhone. Default: dist/TrailMind-<version>.ipa.
+cmd_ipa() {
+  need_linux; xtool_env
+  [[ -x "$OAD_DIR/ship.sh" ]] || die "omarchy-apple-dev's ship.sh not found; run setup first"
+  command -v zip >/dev/null || die "zip not found; run setup first"
+  local dir; dir="$(TM_BUILD_DIR="${TM_BUILD_DIR:-$HOME/trailmind-ios-ship}" sync_ios)"
+  (cd "$dir" && "$OAD_DIR/ship.sh" --device)
+  local app="$dir/xtool/TrailMind.app" version
+  version="$(python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["CFBundleShortVersionString"])' "$app/Info.plist")"
+  local out; out="$(realpath -m "${1:-$REPO_ROOT/dist/TrailMind-$version.ipa}")"
+  local stage; stage="$(mktemp -d)"
+  mkdir -p "$stage/Payload" "$(dirname "$out")"
+  cp -a "$app" "$stage/Payload/"
+  rm -f "$out"
+  (cd "$stage" && zip -qry "$out" Payload)
+  rm -rf "$stage"
+  echo "Sideload package ($(du -h "$out" | cut -f1)): $out"
+}
+
 # --- iPhone checks from Linux (pymobiledevice3; iOS 17+ needs the developer disk image, mounted on demand) ---
 PMD3="$HOME/pymobile3-venv/bin/pymobiledevice3"
 BUNDLE_SUFFIX="com.trailmind.ios.beta"
@@ -307,6 +328,7 @@ case "${1:-}" in
   build) shift; cmd_build "$@" ;;
   run) shift; cmd_run "$@" ;;
   ship) shift; cmd_ship "$@" ;;
+  ipa) shift; cmd_ipa "$@" ;;
   screenshot) shift; cmd_screenshot "$@" ;;
   logs) shift; cmd_logs "$@" ;;
   pair-network) shift; cmd_pair_network "$@" ;;
