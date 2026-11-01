@@ -215,7 +215,15 @@ only your own. There are two ways to reach them.
 scripts\ios-wsl.ps1 ipa        # dist\TrailMind-<version>.ipa: unsigned release build with its icons (about 2.5 MB)
 ```
 
-Send the `.ipa` with [iphone-sideload.md](iphone-sideload.md). Each tester installs it with Sideloadly (or AltStore
+Send the `.ipa` with [iphone-sideload.md](iphone-sideload.md), or, as the repository is public, publish it as a
+pre-release for testers to download (the guide points them to the releases page):
+
+```powershell
+gh release create ios-v0.2.0-preview dist\TrailMind-0.2.0.ipa --prerelease --target ios-duo-parity `
+  --title "TrailMind for iPhone 0.2.0 (preview)" --notes "How to install: docs/iphone-sideload.md"
+```
+
+Each tester installs it with Sideloadly (or AltStore
 or SideStore) on their own Windows PC or Mac, which signs it with their own free Apple ID for their own iPhone. The
 app uses no capabilities a free Apple ID can't sign. Their copy stops opening after 7 days until they sign it again
 (their data stays), and they need Developer Mode on.
@@ -251,8 +259,7 @@ Once, as the account holder:
    Certificates, Identifiers & Profiles). Download the `.p8` (only possible once), and note its Key ID and the Issuer
    ID. Keep the `.p8` outside the repository.
 5. Publish [privacy-policy-ios.md](privacy-policy-ios.md) at a public web address after filling in its placeholders;
-   external testing needs one. The repository is private, so use, for example, a public gist:
-   `gh gist create --public docs/privacy-policy-ios.md` prints its address.
+   external testing needs one. The repository is public, so the file's GitHub page will do.
 
 Each build (the build number is the UTC date and time, so it always goes up; the version stays 0.2.0 until changed in
 `ios/Info-xtool.plist` and `ios/project.yml`):

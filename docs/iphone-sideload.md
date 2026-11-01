@@ -7,7 +7,9 @@ You need:
 
 - an iPhone with iOS 17 or later (iPhone Duo included) and its cable
 - a Windows PC or a Mac
-- the TrailMind `.ipa` file you were sent (for example `TrailMind-0.2.0.ipa`)
+- the TrailMind `.ipa` file: download it from the
+  [TrailMind releases](https://github.com/ITSpecialist111/HikingApp101/releases) page (the newest iPhone preview,
+  under **Assets**), or use the one you were sent
 - your Apple ID. The tool signs in to Apple with it to sign TrailMind for your iPhone only; some people use a spare
   Apple ID for this.
 
@@ -36,7 +38,8 @@ after a one-time setup with the computer; their sites have guides.
 
 ## Updates
 
-When you're sent a new `.ipa`, install it the same way, with the same Bundle ID.
+When there's a new preview on the releases page (or you're sent a new `.ipa`), install it the same way, with the same
+Bundle ID.
 
 ## Good to know
 

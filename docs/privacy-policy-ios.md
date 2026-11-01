@@ -1,7 +1,7 @@
 <!--
-Before publishing: replace [Developer name] and [contact email] below, then host this page at a public web address
-(not a PDF; the repository is private) and paste that address into App Store Connect > TrailMind > TestFlight >
-Test Information > Privacy Policy URL (and, for a public release, App Information > Privacy Policy URL).
+Before publishing: replace [Developer name] and [contact email] below, then use this page's public web address (for
+example its GitHub page; not a PDF) in App Store Connect > TrailMind > TestFlight > Test Information > Privacy Policy
+URL (and, for a public release, App Information > Privacy Policy URL).
 Keep it in step with privacy-policy.md (Android) and ios/TrailMind/Resources/PrivacyInfo.xcprivacy whenever the app's
 network use changes.
 -->

@@ -13,7 +13,7 @@
   scripts\ios-wsl.ps1 test -Filter ShellGeometryTests
   scripts\ios-wsl.ps1 auth             # one-time Apple ID sign-in for xtool (interactive)
   scripts\ios-wsl.ps1 devices          # list connected iPhones and their UDIDs
-  scripts\ios-wsl.ps1 run -Udid 00008101-000455A21189001E
+  scripts\ios-wsl.ps1 run -Udid <UDID>
   scripts\ios-wsl.ps1 screenshot -Udid <UDID> -Display inner -Out .\inner.png   # iPhone Duo's open display
   scripts\ios-wsl.ps1 logs -Udid <UDID>
   scripts\ios-wsl.ps1 ship                                # App Store build, validated offline (no account needed)
