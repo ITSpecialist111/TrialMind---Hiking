@@ -7,6 +7,7 @@ final class MapScreenState: ObservableObject {
     @Published var longPressed: LatLon? = nil
     @Published var showLayers = false
     @Published var showOldMaps = false
+    @Published var showReveal = false
     @Published var showCredits = false
 }
 
@@ -31,8 +32,10 @@ struct MapScreen: View {
                 .onChange(of: area) { _, a in map.visibleArea = a }
 
             if showControls {
+                if prefs.revealLidar { RevealHandle(prefs: prefs, area: area) }
+
                 // The middle of the uncovered map: why the chosen map isn't showing (TileMapView.drawHint).
-                if let hint = hintText {
+                if let hint = hintText ?? revealHint {
                     MapHint(text: hint, opensSettings: keyMissing)
                         .frame(maxWidth: max(0, area.width * 0.84))
                         .position(x: area.midX, y: area.midY)
@@ -67,8 +70,10 @@ struct MapScreen: View {
                 .offset(x: area.minX + 8, y: area.minY)
             }
         }
+        .coordinateSpace(name: RevealHandle.space)
         .sheet(isPresented: $state.showLayers) { LayersSheet().presentationDetents([.medium, .large]) }
         .sheet(isPresented: $state.showOldMaps) { OldMapsSheet().presentationDetents([.medium, .large]) }
+        .sheet(isPresented: $state.showReveal) { RevealSheet().presentationDetents([.medium, .large]) }
         .sheet(item: Binding(get: { state.longPressed.map { PointBox(point: $0) } }, set: { state.longPressed = $0?.point })) { box in
             PointSheet(point: box.point).presentationDetents([.medium])
         }
@@ -92,6 +97,30 @@ struct MapScreen: View {
         return map.tileError ?? map.sourceHint
     }
 
+    /// MapScreen.updateHint's sibling for Reveal (TileMapView.revealHint): why the ground isn't showing under the map.
+    private var revealHint: String? {
+        guard prefs.revealLidar else { return nil }
+        let zoomHint = "Zoom in to reveal the ground under the map. LiDAR downloads need signal."
+        if map.zoom < LidarSource.minZoom { return zoomHint }
+        guard let grid = OsGrid.fromWgs84(map.center), Lidar.squareAt(grid.easting, grid.northing).inExtent else {
+            return "No LiDAR here: the Reveal slider covers England only."
+        }
+        if map.zoom < LidarReveal.fetchZoom && !LidarService.shared.isSaved(Lidar.squareAt(grid.easting, grid.northing)) { return zoomHint }
+        if !LidarService.shared.isSaved(Lidar.squareAt(grid.easting, grid.northing)) { return "Loading LiDAR for this area…" }
+        return nil
+    }
+
+    /// The tool capsule's button switches Reveal on and off, and takes the map close enough for LiDAR to show.
+    private func toggleReveal() {
+        if prefs.revealLidar {
+            prefs.revealLidar = false
+            return
+        }
+        prefs.revealLidar = true
+        if map.zoom < LidarReveal.startZoom { map.centerOn(map.center, zoom: LidarReveal.startZoom, keepFollow: map.follow) }
+        AppModel.shared.toast("Drag the handle across the map to reveal the ground under it. LiDAR covers England.")
+    }
+
     @ViewBuilder private var statusChips: some View {
         FlowLayout(spacing: 6) {
             TMChip(gpsLabel, glass: true, tint: gpsTint) { Navigator.shared.open(.safety) }
@@ -100,6 +129,9 @@ struct MapScreen: View {
             if map.searchPin != nil { TMChip("Clear search pin  ✕", glass: true) { map.clearSearchPin() } }
             if !prefs.historicOverlayId.isEmpty {
                 TMChip("Old map \(prefs.historicOverlayPercent)%", glass: true) { state.showOldMaps = true }
+            }
+            if prefs.revealLidar {
+                TMChip("Reveal · \(prefs.revealStyle.label)", glass: true) { state.showReveal = true }
             }
             GroupChip()
         }
@@ -129,6 +161,8 @@ struct MapScreen: View {
                 if let open = FeatureHooks.openSearch { open() } else { Navigator.shared.open(.more) }
             }
             FabButton(icon: .layers, description: "Map layers", size: 44, flat: true) { state.showLayers = true }
+            FabButton(icon: .reveal, description: prefs.revealLidar ? "Reveal LiDAR is on. Tap to turn it off" : "Reveal LiDAR: pull the map back to see the ground",
+                      size: 44, flat: true, fg: prefs.revealLidar ? p.primary : p.onSurface) { toggleReveal() }
             FabButton(icon: map.follow ? .navigation : .myLocation, description: map.follow ? "Following your position" : "Show my position",
                       size: 44, flat: true, fg: map.follow ? p.primary : p.onSurface) { map.locate() }
             FabButton(icon: .north, description: prefs.mapHeadingUp ? "Heading up. Tap for north up" : "North up. Tap for heading up",
@@ -184,6 +218,7 @@ struct MapScreen: View {
         }
         if prefs.showSteepGround && map.zoom >= TerrainSource.steepMinZoom { lines.append(TerrainSource.credit) }
         if prefs.showLidar && map.zoom >= LidarSource.minZoom { lines.append(LidarSource.credit) }
+        else if prefs.revealLidar && map.zoom >= LidarSource.minZoom { lines.append(LidarSource.credit) }
         return lines
     }
 
@@ -197,7 +232,7 @@ struct MapScreen: View {
         }
         if facilitiesShown { lines.append(Overpass.attribution) }
         if prefs.showSteepGround { lines.append(TerrainSource.credit) }
-        if prefs.showLidar { lines.append(LidarSource.credit) }
+        if prefs.showLidar || prefs.revealLidar { lines.append(LidarSource.credit) }
         return lines.joined(separator: "\n\n")
     }
 }
@@ -391,6 +426,80 @@ struct OldMapsSheet: View {
         }
         .background(p.bg)
         .onAppear { percent = Double(prefs.historicOverlayPercent) }
+    }
+}
+
+/// The Reveal slider's line and handle (TileMapView.drawRevealLine): drag it across the map to pull the map back and
+/// show the LiDAR picture of the ground to its left. The map underneath moves normally; only the handle's strip takes touches.
+struct RevealHandle: View {
+    static let space = "mapScreen"
+    @Environment(\.palette) private var p
+    @ObservedObject var prefs: Prefs
+    let area: CGRect
+
+    var body: some View {
+        let x = area.minX + area.width * CGFloat(prefs.revealPercent) / 100
+        // The handle stays on screen when the line is dragged to an edge.
+        let handleX = min(max(x, area.minX + 22), max(area.minX + 22, area.maxX - 22))
+        ZStack(alignment: .topLeading) {
+            ZStack {
+                Rectangle().fill(Color.black.opacity(0.35)).frame(width: 5)
+                Rectangle().fill(Color.white).frame(width: 3)
+            }
+            .frame(width: 5, height: area.height)
+            .position(x: x, y: area.midY)
+            .allowsHitTesting(false)
+
+            Color.clear
+                .frame(width: 44, height: area.height)
+                .contentShape(Rectangle())
+                .overlay(
+                    Circle().fill(Color.white)
+                        .frame(width: 40, height: 40)
+                        .shadow(color: .black.opacity(0.3), radius: 2)
+                        .overlay(Circle().stroke(p.primary, lineWidth: 2.5))
+                        .overlay(Image(systemName: "chevron.left.chevron.right").font(.system(size: 15, weight: .bold)).foregroundStyle(p.primary))
+                )
+                .position(x: handleX, y: area.midY)
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)).onChanged { drag in
+                    let percent = (drag.location.x - area.minX) / max(area.width, 1) * 100
+                    prefs.revealPercent = Int(percent.rounded()).clamped(0, 100)
+                })
+                .accessibilityElement()
+                .accessibilityLabel("Reveal slider")
+                .accessibilityValue("\(prefs.revealPercent) percent of the map shows the ground")
+                .accessibilityAdjustableAction { direction in
+                    prefs.revealPercent = (prefs.revealPercent + (direction == .increment ? 10 : -10)).clamped(0, 100)
+                }
+        }
+    }
+}
+
+/// Reveal's settings (MapScreen.chooseReveal): which picture of the ground, or off.
+struct RevealSheet: View {
+    @Environment(\.palette) private var p
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var prefs = Prefs.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Reveal the ground").tm(.headline, p)
+                Text("Drag the handle across the map to pull it back and show a 1 m LiDAR picture of the ground, where ruins, " +
+                     "earthworks and old field systems show that you can't see from the path. England only.").tm(.caption, p)
+                ForEach(LidarReveal.Style.allCases, id: \.self) { style in
+                    ListItemRow(title: style.label, subtitle: style.note, icon: .reveal,
+                                badge: prefs.revealStyle == style ? "Showing" : nil) { prefs.revealStyle = style }
+                }
+                Text(LidarSource.credit).tm(.caption, p)
+                TMButton("Turn Reveal off", style: .outlined) {
+                    prefs.revealLidar = false
+                    dismiss()
+                }
+            }
+            .padding(20)
+        }
+        .background(p.bg)
     }
 }
 

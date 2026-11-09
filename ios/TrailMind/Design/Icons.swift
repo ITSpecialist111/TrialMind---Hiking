@@ -190,7 +190,7 @@ struct IconLayer {
 enum TMIcon: String, CaseIterable {
     case add, arrowBack, close, compass, delete, download, folder, fullscreen, fullscreenExit, info, layers, map, menu
     case myLocation, navigation, north, pause, play, remove, route, search, share, sos, sparkle, stop, tune, upload
-    case walk, warning, statHike
+    case walk, warning, statHike, reveal
 
     var layers: [IconLayer] {
         switch self {
@@ -224,6 +224,7 @@ enum TMIcon: String, CaseIterable {
         case .walk: return [IconLayer(d: "M13.5,5.5c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2 -2,0.9 -2,2 0.9,2 2,2zM9.8,8.9L7,23h2.1l1.8,-8 2.1,2v6h2v-7.5l-2.1,-2 0.6,-3C14.8,12 16.8,13 19,13v-2c-1.9,0 -3.5,-1 -4.3,-2.4l-1,-1.6c-0.4,-0.6 -1,-1 -1.7,-1 -0.3,0 -0.5,0.1 -0.8,0.1L6,8.3V13h2V9.6l1.8,-0.7", strokeWidth: nil)]
         case .warning: return [IconLayer(d: "M1,21h22L12,2 1,21zM13,18h-2v-2h2v2zM13,14h-2v-4h2v4z", strokeWidth: nil)]
         case .statHike: return [IconLayer(d: "M2,20L9,8L13,14.5L16,10.5L22,20Z", strokeWidth: nil)]
+        case .reveal: return [IconLayer(d: "M10,3H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h5v2h2V1h-2v2zM10,18H5l5,-6v6zM19,3h-5v2h5v13l-5,-6v9h5c1.1,0 2,-0.9 2,-2V5c0,-1.1 -0.9,-2 -2,-2z", strokeWidth: nil)]
         }
     }
 }

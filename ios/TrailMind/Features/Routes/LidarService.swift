@@ -15,7 +15,13 @@ final class LidarService {
     private final class Shade { let image: CGImage?; init(_ i: CGImage?) { image = i } }
 
     private let root = RouteFiles.folder("lidar")
-    private let permits = DispatchSemaphore(value: 2)
+    private let permits = DispatchSemaphore(value: LidarService.parallel)
+    /// Squares downloaded, and pictures built, at once.
+    private static let parallel = 6
+    private var activeDownloads = 0
+    /// Posted on the main queue when the last of a batch of downloads has finished: Reveal pictures that were waiting
+    /// for a neighbour's edge are drawn again then.
+    static let settled = Notification.Name("trailmind.lidar.settled")
     private let lock = NSLock()
     private var saved = Set<Lidar.Square>()
     private var indexed = false
@@ -27,17 +33,31 @@ final class LidarService {
     private let heightsCache = NSCache<NSString, Floats>()
     private let cragsCache = NSCache<NSString, Flags>()
     private let shades = NSCache<NSString, Shade>()
+    // The Reveal pictures, by square and style, built on `revealQueue` and drawn from here (never built while drawing).
+    private let reveals = NSCache<NSString, Shade>()
+    private var revealStale = Set<String>()
+    private var revealRetryAt: [String: Int64] = [:]
+    private var revealPending = Set<String>()
+    private let revealQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = LidarService.parallel
+        q.qualityOfService = .userInitiated
+        q.name = "trailmind-lidar-reveal"
+        return q
+    }()
 
     /// Called on the main queue when squares arrived that already-shaded neighbours need, so the map can redraw.
     var onStale: (() -> Void)?
 
     init() {
-        heightsCache.totalCostLimit = 48 * Lidar.size * Lidar.size * 4
+        heightsCache.totalCostLimit = 160 * Lidar.size * Lidar.size * 4
         cragsCache.countLimit = 64
         shades.countLimit = LidarSource.maxVisible + 16
+        reveals.countLimit = LidarSource.maxVisible + 16
     }
 
     private static func name(_ s: Lidar.Square) -> NSString { "\(s.col)_\(s.row)" as NSString }
+    private static func revealName(_ s: Lidar.Square, _ style: LidarReveal.Style) -> NSString { "\(s.col)_\(s.row)_\(style.id)" as NSString }
 
     /// Lists the squares already on the phone.
     func start() {
@@ -104,6 +124,10 @@ final class LidarService {
                 cragsCache.removeObject(forKey: Self.name(near))
                 if near != square, shades.object(forKey: Self.name(near)) != nil {
                     _ = lock.withLock { stale.insert(near) }
+                }
+                if near == square { continue }
+                for style in LidarReveal.Style.allCases where reveals.object(forKey: Self.revealName(near, style)) != nil {
+                    _ = lock.withLock { revealStale.insert(Self.revealName(near, style) as String) }
                 }
             }
         }
@@ -206,6 +230,67 @@ final class LidarService {
         return (image, false)
     }
 
+    // MARK: Reveal
+
+    /// What is on hand of the square's Reveal picture: its image (nil where LiDAR has no data), whether it has been
+    /// built, and whether a neighbour has arrived since, so its edges want building again. Never builds anything.
+    func revealPicture(_ square: Lidar.Square, _ style: LidarReveal.Style) -> (image: CGImage?, built: Bool, stale: Bool) {
+        let key = Self.revealName(square, style)
+        guard let cached = reveals.object(forKey: key) else { return (nil, false, false) }
+        return (cached.image, true, lock.withLock { revealStale.contains(key as String) })
+    }
+
+    /// Builds the square's Reveal picture in the background, downloading the square first if `allowNetwork`. `done`
+    /// runs on the main queue when a picture is ready, and again after 30 seconds if a download failed, to ask again.
+    func requestReveal(_ square: Lidar.Square, _ style: LidarReveal.Style, allowNetwork: Bool, done: @escaping () -> Void) {
+        let key = Self.revealName(square, style) as String
+        let proceed: Bool = lock.withLock {
+            if reveals.object(forKey: key as NSString) != nil && !revealStale.contains(key) { return false }
+            // A stale picture is only missing a neighbour's edge: keep it while squares are still arriving.
+            if reveals.object(forKey: key as NSString) != nil && activeDownloads > 0 { return false }
+            if (revealRetryAt[key] ?? 0) > nowMs() { return false }
+            return revealPending.insert(key).inserted
+        }
+        guard proceed else { return }
+        revealQueue.addOperation { [self] in
+            // Cleared before building starts, so a neighbour arriving meanwhile marks the result stale again.
+            let wasStale = lock.withLock { revealStale.remove(key) != nil }
+            let result = buildReveal(square, style, allowNetwork: allowNetwork)
+            lock.withLock {
+                if case .built(let image) = result {
+                    reveals.setObject(Shade(image), forKey: key as NSString)
+                    revealRetryAt[key] = nil
+                } else {
+                    if allowNetwork { revealRetryAt[key] = nowMs() + LidarSource.retryMs }
+                    // The old picture on screen still lacks its neighbour's edge until a rebuild succeeds.
+                    if wasStale { revealStale.insert(key) }
+                }
+                revealPending.remove(key)
+            }
+            DispatchQueue.main.async {
+                if case .built = result { done() } else if allowNetwork { DispatchQueue.main.asyncAfter(deadline: .now() + 31, execute: done) }
+            }
+        }
+    }
+
+    private enum RevealBuild {
+        /// Done: the picture, or none where LiDAR has no data.
+        case built(CGImage?)
+        /// The square's heights aren't on the phone and couldn't be fetched.
+        case unavailable
+    }
+
+    private func buildReveal(_ square: Lidar.Square, _ style: LidarReveal.Style, allowNetwork: Bool) -> RevealBuild {
+        if !square.inExtent { return .built(nil) }
+        guard let centre = heights(square, allowNetwork: allowNetwork) else { return .unavailable }
+        if centre.isEmpty { return .built(nil) }
+        let wide = Lidar.padded(centre, border: LidarReveal.border) { dx, dy in
+            // Rows run south, so the square above (dy = -1) is the next one north.
+            heights(Lidar.Square(square.col + dx, square.row - dy), allowNetwork: false).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        return .built(RouteImages.image(argb: LidarReveal.render(wide, style), width: Lidar.size, height: Lidar.size))
+    }
+
     // MARK: Files
 
     private func file(_ square: Lidar.Square) -> URL { root.appendingPathComponent(LidarSource.fileName(square)) }
@@ -217,7 +302,15 @@ final class LidarService {
 
     private func fetch(_ square: Lidar.Square) -> Data? {
         permits.wait()
-        defer { permits.signal() }
+        lock.withLock { activeDownloads += 1 }
+        defer {
+            let idle = lock.withLock { () -> Bool in
+                activeDownloads -= 1
+                return activeDownloads == 0
+            }
+            permits.signal()
+            if idle { DispatchQueue.main.async { NotificationCenter.default.post(name: Self.settled, object: nil) } }
+        }
         guard RouteNetwork.shared.networkAllowed, let request = RouteHTTP.get(LidarSource.url(square), timeout: 30),
               let response = try? RouteHTTP.shared.fetch(request, maxBytes: LidarSource.maxSquareBytes, tooLarge: "LiDAR square too large"),
               response.status == 200, !response.data.isEmpty else { return nil }

@@ -6,9 +6,9 @@
 	<key>CFBundleDisplayName</key>
 	<string>TrailMind</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.3.1</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>4</string>
 	<key>DTPlatformName</key>
 	<string>iphoneos</string>
 	<key>DTPlatformVersion</key>

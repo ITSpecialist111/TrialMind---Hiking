@@ -133,6 +133,72 @@ final class LidarTests: XCTestCase {
         XCTAssertEqual(padded[midRow + stride - 1], 5)
         XCTAssertEqual(padded[midRow], 1)
         XCTAssertEqual(padded[0], 1)
+        let wide = Lidar.padded(centre, border: LidarReveal.border) { dx, dy in dx == 1 && dy == 0 ? east : nil }
+        let wideStride = Lidar.size + 2 * LidarReveal.border
+        let wideRow = (LidarReveal.border + 100) * wideStride
+        XCTAssertEqual(wide.count, wideStride * wideStride)
+        XCTAssertEqual(wide[wideRow + wideStride - 1], 5)
+        XCTAssertEqual(wide[wideRow + LidarReveal.border + Lidar.size], 5)
+        XCTAssertEqual(wide[wideRow + LidarReveal.border + Lidar.size - 1], 1)
+    }
+
+    // A level square at 100 m with a 2 m deep, 6 m wide ditch across rows 126...131 and a 1 m high bank on rows 160...163.
+    private func earthworks() -> [Float] {
+        (0..<(Lidar.size * Lidar.size)).map { i in
+            let row = i / Lidar.size
+            return (126...131).contains(row) ? 98 : (160...163).contains(row) ? 101 : 100
+        }
+    }
+
+    private func grey(_ argb: UInt32) -> Int {
+        XCTAssertEqual(argb >> 24, 0xFF, "reveal pictures are opaque")
+        XCTAssertEqual(argb >> 16 & 0xFF, argb & 0xFF)
+        XCTAssertEqual(argb >> 8 & 0xFF, argb & 0xFF)
+        return Int(argb & 0xFF)
+    }
+
+    func testRevealShowsDitchesDarkAndBanksLightInEveryStyle() {
+        let padded = Lidar.padded(earthworks(), border: LidarReveal.border) { _, _ in nil }
+        for style in LidarReveal.Style.allCases {
+            let pixels = LidarReveal.render(padded, style)
+            func pixel(_ row: Int) -> Int { grey(pixels[row * Lidar.size + 128]) }
+            let level = pixel(30)
+            let ditch = (124...133).map { pixel($0) }
+            if style == .hillshade {
+                XCTAssertTrue(ditch.contains { abs($0 - level) > 20 }, "\(style): the ditch walls are shaded")
+            } else {
+                XCTAssertTrue(ditch.min()! < level - 20, "\(style): the ditch is darker than level ground")
+            }
+            if style == .slrm { XCTAssertTrue(pixel(162) > level + 10, "\(style): the bank is lighter") }
+        }
+    }
+
+    func testRevealOfLevelGroundIsEvenAndLeavesTheMapShowingWhereThereAreNoHeights() {
+        var heights = [Float](repeating: 50, count: Lidar.size * Lidar.size)
+        for i in 0..<(40 * Lidar.size) { heights[i] = .nan }
+        let padded = Lidar.padded(heights, border: LidarReveal.border) { _, _ in nil }
+        for style in LidarReveal.Style.allCases {
+            let pixels = LidarReveal.render(padded, style)
+            XCTAssertEqual(pixels[10 * Lidar.size + 100], 0, "\(style): no survey, nothing drawn")
+            let level = grey(pixels[200 * Lidar.size + 100])
+            XCTAssertEqual(level, grey(pixels[150 * Lidar.size + 30]))
+            XCTAssertTrue((100...255).contains(level))
+        }
+    }
+
+    func testSkyViewIsOneOnLevelGroundAndLessInAHollow() {
+        let stride = Lidar.size + 2 * LidarReveal.border
+        let padded = Lidar.padded(earthworks(), border: LidarReveal.border) { _, _ in nil }
+        func at(_ row: Int) -> Float { LidarReveal.skyView(padded, (row + LidarReveal.border) * stride + 128 + LidarReveal.border, stride) }
+        XCTAssertEqual(at(30), 1, accuracy: 1e-6)
+        XCTAssertTrue(at(128) < 0.9)
+        XCTAssertTrue(at(162) > at(128))
+    }
+
+    func testRevealStyleIdsRoundTripAndDefaultToSkyView() {
+        for style in LidarReveal.Style.allCases { XCTAssertEqual(LidarReveal.Style.of(style.id), style) }
+        XCTAssertEqual(LidarReveal.Style.of(nil), .svf)
+        XCTAssertEqual(LidarReveal.Style.of("nonsense"), .svf)
     }
 
     /// `LidarRouteCheck.Ground` from closures, standing in for Kotlin's anonymous objects.

@@ -174,12 +174,14 @@ struct TrailMapView: UIViewRepresentable {
         context.coordinator.attach(map)
         context.coordinator.syncBase(map, force: true)
         context.coordinator.syncContent(map)
+        context.coordinator.syncReveal(map)
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.syncBase(map, force: false)
+        context.coordinator.syncReveal(map)
         if context.coordinator.shownRevision != controller.revision { context.coordinator.syncContent(map) }
     }
 
@@ -192,6 +194,8 @@ struct TrailMapView: UIViewRepresentable {
         private var historicOverlay: MKTileOverlay?
         private var historicAlpha: CGFloat = 0.55
         private var featureOverlays: [String: MKTileOverlay] = [:]
+        private var revealOverlay: RevealOverlay?
+        private var revealKey = ""
         private var featureAlpha: [ObjectIdentifier: CGFloat] = [:]
         private var lineOverlays: [MKOverlay] = []
         private var annotations: [MKAnnotation] = []
@@ -340,6 +344,47 @@ struct TrailMapView: UIViewRepresentable {
             map.addAnnotations(list)
         }
 
+        // MARK: Reveal
+
+        /// Adds or removes the Reveal layer to match the setting, keeping it under the route and other lines.
+        func syncReveal(_ map: MKMapView) {
+            if parent.prefs.revealLidar {
+                if revealOverlay == nil {
+                    let overlay = RevealOverlay()
+                    revealOverlay = overlay
+                    if let line = lineOverlays.first { map.insertOverlay(overlay, below: line) } else { map.addOverlay(overlay, level: .aboveLabels) }
+                }
+                let area = parent.controller.visibleArea
+                let key = "\(parent.prefs.revealStyle.id)|\(parent.prefs.revealPercent)|\(map.bounds)|\(area)"
+                if key != revealKey {
+                    revealKey = key
+                    updateRevealClip(map)
+                }
+            } else if let overlay = revealOverlay {
+                map.removeOverlay(overlay)
+                revealOverlay = nil
+                revealKey = ""
+            }
+        }
+
+        /// The part of the map to the left of the slider's line, as a quadrilateral of map points, with a screen's
+        /// margin beyond the edges so a pan shows no gap before the layer is drawn again.
+        func revealClip(_ map: MKMapView) -> [MKMapPoint] {
+            let b = map.bounds
+            guard b.width > 0, b.height > 0 else { return [] }
+            let controller = parent.controller
+            let area = controller.visibleArea.width > 0 && controller.visibleArea.height > 0 ? controller.visibleArea : b
+            let line = area.minX + area.width * CGFloat(parent.prefs.revealPercent) / 100
+            let corners = [CGPoint(x: b.minX - b.width, y: b.minY - b.height), CGPoint(x: line, y: b.minY - b.height),
+                           CGPoint(x: line, y: b.maxY + b.height), CGPoint(x: b.minX - b.width, y: b.maxY + b.height)]
+            return corners.map { MKMapPoint(map.convert($0, toCoordinateFrom: map)) }
+        }
+
+        func updateRevealClip(_ map: MKMapView) {
+            guard let overlay = revealOverlay else { return }
+            (map.renderer(for: overlay) as? RevealRenderer)?.update(style: parent.prefs.revealStyle, clip: revealClip(map))
+        }
+
         // MARK: Rendering
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -348,6 +393,9 @@ struct TrailMapView: UIViewRepresentable {
                 if tiles === historicOverlay { r.alpha = historicAlpha }
                 if let a = featureAlpha[ObjectIdentifier(tiles)] { r.alpha = a }
                 return r
+            }
+            if let reveal = overlay as? RevealOverlay {
+                return RevealRenderer(overlay: reveal, style: parent.prefs.revealStyle, clip: revealClip(mapView))
             }
             if let line = overlay as? StyledPolyline {
                 let r = MKPolylineRenderer(polyline: line)
@@ -408,7 +456,13 @@ struct TrailMapView: UIViewRepresentable {
             }
         }
 
+        // The slider's line stays put on the screen while the map moves under it, so the layer's clip follows the map.
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            updateRevealClip(mapView)
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            updateRevealClip(mapView)
             let c = mapView.centerCoordinate
             let zoom = MapController.zoom(of: mapView) ?? parent.controller.zoom
             let captions = zoom >= MemberAnnotationView.captionMinZoom

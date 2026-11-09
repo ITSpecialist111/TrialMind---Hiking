@@ -31,6 +31,9 @@ final class Prefs: ObservableObject {
         showSteepGround = b("show_steep_ground", false)
         showLidar = b("show_lidar", false)
         packLidar = b("pack_lidar", true)
+        revealLidar = b("reveal_lidar", false)
+        revealStyle = LidarReveal.Style.of(ud.string(forKey: "reveal_style"))
+        revealPercent = i("reveal_percent", 50).clamped(0, 100)
         showFacilities = b("show_facilities", true)
         flatSpeedKmh = f("flat_speed", 4.5)
         conditionsFactor = f("conditions", 1.0)
@@ -125,6 +128,11 @@ final class Prefs: ObservableObject {
     @Published var showLidar: Bool { didSet { d.set(showLidar, forKey: "show_lidar") } }
     /// Route offline maps also save 1 m LiDAR near the route (England).
     @Published var packLidar: Bool { didSet { d.set(packLidar, forKey: "pack_lidar") } }
+    /// The Reveal slider: LiDAR picture of the ground drawn over the part of the map left of a draggable line.
+    @Published var revealLidar: Bool { didSet { d.set(revealLidar, forKey: "reveal_lidar") } }
+    @Published var revealStyle: LidarReveal.Style { didSet { d.set(revealStyle.id, forKey: "reveal_style") } }
+    /// How much of the map width, from the left, the Reveal picture covers: 0–100.
+    @Published var revealPercent: Int { didSet { d.set(revealPercent.clamped(0, 100), forKey: "reveal_percent") } }
     @Published var showFacilities: Bool { didSet { d.set(showFacilities, forKey: "show_facilities") } }
     @Published var flatSpeedKmh: Double { didSet { d.set(flatSpeedKmh, forKey: "flat_speed") } }
     @Published var conditionsFactor: Double { didSet { d.set(conditionsFactor, forKey: "conditions") } }

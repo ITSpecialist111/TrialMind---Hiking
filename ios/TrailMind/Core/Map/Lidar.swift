@@ -137,8 +137,8 @@ enum Lidar {
 
     /// `centre` with `border` pixels around it from its neighbours. `neighbour` gets the offset in pixel rows and
     /// columns, so dy = -1 is the square to the north; where it has none, the centre's own edge is repeated.
-    static func padded(_ centre: [Float], _ neighbour: (_ dx: Int, _ dy: Int) -> [Float]?) -> [Float] {
-        precondition(centre.count == size * size)
+    static func padded(_ centre: [Float], border: Int = Lidar.border, _ neighbour: (_ dx: Int, _ dy: Int) -> [Float]?) -> [Float] {
+        precondition(centre.count == size * size && border >= 0 && border <= size)
         let stride = size + 2 * border
         var around = [[Float]?](repeating: nil, count: 9)
         for i in 0..<9 {

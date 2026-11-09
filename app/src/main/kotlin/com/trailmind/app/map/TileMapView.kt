@@ -30,6 +30,7 @@ import com.trailmind.core.geo.TileKey
 import com.trailmind.core.geo.WebMercator
 import com.trailmind.core.map.BngTiles
 import com.trailmind.core.map.Lidar
+import com.trailmind.core.map.LidarReveal
 import com.trailmind.core.map.TileFootprint
 import com.trailmind.core.nav.DistanceMarks
 import kotlin.math.floor
@@ -100,6 +101,8 @@ class TileMapView(context: Context) : View(context) {
         fun onFollowChanged(follow: Boolean) {}
         /** The map credit (or the OS logo) was tapped: licences ask for a way to reach their terms from the map. */
         fun onAttributionTap() {}
+        /** The Reveal line was let go at [fraction] of the map's width, to be remembered. */
+        fun onRevealMoved(fraction: Float) {}
     }
 
     private val provider = TrailMindApp.instance.tiles
@@ -157,6 +160,18 @@ class TileMapView(context: Context) : View(context) {
     var showLidar = false
         set(v) { if (field != v) { field = v; invalidate() } }
     private var lidarDrawn = false
+    /** The Reveal slider: opaque LiDAR pictures of the ground (England) to the left of a draggable line, the map to its right. */
+    var reveal = false
+        set(v) { if (field != v) { field = v; revealDragging = false; invalidate() } }
+    var revealStyle = LidarReveal.Style.SVF
+        set(v) { if (field != v) { field = v; invalidate() } }
+    /** Where the Reveal line is, as a fraction of the map's width from the left. */
+    var revealFraction = 0.5f
+        set(v) { val f = v.coerceIn(0f, 1f); if (field != f) { field = f; invalidate() } }
+    private var revealHint: String? = null
+    private var revealDragging = false
+    private val clipPath = Path()
+    private val clipMatrix = Matrix()
     /** A scanned historic map (Great Britain) drawn over the base map, or null when off. */
     var historic: TileSource? = null
         set(v) { if (field?.id != v?.id) { field = v; invalidate() } }
@@ -224,6 +239,10 @@ class TileMapView(context: Context) : View(context) {
     private val accuracyStroke = strokePaint(Color.argb(120, 25, 118, 210), 1f)
     private val dotFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(25, 118, 210) }
     private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val revealCasing = strokePaint(Color.argb(90, 0, 0, 0), 6f)
+    private val revealLine = strokePaint(Color.WHITE, 3f)
+    private val revealRing = strokePaint(Color.rgb(0, 83, 92), 2.5f)
+    private val revealChevrons = Path()
     private val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(110, 25, 118, 210) }
     private val wpFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(142, 36, 170) }
     private val facilityFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 96, 85) }
@@ -435,11 +454,48 @@ class TileMapView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (reveal && dragReveal(event)) return true
         scaleDetector.onTouchEvent(event)
         gestureDetector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) follow = false
         return true
     }
+
+    /** Takes the touch while a finger holds the Reveal handle, so dragging it doesn't pan the map; true if it did. */
+    private fun dragReveal(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                if (kotlin.math.abs(event.x - revealHandleX()) > REVEAL_GRAB_DP * density) return false
+                revealDragging = true
+                parent?.requestDisallowInterceptTouchEvent(true)
+                moveReveal(event.x)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!revealDragging) return false
+                moveReveal(event.x)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!revealDragging) return false
+                revealDragging = false
+                listener?.onRevealMoved(revealFraction)
+                return true
+            }
+        }
+        return revealDragging
+    }
+
+    private fun moveReveal(x: Float) {
+        val room = (width - coveredLeftPx).coerceAtLeast(1f)
+        revealFraction = (x - coveredLeftPx) / room
+    }
+
+    private fun revealLineX(w: Float = width.toFloat()) = coveredLeftPx + revealFraction * (w - coveredLeftPx).coerceAtLeast(1f)
+
+    /** The handle stays on screen when the line is dragged to an edge. */
+    private fun revealHandleX(w: Float = width.toFloat()) =
+        revealLineX(w).coerceIn(REVEAL_HANDLE_DP * density, (w - REVEAL_HANDLE_DP * density).coerceAtLeast(REVEAL_HANDLE_DP * density))
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -499,8 +555,9 @@ class TileMapView(context: Context) : View(context) {
         drawTarget(canvas, w, h)
         drawSearchPin(canvas, w, h)
         drawPosition(canvas, w, h)
+        drawRevealLine(canvas, w, h)
         drawScaleAndAttribution(canvas, w, h)
-        (hint ?: sourceHint)?.let { drawHint(canvas, it, w, h) }
+        (hint ?: sourceHint ?: revealHint.takeIf { reveal })?.let { drawHint(canvas, it, w, h) }
     }
 
     /** Screen position of [p] on the turned map, into [px] and [py]. */
@@ -751,9 +808,13 @@ class TileMapView(context: Context) : View(context) {
      */
     private fun drawLidar(canvas: Canvas, w: Float, h: Float) {
         lidarDrawn = false
+        revealHint = null
         // Every frame, even with the layer off: squares asked for before it are no longer wanted, so none are downloaded.
         lidar.beginFrame()
-        if (!showLidar || zoom < LIDAR_MIN_ZOOM) return
+        val shading = showLidar && zoom >= LIDAR_MIN_ZOOM
+        val revealing = reveal && zoom >= LIDAR_MIN_ZOOM
+        if (reveal && !revealing) revealHint = REVEAL_ZOOM_HINT
+        if (!shading && !revealing) return
         var minE = Double.MAX_VALUE
         var maxE = -Double.MAX_VALUE
         var minN = Double.MAX_VALUE
@@ -763,36 +824,112 @@ class TileMapView(context: Context) : View(context) {
             minE = minOf(minE, g.easting); maxE = maxOf(maxE, g.easting)
             minN = minOf(minN, g.northing); maxN = maxOf(maxN, g.northing)
         }
-        val squares = Lidar.box(minE, minN, maxE, maxN, LidarProvider.MAX_VISIBLE) ?: return
-        if (squares.isEmpty()) return
-        lidar.keepOverlays(squares.size)
+        val inView = Lidar.box(minE, minN, maxE, maxN, LidarProvider.MAX_VISIBLE)
+        if (inView == null) {
+            if (reveal) revealHint = REVEAL_ZOOM_HINT
+            return
+        }
+        if (inView.isEmpty()) {
+            if (reveal) revealHint = REVEAL_ENGLAND_HINT
+            return
+        }
+        // Nearest the middle of the screen first, so the ground you are looking at is downloaded and built before the edges.
+        val middle = OsGrid.project(LatLon(centerLat, centerLon))
+        val midCol = middle.easting / Lidar.SIZE
+        val midRow = middle.northing / Lidar.SIZE
+        val squares = inView.sortedBy { (it.col + 0.5 - midCol).let { d -> d * d } + (it.row + 0.5 - midRow).let { d -> d * d } }
+        lidar.keepOverlays(squares.size, if (shading && revealing) 2 else 1)
         if (lidarCorners.size > 20_000) lidarCorners.clear()
+        if (shading) {
+            val fetch = zoom >= LIDAR_FETCH_ZOOM
+            for (square in squares) {
+                if (!placeLidarSquare(square, w, h)) continue
+                val bitmap = lidar.overlay(square)
+                if (bitmap == null || lidar.isStale(square)) lidar.requestOverlay(square, fetch)
+                if (bitmap != null && bitmap !== LidarProvider.EMPTY) {
+                    // Neighbours share the same corner values, so the triangles meet with no gap and no overlap.
+                    canvas.drawBitmapMesh(bitmap, 1, 1, lidarMesh, 0, null, 0, tilePaint)
+                    lidarDrawn = true
+                }
+            }
+        }
+        if (revealing) drawReveal(canvas, squares, w, h)
+    }
+
+    /** The opaque Reveal pictures, only to the left of the line however the map is turned. */
+    private fun drawReveal(canvas: Canvas, squares: List<Lidar.Square>, w: Float, h: Float) {
+        val lineX = revealLineX(w)
+        clipPath.rewind()
+        clipPath.addRect(0f, 0f, lineX, h, Path.Direction.CW)
+        if (bearing != 0f) {
+            // The canvas is turned against the bearing, so the clip is turned back by it.
+            clipMatrix.setRotate(bearing, focalX(w), h / 2)
+            clipPath.transform(clipMatrix)
+        }
+        val fetch = zoom >= REVEAL_FETCH_ZOOM
+        var drawn = false
+        var missing = false
+        var seen = 0
+        canvas.save()
+        canvas.clipPath(clipPath)
+        for (square in squares) {
+            if (!placeLidarSquare(square, w, h)) continue
+            // Squares wholly under the map's side of the line aren't wanted, and aren't downloaded.
+            if (bearing == 0f && minOf(minOf(lidarMesh[0], lidarMesh[2]), minOf(lidarMesh[4], lidarMesh[6])) >= lineX) continue
+            seen++
+            val bitmap = lidar.overlay(square, revealStyle)
+            if (bitmap == null || lidar.isStale(square, revealStyle)) lidar.requestOverlay(square, fetch, revealStyle)
+            if (bitmap == null) missing = true
+            if (bitmap != null && bitmap !== LidarProvider.EMPTY) {
+                canvas.drawBitmapMesh(bitmap, 1, 1, lidarMesh, 0, null, 0, tilePaint)
+                drawn = true
+            }
+        }
+        canvas.restore()
+        if (drawn) lidarDrawn = true
+        else if (missing && !fetch) revealHint = REVEAL_ZOOM_HINT
+        else if (missing) revealHint = REVEAL_LOADING_HINT
+        else if (seen > 0) revealHint = REVEAL_ENGLAND_HINT
+    }
+
+    /** Puts [square]'s corners on the screen into [lidarMesh]; false if none of it shows. */
+    private fun placeLidarSquare(square: Lidar.Square, w: Float, h: Float): Boolean {
         fun corner(col: Int, row: Int, index: Int) {
             val key = (col.toLong() shl 32) or (row.toLong() and 0xFFFF_FFFFL)
             val p = lidarCorners.getOrPut(key) { OsGrid.toWgs84(col * Lidar.SIZE.toDouble(), row * Lidar.SIZE.toDouble()) }
             lidarMesh[index] = toScreenX(p.lon, w)
             lidarMesh[index + 1] = toScreenY(p.lat, h)
         }
-        val fetch = zoom >= LIDAR_FETCH_ZOOM
         val m = lidarMesh
-        for (square in squares) {
-            corner(square.col, square.row + 1, 0)
-            corner(square.col + 1, square.row + 1, 2)
-            corner(square.col, square.row, 4)
-            corner(square.col + 1, square.row, 6)
-            val left = minOf(minOf(m[0], m[2]), minOf(m[4], m[6]))
-            val right = maxOf(maxOf(m[0], m[2]), maxOf(m[4], m[6]))
-            val top = minOf(minOf(m[1], m[3]), minOf(m[5], m[7]))
-            val bottom = maxOf(maxOf(m[1], m[3]), maxOf(m[5], m[7]))
-            if (!onScreen(left, top, right, bottom, w, h)) continue
-            val bitmap = lidar.overlay(square)
-            if (bitmap == null || lidar.isStale(square)) lidar.requestOverlay(square, fetch)
-            if (bitmap != null && bitmap !== LidarProvider.EMPTY) {
-                // Neighbours share the same corner values, so the triangles meet with no gap and no overlap.
-                canvas.drawBitmapMesh(bitmap, 1, 1, m, 0, null, 0, tilePaint)
-                lidarDrawn = true
-            }
-        }
+        corner(square.col, square.row + 1, 0)
+        corner(square.col + 1, square.row + 1, 2)
+        corner(square.col, square.row, 4)
+        corner(square.col + 1, square.row, 6)
+        val left = minOf(minOf(m[0], m[2]), minOf(m[4], m[6]))
+        val right = maxOf(maxOf(m[0], m[2]), maxOf(m[4], m[6]))
+        val top = minOf(minOf(m[1], m[3]), minOf(m[5], m[7]))
+        val bottom = maxOf(maxOf(m[1], m[3]), maxOf(m[5], m[7]))
+        return onScreen(left, top, right, bottom, w, h)
+    }
+
+    /** The Reveal line and its handle, over everything but the credits. */
+    private fun drawRevealLine(canvas: Canvas, w: Float, h: Float) {
+        if (!reveal) return
+        val x = revealLineX(w)
+        canvas.drawLine(x, 0f, x, h, revealCasing)
+        canvas.drawLine(x, 0f, x, h, revealLine)
+        val hx = revealHandleX(w)
+        val cy = h / 2
+        val r = REVEAL_HANDLE_DP * density
+        canvas.drawCircle(hx, cy, r + 1.5f * density, revealCasing)
+        canvas.drawCircle(hx, cy, r, white)
+        canvas.drawCircle(hx, cy, r, revealRing)
+        val arm = 6 * density
+        val gap = 4 * density
+        revealChevrons.rewind()
+        revealChevrons.moveTo(hx - gap, cy - arm); revealChevrons.lineTo(hx - gap - arm, cy); revealChevrons.lineTo(hx - gap, cy + arm)
+        revealChevrons.moveTo(hx + gap, cy - arm); revealChevrons.lineTo(hx + gap + arm, cy); revealChevrons.lineTo(hx + gap, cy + arm)
+        canvas.drawPath(revealChevrons, revealRing)
     }
 
     private fun drawBngOfflineArea(canvas: Canvas, w: Float, h: Float, footprint: TileFootprint) {
@@ -1188,6 +1325,15 @@ class TileMapView(context: Context) : View(context) {
         const val LIDAR_MIN_ZOOM = 14.5
         /** ...and missing ones are downloaded only this close, where a screen needs a few megabytes, not tens. */
         const val LIDAR_FETCH_ZOOM = 16.5
+        /** The Reveal slider downloads from the same distance as the LiDAR layer: the service is slow, so every square counts. */
+        const val REVEAL_FETCH_ZOOM = 16.5
+        /** Where turning Reveal on takes the map: close enough that even a tablet's screen needs few squares. */
+        const val REVEAL_START_ZOOM = 17.0
+        private const val REVEAL_GRAB_DP = 26f
+        private const val REVEAL_HANDLE_DP = 20f
+        private const val REVEAL_ZOOM_HINT = "Zoom in to reveal the ground under the map. LiDAR downloads need signal."
+        private const val REVEAL_LOADING_HINT = "Loading LiDAR for this area…"
+        private const val REVEAL_ENGLAND_HINT = "No LiDAR here: the Reveal slider covers England only."
         private val NICE_METRES = listOf(5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10_000.0, 20_000.0, 50_000.0, 100_000.0, 200_000.0, 500_000.0)
         private val NICE_FEET = listOf(20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2640.0, 5280.0, 10560.0, 26400.0, 52800.0, 105600.0, 264000.0, 528000.0)
     }
