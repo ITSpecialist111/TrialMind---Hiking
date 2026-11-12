@@ -1,6 +1,7 @@
 ---
 layout: default
 title: TrailMind privacy policy
+permalink: /privacypolicy
 ---
 
 <!--
