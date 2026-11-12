@@ -4,11 +4,15 @@
 #
 #   scripts/ios-xtool.sh setup            Swift 6.4 + libimobiledevice + omarchy-apple-dev toolchain (Ubuntu)
 #   XCODE_XIP=/path/Xcode_27.x.xip scripts/ios-xtool.sh setup   ...then register the iOS SDK
-#   scripts/ios-xtool.sh test             LocationText unit tests on Linux (no iOS SDK needed)
+#   scripts/ios-xtool.sh test [FILTER]    the ported core tests on Linux (no iOS SDK needed)
 #   scripts/ios-xtool.sh auth             once: sign xtool in to your Apple ID (interactive)
 #   scripts/ios-xtool.sh devices          list connected iPhones and their UDIDs
 #   scripts/ios-xtool.sh build            xtool dev build -> ~/trailmind-ios/xtool/TrailMind.app under WSL
 #   scripts/ios-xtool.sh run [--udid ID]  sign with your Apple ID, install and launch on a USB iPhone
+#   scripts/ios-xtool.sh ship [--upload]  App Store build for TestFlight (--upload: ASC_KEY_ID/ISSUER_ID/KEY_PATH set)
+#   scripts/ios-xtool.sh ipa [FILE]       unsigned .ipa for testers to sideload with their own free Apple ID
+#   scripts/ios-xtool.sh screenshot [--udid ID] [--display inner|outer] FILE.png   capture a screen
+#   scripts/ios-xtool.sh logs [--udid ID] stream TrailMind's log (iPhone Duo display/layout lines)
 #   scripts/ios-xtool.sh pair-network     one-time USB pairing record for cable-free installs (iOS 27)
 #   scripts/ios-xtool.sh run-network IP   install + launch over Wi-Fi/Tailscale (iOS 27, after pair-network)
 #
@@ -42,8 +46,9 @@ die() { echo "error: $*" >&2; exit 1; }
 need_linux() { [[ "$(uname -s)" == Linux ]] || die "run this inside Linux or WSL (see docs/iphone-development.md)"; }
 
 # A project on /mnt/c is very slow for SwiftPM and loses Unix permissions, so build from a Linux-side copy.
+# TM_BUILD_DIR lets several checkouts (git worktrees) build side by side without sharing a copy.
 sync_ios() {
-  local dest="$HOME/trailmind-ios"
+  local dest="${TM_BUILD_DIR:-$HOME/trailmind-ios}"
   if [[ "$IOS_DIR" == /mnt/* ]]; then
     mkdir -p "$dest"
     rsync -a --delete --exclude .build --exclude xtool --exclude .bsp --exclude Generated \
@@ -132,19 +137,30 @@ pmd3_python313() {
 cmd_test() {
   need_linux
   command -v swift >/dev/null || die "swift not found; run setup first"
-  local tmp; tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/Sources/TrailMind" "$tmp/Tests/TrailMindTests"
-  cp "$IOS_DIR/TrailMind/LocationText.swift" "$IOS_DIR/TrailMind/MapLayer.swift" "$tmp/Sources/TrailMind/"
-  cp "$IOS_DIR/TrailMindTests/LocationTextTests.swift" "$IOS_DIR/TrailMindTests/MapLayerTests.swift" "$tmp/Tests/TrailMindTests/"
-  cat > "$tmp/Package.swift" <<'EOF'
+  # A persistent directory keeps SwiftPM's build and the swift-crypto checkout between runs; TM_TEST_DIR keeps
+  # parallel checkouts apart.
+  local dir="${TM_TEST_DIR:-$HOME/trailmind-tests}"
+  mkdir -p "$dir/Sources/TrailMind" "$dir/Tests/TrailMindTests"
+  # Only the Foundation-only code in TrailMind/Core builds on Linux, so the tests may use nothing else.
+  rsync -a --delete "$IOS_DIR/TrailMind/Core/" "$dir/Sources/TrailMind/Core/"
+  rsync -a --delete "$IOS_DIR/TrailMindTests/" "$dir/Tests/TrailMindTests/"
+  local resources=""
+  [[ -d "$dir/Tests/TrailMindTests/Fixtures" ]] && resources=', resources: [.copy("Fixtures")]'
+  # CryptoKit is Apple-only; swift-crypto is the same API on Linux (Core imports whichever exists).
+  cat > "$dir/Package.swift.new" <<EOF
 // swift-tools-version: 6.0
 import PackageDescription
 let package = Package(name: "TrailMind",
-  targets: [.target(name: "TrailMind"), .testTarget(name: "TrailMindTests", dependencies: ["TrailMind"])],
+  dependencies: [.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0")],
+  targets: [
+    .target(name: "TrailMind", dependencies: [.product(name: "Crypto", package: "swift-crypto")]),
+    .testTarget(name: "TrailMindTests", dependencies: ["TrailMind"]$resources),
+  ],
   swiftLanguageModes: [.v5])
 EOF
-  (cd "$tmp" && swift test)
+  cmp -s "$dir/Package.swift.new" "$dir/Package.swift" || mv "$dir/Package.swift.new" "$dir/Package.swift"
+  rm -f "$dir/Package.swift.new"
+  (cd "$dir" && swift test ${1:+--filter "$1"})
 }
 
 xtool_env() {
@@ -178,7 +194,114 @@ cmd_build() {
 cmd_run() {
   need_linux; xtool_env
   local dir; dir="$(sync_ios)"
+  # Installing over a copy that is running can stall at "Installing 100%" (seen on iOS 27), so stop it first.
+  stop_app "$@"
   (cd "$dir" && "$OAD_DIR/device-run.sh" "$@")
+}
+
+# ship [--upload]: omarchy-apple-dev's App Store build (release build, app icon catalog, Xcode build keys, App Store
+# signing, offline validation) into its own copy, so device builds stay debug. --upload signs with your team and sends
+# the build to App Store Connect for TestFlight; it needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the .p8 file).
+cmd_ship() {
+  need_linux; xtool_env
+  [[ -x "$OAD_DIR/ship.sh" ]] || die "omarchy-apple-dev's ship.sh not found; run setup first"
+  local dir; dir="$(TM_BUILD_DIR="${TM_BUILD_DIR:-$HOME/trailmind-ios-ship}" sync_ios)"
+  (cd "$dir" && "$OAD_DIR/ship.sh" "$@")
+  echo "App Store package: $dir/xtool/TrailMind.ipa"
+}
+
+# ipa [FILE]: an unsigned release .ipa (app icons compiled) for testers to install with their own free Apple ID
+# through Sideloadly, AltStore or SideStore, which sign it for their own iPhone. Default: dist/TrailMind-<version>.ipa.
+cmd_ipa() {
+  need_linux; xtool_env
+  [[ -x "$OAD_DIR/ship.sh" ]] || die "omarchy-apple-dev's ship.sh not found; run setup first"
+  command -v zip >/dev/null || die "zip not found; run setup first"
+  local dir; dir="$(TM_BUILD_DIR="${TM_BUILD_DIR:-$HOME/trailmind-ios-ship}" sync_ios)"
+  (cd "$dir" && "$OAD_DIR/ship.sh" --device)
+  local app="$dir/xtool/TrailMind.app" version
+  version="$(python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["CFBundleShortVersionString"])' "$app/Info.plist")"
+  local out; out="$(realpath -m "${1:-$REPO_ROOT/dist/TrailMind-$version.ipa}")"
+  local stage; stage="$(mktemp -d)"
+  mkdir -p "$stage/Payload" "$(dirname "$out")"
+  cp -a "$app" "$stage/Payload/"
+  rm -f "$out"
+  (cd "$stage" && zip -qry "$out" Payload)
+  rm -rf "$stage"
+  echo "Sideload package ($(du -h "$out" | cut -f1)): $out"
+}
+
+# --- iPhone checks from Linux (pymobiledevice3; iOS 17+ needs the developer disk image, mounted on demand) ---
+PMD3="$HOME/pymobile3-venv/bin/pymobiledevice3"
+BUNDLE_SUFFIX="com.trailmind.ios.beta"
+
+# The UDID after a --udid argument, if any.
+udid_arg() {
+  local prev=""
+  for a in "$@"; do [[ "$prev" == --udid ]] && { echo "$a"; return; }; prev="$a"; done
+}
+
+# The installed bundle id (xtool prefixes it with XTL-<team>.), or nothing.
+installed_bundle() {
+  local udid="$1" args=()
+  [[ -n "$udid" ]] && args=(--udid "$udid")
+  "$PMD3" apps list "${args[@]}" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    apps = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+print(next((k for k in apps if k.endswith(sys.argv[1])), ""))' "$BUNDLE_SUFFIX"
+}
+
+stop_app() {
+  [[ -x "$PMD3" ]] || return 0
+  local udid bid args=()
+  udid="$(udid_arg "$@")"
+  [[ -n "$udid" ]] && args=(--udid "$udid")
+  bid="$(installed_bundle "$udid" || true)"
+  [[ -n "$bid" ]] || return 0
+  "$PMD3" mounter auto-mount "${args[@]}" >/dev/null 2>&1 || true
+  "$PMD3" developer dvt pkill --bundle "$bid" "${args[@]}" >/dev/null 2>&1 || true
+}
+
+# screenshot [--udid ID] [--display inner|outer|UNIQUE_ID] FILE.png
+# iPhone Duo has two displays; the default capture is the cover display, which is black while the phone is open.
+cmd_screenshot() {
+  need_linux
+  [[ -x "$PMD3" ]] || die "pymobiledevice3 not found; run setup first"
+  local udid="" display="" out=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --udid) udid="$2"; shift 2 ;;
+      --display) display="$2"; shift 2 ;;
+      *) out="$1"; shift ;;
+    esac
+  done
+  [[ -n "$out" ]] || die "usage: $0 screenshot [--udid ID] [--display inner|outer|ID] FILE.png"
+  [[ -n "$udid" ]] && export PYMOBILEDEVICE3_UDID="$udid"
+  local args=(); [[ -n "$udid" ]] && args=(--udid "$udid")
+  "$PMD3" mounter auto-mount "${args[@]}" >/dev/null 2>&1 || true
+  if [[ "$display" == inner || "$display" == outer ]]; then
+    # The cover display is the primary one; the inner display is the other integrated panel.
+    display="$("$PMD3" developer core-device get-display-info 2>/dev/null | python3 -c '
+import json, sys
+want_primary = sys.argv[1] == "outer"
+for d in json.load(sys.stdin)["displays"]:
+    if d.get("uniqueId") and "integrated" in d.get("type", {}) and bool(d.get("primary")) == want_primary:
+        print(d["uniqueId"]); break' "$display")"
+    [[ -n "$display" ]] || die "no such display on this phone"
+  fi
+  local extra=(); [[ -n "$display" ]] && extra=(--display-unique-id "$display")
+  "$PMD3" developer core-device screen-capture screenshot "${extra[@]}" "$out"
+}
+
+# logs [--udid ID]: stream TrailMind's own log lines (Ctrl-C to stop). "display"/"layout" lines show the iPhone Duo pose.
+cmd_logs() {
+  need_linux
+  command -v idevicesyslog >/dev/null || die "idevicesyslog not found; run setup first"
+  local udid; udid="$(udid_arg "$@")"
+  local args=(); [[ -n "$udid" ]] && args=(-u "$udid")
+  idevicesyslog "${args[@]}" -p TrailMind --no-colors
 }
 
 cmd_pair_network() {
@@ -204,7 +327,11 @@ case "${1:-}" in
   devices) shift; cmd_devices "$@" ;;
   build) shift; cmd_build "$@" ;;
   run) shift; cmd_run "$@" ;;
+  ship) shift; cmd_ship "$@" ;;
+  ipa) shift; cmd_ipa "$@" ;;
+  screenshot) shift; cmd_screenshot "$@" ;;
+  logs) shift; cmd_logs "$@" ;;
   pair-network) shift; cmd_pair_network "$@" ;;
   run-network) shift; cmd_run_network "$@" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  *) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "$0"; exit 2 ;;
 esac

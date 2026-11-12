@@ -6,23 +6,24 @@ The Android app is implemented with Android framework Views, SQLite, location se
 Bluetooth. `core` is a **Kotlin/JVM** library, not Kotlin Multiplatform: it uses `java.time`, `java.io`,
 `java.security`, `javax.crypto`, JVM XML and other Java APIs. Adding an iOS Gradle target is not a working port.
 
-The [iOS starter](../ios/) is an independent native SwiftUI application (iOS 17+), generated with XcodeGen.
-It contains an adaptive navigation layout, a MapKit map with the same online base maps as Android
-(**OS Maps Outdoor, Road and Light** from the OS Data Hub raster API in Web Mercator, OpenStreetMap, or Apple
-Maps), foreground Core Location, native map heading tracking, a time-stamped location share sheet, opacity
-settings and unit tests for location text and tile URLs.
+The [iPhone app](../ios/) is therefore a native SwiftUI application (iOS 17+) that ports the Android app area by
+area, so both behave and look the same:
+
+- `ios/TrailMind/Core/` is the `core` library ported line for line to Foundation-only Swift (same maths, thresholds,
+  rounding and wording), with the Kotlin unit tests ported to `ios/TrailMindTests/` and run on Linux.
+- `Design/` is the Android design system (palette, type, the Android vector icons, cards, pill buttons, chips...).
+- `App/` and `Duo/` are the Android map-first shell (narrow capsule, wide rail and pane) plus the iPhone Duo fold
+  layouts; `Map/` is MapKit with TrailMind's own tile engine (OS Maps including Explorer/Landranger, offline packs,
+  Premium rules); `Features/` holds one folder per Android area.
+
+What is ported and what iOS cannot do is tracked in [iphone-parity-plan.md](iphone-parity-plan.md).
 
 OS Maps need the user's own OS Data Hub key, entered in Settings and kept in the iPhone Keychain (never
 bundled). The OS logo and copyright statement are shown on the map, as OS branding requires. Zooms 17 and
-closer are OS Premium data: they count against the user's plan and are kept out of the on-disk tile cache.
-Apple Maps stays underneath the OS tiles, so zoom levels or areas that OS doesn't cover aren't blank.
-OS Explorer/Landranger (`Leisure_27700`) is **not** available yet: it uses the British National Grid, which
-needs reprojection or a custom renderer.
-It deliberately labels itself **Preview**. It is not a replacement for the Android hiking app.
+closer are OS Premium data: they count against the user's plan and are kept for at most 24 hours.
+It deliberately labels itself a **preview**: it is not yet a replacement for the Android hiking app.
 
-No Apple SDK, Xcode, signing identity or Mac host was available when this starter was added. Its first
-compile, simulator check and device test **must happen on a Mac, or on Linux/WSL with xtool** (below).
-Android validation does not validate these Swift files.
+Android validation does not validate the Swift files: build and test them with xtool (below) or Xcode.
 
 ## Build and install from Windows (WSL) or Linux, no Mac
 
@@ -35,9 +36,10 @@ that `project.yml` gives Xcode; keep the Info.plist values in step. The external
 What you need:
 
 - WSL 2 (Ubuntu) or Ubuntu/Arch/Fedora, about 25 GB free.
-- The Xcode `.xip` matching the Swift toolchain (**Xcode 27 for Swift 6.4**), downloaded once with a free
-  Apple ID from <https://developer.apple.com/download/all/?q=Xcode>. Full mode is required: the app uses
-  SwiftUI `NavigationSplitView`, `Form` and MapKit, which the experimental no-Xcode mode does not provide.
+- The Xcode `.xip` matching the Swift toolchain (**Xcode 27.1 or later for Swift 6.4**: the iPhone Duo APIs are in
+  the iOS 27.1 SDK), downloaded once with a free Apple ID from <https://developer.apple.com/download/all/?q=Xcode>.
+  Full mode is required: the app uses SwiftUI, MapKit, Swift Charts and the iOS 27.1 SDK, which the experimental
+  no-Xcode mode does not provide.
 - An Apple ID for `xtool auth`. A free account signs 7-day development builds for your own devices;
   TestFlight needs the paid programme (`ship.sh --upload`).
 - The iPhone on USB with **Developer Mode** on (Settings > Privacy & Security), unlocked, and Trust tapped.
@@ -61,8 +63,8 @@ curl.exe -fLo $env:TEMP\noble.tar.gz https://cloud-images.ubuntu.com/wsl/release
 wsl --import trailmind-ios $env:LOCALAPPDATA\WSL\trailmind-ios $env:TEMP\noble.tar.gz --version 2
 # then inside it as root: add a sudo user, and set [user] default=<user> and [boot] systemd=true in /etc/wsl.conf
 scripts\ios-wsl.ps1 setup                    # Swift 6.4, libimobiledevice, xtool; stops at the SDK step
-scripts\ios-wsl.ps1 setup -XcodeXip C:\Users\<you>\Downloads\Xcode_27.0.xip   # registers the iOS SDK
-scripts\ios-wsl.ps1 test                     # LocationText unit tests on Linux
+scripts\ios-wsl.ps1 setup -XcodeXip C:\Users\<you>\Downloads\Xcode_27.1.xip   # registers the iOS SDK
+scripts\ios-wsl.ps1 test                     # the ported core tests on Linux (-Filter <name> for some)
 scripts\ios-wsl.ps1 auth                     # once: Apple ID sign-in (interactive)
 scripts\ios-wsl.ps1 devices                  # connected iPhones and their UDIDs
 scripts\ios-wsl.ps1 run -Udid <UDID>         # build, sign, install, launch (-Udid needed with 2+ phones)
@@ -97,8 +99,40 @@ unmeasured upstream (Tailscale is measured); the phone answers RemotePairing on 
 The pairing record in `~/.local/share/pymobiledevice3/` is a device credential: keep it out of Git.
 iOS 26 and older offer no Linux network pairing, so use USB.
 
-`ios/TrailMindTests` still runs only under Xcode (`xcodebuild test`); `ios-xtool.sh test` covers the
-Foundation-only `LocationText` and `MapLayer` (tile URLs, keys, zoom limits) on Linux.
+`ios-xtool.sh test` builds `ios/TrailMind/Core` and `ios/TrailMindTests` as a Linux SwiftPM package (swift-crypto
+stands in for CryptoKit; `TM_TEST_DIR` picks its build directory) and runs every ported test. App-layer code
+(SwiftUI, MapKit, Core Location...) only compiles against the iOS SDK, so `ios-xtool.sh build` is its check; Xcode
+runs the same tests with `xcodebuild test`.
+
+### Testing on iPhone Duo from Windows
+
+pymobiledevice3 (installed by `setup`) reaches iOS 17+ developer services over a no-root userspace tunnel, so the
+phone's screens and logs can be checked from WSL. The developer disk image is mounted on demand (Developer Mode on).
+
+```sh
+scripts/ios-xtool.sh screenshot --udid <UDID> --display inner inner.png   # the open display
+scripts/ios-xtool.sh screenshot --udid <UDID> --display outer cover.png   # the cover display
+scripts/ios-xtool.sh logs --udid <UDID>    # TrailMind's log; "display ..." and "layout ..." lines per pose change
+```
+
+- iPhone Duo has two displays and a plain screenshot captures the cover display, which is black while the phone is
+  open. The phone must be unlocked: locked screens capture black.
+- Each fold, unfold or rotation logs one `display` line (window, safe area, status bar, vertical-bar edge, hinge,
+  fold and camera regions) and one `layout` line (the shell's mode and every frame), the same facts as More →
+  Display & fold. A `layout` line ends `active=false` when iOS laid TrailMind out in the background (for the app
+  switcher on the other display) while another app was on screen: don't take screenshots for those, they show the
+  other app.
+- `run` stops a running TrailMind before installing: installing over a running copy can stall at
+  "Installing 100%" on iOS 27.
+- If an install ends with `noDevice`, or a phone vanishes from `devices`, close every Apple Devices process and reopen
+  the Apple Devices app (see above).
+- `pymobiledevice3 developer core-device` also offers `launch-application` (with `--env`), `location` (simulated
+  position), `rotate` (turns the interface; the iPhone 12 obeyed, iPhone Duo did not) and `get-display-info`.
+- Debug builds read launch settings, so a check can be set up without touching the phone:
+  `launch-application --env TM_BASE=osm --env TM_CENTER=54.4542,-3.2116,13 --env TM_TAB=hikes <bundle id>`
+  (also `TM_OFFLINE_ONLY`, `TM_HEADING_UP`, `TM_ONBOARDED=1`, `TM_PAGE=display`; see `App/TestLaunch.swift`).
+- An idle map should not redraw: `logs` output with a steady stream of VectorKit "Heavy Frame" lines means a layer
+  keeps MapKit busy (for example a tile overlay answering without data), which costs battery on a hike.
 
 ## MacinCloud setup
 
@@ -126,21 +160,32 @@ Foundation-only `LocationText` and `MapLayer` (tile URLs, keys, zoom limits) on 
    privacy/export-compliance answers for the actual feature set, fix all Xcode diagnostics and complete
    the tests below. The starter has no release app-icon asset or archive/distribution automation yet.
 
-## iPhone and folding/window changes
+## iPhone Duo and window changes
 
-Use `NavigationSplitView`, safe areas, Dynamic Type and available scene/window size rather than model names,
-hinge coordinates or guessed screen dimensions. No private device APIs or assumed "Duo" SDK are used.
-Validate on the exact device/simulator profile once it is available in the installed Apple SDK:
+iPhone Duo (iOS 27.1) runs an app in a legacy compatibility mode unless its binary says it was built with the
+iOS 27.1 SDK. SwiftPM on Linux stamps the deployment target there instead, so `ios/Package.swift` links with
+`-platform_version ios 17.0 27.1`; check a build with
+`llvm-objdump --macho --private-headers TrailMind | grep -A4 LC_BUILD_VERSION` (`sdk 27.1`).
 
-- narrow portrait, landscape and wide windows; change size while location updates are running
-- navigation selection and settings survive resizing
-- map controls, Apple attribution and the current position remain unobscured
+The shell follows Android's layout rules and adds the fold, using only public iOS 27.1 APIs behind
+`#available(iOS 27.1, *)` (other iPhones get the Android layout):
+
+- under 600 pt wide: the floating capsule at the bottom, or standing on the side where iOS puts vertical bars
+  (`verticalBarEdge`, the closed outer display), kept clear of the camera (`reservedRegions(kind: .occlusion)`);
+- 600 pt and wider (open and flat, or landscape): the rail and the side pane over the map;
+- a fold (`reservedRegions(kind: .division)`, refreshed by `UIHingeInteraction`): book pose puts the menu on one
+  side of the fold and the map on the other; tabletop stands the map above the fold with pages and the capsule below.
+
+The rules are plain geometry in `Core/Shell/ShellGeometry.swift`, tested on Linux (`ShellGeometryTests`). More →
+**Display & fold** shows what the phone reports (window, safe area, vertical bars, hinge and angle, fold and camera
+regions), which is the first thing to check on a new device. Validate on the device:
+
+- closed, open, book and tabletop poses, in portrait and landscape; fold and unfold while recording a hike
+- navigation selection, the page stack and settings survive every change
+- map controls, OS branding and the current position remain unobscured by the fold, cameras and capsule
 - VoiceOver, large text, increased contrast and reduced transparency
 - precise/approximate/denied location, unavailable heading, no signal and stale fixes
 - share text contains the original fix time, not the time the Share button was pressed
-
-MapKit provides its own native heading tracking in this starter; the Android heading fix is **not** shared
-with it. Real walking tests are needed on both platforms.
 
 ## Porting order before hiking trials
 
@@ -161,18 +206,95 @@ one feature at a time. Keep the shipping Android build working during that migra
 
 ## Friends and family without a public release
 
-- **Recommended: invitation-only TestFlight.** Requires Apple Developer Program/App Store Connect setup.
-  Invite friends as external testers by email; do not enable a public invitation link. External testing
-  normally requires TestFlight Beta App Review. It does not require a public App Store release.
-- Internal TestFlight is for App Store Connect team members (up to 100), not a reason to grant friends
-  developer/account permissions. External testing supports up to 10,000 testers.
-- Ad Hoc distribution is another private option: register tester device identifiers and manage provisioning.
-  It requires paid membership and has device limits. A free personal team is useful for your own local
-  device development, not reliable family distribution.
-- Keep the first preview explicitly non-safety-critical until offline maps, route recovery, location ageing,
-  battery use and emergency UX have been checked on physical iPhones.
+Testers elsewhere can't use the USB install: Apple's free signing covers only devices plugged into this PC, and
+only your own. There are two ways to reach them.
+
+### Free: testers install it with their own Apple ID
+
+```powershell
+scripts\ios-wsl.ps1 ipa        # dist\TrailMind-<version>.ipa: unsigned release build with its icons (about 2.5 MB)
+```
+
+Send the `.ipa` with [iphone-sideload.md](iphone-sideload.md), or, as the repository is public, publish it as a
+pre-release for testers to download (the guide points them to the releases page):
+
+```powershell
+gh release create ios-v0.2.0-preview dist\TrailMind-0.2.0.ipa --prerelease --target ios-duo-parity `
+  --title "TrailMind for iPhone 0.2.0 (preview)" --notes "How to install: docs/iphone-sideload.md"
+```
+
+Each tester installs it with Sideloadly (or AltStore
+or SideStore) on their own Windows PC or Mac, which signs it with their own free Apple ID for their own iPhone. The
+app uses no capabilities a free Apple ID can't sign. Their copy stops opening after 7 days until they sign it again
+(their data stays), and they need Developer Mode on.
+
+Testers give their copy a bundle ID of their own (`com.trailmind.ios.beta.<name>`): bundle IDs are unique across
+all Apple accounts, and keeping `com.trailmind.ios.beta` unregistered leaves it free for TestFlight later. With
+another bundle ID, offline map downloads on iOS 26+ don't continue in the background (those task names must start
+with the bundle ID); everything else works the same.
+
+### Paid: TestFlight
+
+**Invitation-only TestFlight** needs the paid Apple Developer Program (US$99 a year), and in return testers install
+from Apple's TestFlight app with no computer, no weekly re-signing and no Developer Mode. It works from Windows/WSL
+with no Mac: `ship` builds the App Store package with omarchy-apple-dev (release build, app icon catalog, Xcode build
+keys, App Store signing, privacy manifest at the app root) and checks it offline against App Store Connect's rules
+before uploading.
+
+```powershell
+scripts\ios-wsl.ps1 ship        # dry run: App Store package signed with a test identity, validated offline
+```
+
+Once, as the account holder:
+
+1. Join the paid [Apple Developer Program](https://developer.apple.com/programs/enroll/) with the Apple ID that
+   signs in to xtool. Enrolment can take a day or two to be approved.
+2. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list), register
+   the App ID `com.trailmind.ios.beta` (explicit; no extra capabilities). It is permanent for the App Store Connect
+   record; if Apple says it's taken, change it in `ios/xtool.yml` and `ios/project.yml` together.
+3. In [App Store Connect](https://appstoreconnect.apple.com) → Apps → **+** → New App: iOS, a name (it must be unique
+   on the App Store, for example "TrailMind Hiking"; the name under the icon stays TrailMind), English (UK), the
+   bundle ID above, any SKU. The API can't create apps.
+4. Users and Access → Integrations → App Store Connect API → Team Keys → **+**: role **App Manager** (with access to
+   Certificates, Identifiers & Profiles). Download the `.p8` (only possible once), and note its Key ID and the Issuer
+   ID. Keep the `.p8` outside the repository.
+5. Publish [privacy-policy-ios.md](privacy-policy-ios.md) at a public web address after filling in its placeholders;
+   external testing needs one. The repository is public, so the file's GitHub page will do.
+
+Each build (the build number is the UTC date and time, so it always goes up; the version stays 0.2.0 until changed in
+`ios/Info-xtool.plist` and `ios/project.yml`):
+
+```powershell
+scripts\ios-wsl.ps1 ship -Upload -AscKeyId <Key ID> -AscIssuerId <Issuer ID> -AscKeyPath C:\keys\AuthKey_<Key ID>.p8
+```
+
+The first upload creates the distribution certificate (its private key stays in
+`~/.config/omarchy-apple-dev/distribution/` in WSL) and the App Store profile. Processing takes 5–30 minutes; App
+Store Connect emails if it finds a problem.
+
+Then in App Store Connect → TrailMind → TestFlight:
+
+1. **Test Information:** a beta description (what to try, and that it's a preview not to rely on for safety), a
+   feedback email and the privacy policy address.
+2. **External Testing → +** a group (for example "Friends"), add the build, then **Add testers** by email. The first
+   build of each version goes to Beta App Review, usually within a day; later builds of the same version normally go
+   straight out. Leave the public link off.
+
+Each friend then installs **TestFlight** from the App Store, opens the email invitation on their iPhone (or enters
+the redeem code in TestFlight) and taps Install. Updates arrive in TestFlight; screenshots taken in TrailMind can be
+sent as feedback, and crash reports reach App Store Connect. Each build stops working 90 days after upload, so send
+a new one before then. Testers need their own free [OS Data Hub](https://osdatahub.os.uk/) key (Settings) for OS
+maps; OpenStreetMap works without one.
+
+- Internal testing skips Beta App Review and the privacy policy, but each tester must be added as a user on your App
+  Store Connect team. For friends, external testing is the better fit.
+- Ad Hoc distribution (paid) needs each tester's device identifier and a re-signed build for every new device;
+  TestFlight avoids both.
+- Keep the preview explicitly non-safety-critical until offline maps, route recovery, location ageing, battery use
+  and emergency UX have been checked on testers' iPhones.
 
 Sources: [TestFlight](https://developer.apple.com/testflight/),
+[Invite external testers](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers),
+[omarchy-apple-dev shipping](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/SHIPPING.md),
 [Core Location](https://developer.apple.com/documentation/corelocation),
-[MapKit](https://developer.apple.com/documentation/mapkit),
-[SwiftUI NavigationSplitView](https://developer.apple.com/documentation/swiftui/navigationsplitview).
+[MapKit](https://developer.apple.com/documentation/mapkit).

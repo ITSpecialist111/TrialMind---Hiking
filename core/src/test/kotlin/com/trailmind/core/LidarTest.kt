@@ -5,6 +5,7 @@ import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.OsGridRef
 import com.trailmind.core.map.GeoTiff
 import com.trailmind.core.map.Lidar
+import com.trailmind.core.map.LidarReveal
 import com.trailmind.core.map.LidarRouteCheck
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -18,6 +19,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.Deflater
+import kotlin.math.abs
 
 class LidarTest {
     private fun resource(name: String): ByteArray =
@@ -136,6 +138,70 @@ class LidarTest {
         assertEquals(5f, padded[midRow + stride - 1])
         assertEquals(1f, padded[midRow])
         assertEquals(1f, padded[0])
+        val wide = Lidar.padded(centre, LidarReveal.BORDER) { dx, dy -> if (dx == 1 && dy == 0) east else null }
+        val wideStride = Lidar.SIZE + 2 * LidarReveal.BORDER
+        val wideRow = (LidarReveal.BORDER + 100) * wideStride
+        assertEquals(wideStride * wideStride, wide.size)
+        assertEquals(5f, wide[wideRow + wideStride - 1])
+        assertEquals(5f, wide[wideRow + LidarReveal.BORDER + Lidar.SIZE])
+        assertEquals(1f, wide[wideRow + LidarReveal.BORDER + Lidar.SIZE - 1])
+    }
+
+    // A level square at 100 m with a 2 m deep, 6 m wide ditch across rows 126..131 and a 1 m high bank on rows 160..163.
+    private fun earthworks(): FloatArray = FloatArray(Lidar.SIZE * Lidar.SIZE) { i ->
+        val row = i / Lidar.SIZE
+        if (row in 126..131) 98f else if (row in 160..163) 101f else 100f
+    }
+
+    private fun grey(argb: Int): Int {
+        assertEquals(0xFF, argb ushr 24, "reveal pictures are opaque")
+        assertEquals(argb shr 16 and 0xFF, argb and 0xFF)
+        assertEquals(argb shr 8 and 0xFF, argb and 0xFF)
+        return argb and 0xFF
+    }
+
+    @Test fun revealShowsDitchesDarkAndBanksLightInEveryStyle() {
+        val padded = Lidar.padded(earthworks(), LidarReveal.BORDER) { _, _ -> null }
+        fun pixel(pixels: IntArray, row: Int) = grey(pixels[row * Lidar.SIZE + 128])
+        for (style in LidarReveal.Style.entries) {
+            val pixels = LidarReveal.render(padded, style)
+            val level = pixel(pixels, 30)
+            val ditch = (124..133).map { pixel(pixels, it) }
+            if (style == LidarReveal.Style.HILLSHADE) {
+                assertTrue(ditch.any { abs(it - level) > 20 }, "$style: the ditch walls are shaded")
+            } else {
+                assertTrue(ditch.min() < level - 20, "$style: the ditch is darker than level ground")
+            }
+            if (style == LidarReveal.Style.SLRM) assertTrue(pixel(pixels, 162) > level + 10, "$style: the bank is lighter")
+        }
+    }
+
+    @Test fun revealOfLevelGroundIsEvenAndLeavesTheMapShowingWhereThereAreNoHeights() {
+        val heights = FloatArray(Lidar.SIZE * Lidar.SIZE) { 50f }
+        for (i in 0 until 40 * Lidar.SIZE) heights[i] = Float.NaN
+        val padded = Lidar.padded(heights, LidarReveal.BORDER) { _, _ -> null }
+        for (style in LidarReveal.Style.entries) {
+            val pixels = LidarReveal.render(padded, style)
+            assertEquals(0, pixels[10 * Lidar.SIZE + 100], "$style: no survey, nothing drawn")
+            val level = grey(pixels[200 * Lidar.SIZE + 100])
+            assertEquals(level, grey(pixels[150 * Lidar.SIZE + 30]))
+            assertTrue(level in 100..255)
+        }
+    }
+
+    @Test fun skyViewIsOneOnLevelGroundAndLessInAHollow() {
+        val stride = Lidar.SIZE + 2 * LidarReveal.BORDER
+        val padded = Lidar.padded(earthworks(), LidarReveal.BORDER) { _, _ -> null }
+        fun at(row: Int) = LidarReveal.skyView(padded, (row + LidarReveal.BORDER) * stride + 128 + LidarReveal.BORDER, stride)
+        assertEquals(1f, at(30), 1e-6f)
+        assertTrue(at(128) < 0.9f)
+        assertTrue(at(162) > at(128))
+    }
+
+    @Test fun revealStyleIdsRoundTripAndDefaultToSkyView() {
+        for (style in LidarReveal.Style.entries) assertEquals(style, LidarReveal.Style.of(style.id))
+        assertEquals(LidarReveal.Style.SVF, LidarReveal.Style.of(null))
+        assertEquals(LidarReveal.Style.SVF, LidarReveal.Style.of("nonsense"))
     }
 
     @Test fun routeCheckFindsSteepGroundAndCragsBesideTheLine() {

@@ -9,6 +9,7 @@ import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.map.GeoTiff
 import com.trailmind.core.map.Lidar
+import com.trailmind.core.map.LidarReveal
 import com.trailmind.core.map.LidarRouteCheck
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -25,14 +26,18 @@ import java.util.concurrent.atomic.AtomicInteger
  * decoded on demand, and turned into hill shading with crags for the map.
  */
 class LidarProvider(private val app: TrailMindApp) {
+    /** One picture of a square: the translucent shading ([style] null) or an opaque Reveal picture. */
+    private data class Key(val square: Lidar.Square, val style: LidarReveal.Style?)
+
     private val root = File(app.filesDir, "lidar")
-    private val permits = Semaphore(2)
-    private val workers = Executors.newFixedThreadPool(2) { r -> Thread(r, "lidar").apply { isDaemon = true } }
-    private val pending = ConcurrentHashMap.newKeySet<Lidar.Square>()
-    private val retryAt = ConcurrentHashMap<Lidar.Square, Long>()
-    private val wantedAt = ConcurrentHashMap<Lidar.Square, Long>()
+    private val permits = Semaphore(DOWNLOADS)
+    private val workers = Executors.newFixedThreadPool(DOWNLOADS) { r -> Thread(r, "lidar").apply { isDaemon = true } }
+    private val downloads = AtomicInteger()
+    private val pending = ConcurrentHashMap.newKeySet<Key>()
+    private val retryAt = ConcurrentHashMap<Key, Long>()
+    private val wantedAt = ConcurrentHashMap<Key, Long>()
     private val saved = ConcurrentHashMap.newKeySet<Lidar.Square>()
-    private val stale = ConcurrentHashMap.newKeySet<Lidar.Square>()
+    private val stale = ConcurrentHashMap.newKeySet<Key>()
     @Volatile private var indexed = false
     @Volatile private var frameMs = 0L
     private val listeners = ConcurrentHashMap.newKeySet<() -> Unit>()
@@ -43,8 +48,8 @@ class LidarProvider(private val app: TrailMindApp) {
     private val crags = object : LruCache<Lidar.Square, BooleanArray>(CRAG_CACHE_BYTES) {
         override fun sizeOf(key: Lidar.Square, value: BooleanArray) = maxOf(1, value.size)
     }
-    private val overlays = object : LruCache<Lidar.Square, Bitmap>(OVERLAY_BYTES * 24) {
-        override fun sizeOf(key: Lidar.Square, value: Bitmap) = value.byteCount
+    private val overlays = object : LruCache<Key, Bitmap>(OVERLAY_BYTES * 24) {
+        override fun sizeOf(key: Key, value: Bitmap) = value.byteCount
     }
 
     init {
@@ -81,11 +86,16 @@ class LidarProvider(private val app: TrailMindApp) {
         if (write(file, bytes)) saved += square
         heights.put(square, values)
         // Neighbours shaded before this square arrived repeated their own edge. Shade them again with its heights,
-        // showing the old shading until then, including any being shaded right now.
+        // showing the old shading until then, including any being shaded right now. (The map holds the rebuilds back
+        // until the downloads settle, so a neighbour isn't shaded again for each of its eight neighbours.)
         for (dy in -1..1) for (dx in -1..1) {
             val near = Lidar.Square(square.col + dx, square.row + dy)
             crags.remove(near)
-            if (near != square && (near in pending || overlays.get(near) != null)) stale += near
+            if (near == square) continue
+            for (style in STYLES) {
+                val key = Key(near, style)
+                if (key in pending || overlays.get(key) != null) stale += key
+            }
         }
         return values
     }
@@ -115,52 +125,59 @@ class LidarProvider(private val app: TrailMindApp) {
         }
     }
 
-    fun overlay(square: Lidar.Square): Bitmap? = overlays.get(square)
+    /** The square's shading, or with a [style] its opaque Reveal picture, if built. */
+    fun overlay(square: Lidar.Square, style: LidarReveal.Style? = null): Bitmap? = overlays.get(Key(square, style))
 
     /** True when a neighbour arrived after the square was shaded, so its edges need shading again. */
-    fun isStale(square: Lidar.Square) = square in stale
+    fun isStale(square: Lidar.Square, style: LidarReveal.Style? = null) = Key(square, style) in stale
 
     /** Called as the map starts drawing: squares it doesn't ask for again from now on have gone off the screen. */
     fun beginFrame() { frameMs = System.currentTimeMillis() }
 
-    /** Grows the overlay cache to hold [visible] squares plus a margin; a smaller one would rebuild on-screen squares forever. */
-    fun keepOverlays(visible: Int) {
-        val bytes = (visible.coerceAtMost(MAX_VISIBLE) + 16) * OVERLAY_BYTES
+    /** Grows the overlay cache to hold [visible] squares of each of [layers] pictures plus a margin; a smaller one would rebuild on-screen squares forever. */
+    fun keepOverlays(visible: Int, layers: Int = 1) {
+        val bytes = (visible.coerceAtMost(MAX_VISIBLE) * layers + 16) * OVERLAY_BYTES
         if (bytes > overlays.maxSize()) overlays.resize(bytes)
     }
 
-    /** Builds the square's shading in the background, downloading it first if [allowNetwork]; listeners hear when it is ready. */
-    fun requestOverlay(square: Lidar.Square, allowNetwork: Boolean) {
-        if (overlays.get(square) != null && square !in stale) return
-        if (!square.inExtent) { overlays.put(square, EMPTY); return }
+    /**
+     * Builds the square's shading (or Reveal picture, with a [style]) in the background, downloading it first if
+     * [allowNetwork]; listeners hear when it is ready.
+     */
+    fun requestOverlay(square: Lidar.Square, allowNetwork: Boolean, style: LidarReveal.Style? = null) {
+        val key = Key(square, style)
+        if (overlays.get(key) != null && key !in stale) return
+        // A stale picture is only missing a neighbour's edge: keep it while squares are still arriving.
+        if (key in stale && downloads.get() > 0 && overlays.get(key) != null) return
+        if (!square.inExtent) { overlays.put(key, EMPTY); return }
         if (!allowNetwork && heights.get(square) == null && square !in saved) return
         val now = System.currentTimeMillis()
-        wantedAt[square] = now
-        if ((retryAt[square] ?: 0L) > now || !pending.add(square)) return
+        wantedAt[key] = now
+        if ((retryAt[key] ?: 0L) > now || !pending.add(key)) return
         workers.execute {
             // Cleared before shading starts, so a neighbour arriving while it runs marks the result stale again.
-            val wasStale = stale.remove(square)
+            val wasStale = stale.remove(key)
             var built = false
             try {
                 // Squares the map has moved away from since they were asked for are not worth a download.
-                val network = allowNetwork && (wantedAt[square] ?: 0L) >= frameMs
-                val bitmap = build(square, network)
+                val network = allowNetwork && (wantedAt[key] ?: 0L) >= frameMs
+                val bitmap = build(square, style, network)
                 if (bitmap == null) {
-                    if (network) retryAt[square] = System.currentTimeMillis() + RETRY_MS
+                    if (network) retryAt[key] = System.currentTimeMillis() + RETRY_MS
                 } else {
-                    overlays.put(square, bitmap)
+                    overlays.put(key, bitmap)
                     built = true
-                    retryAt.remove(square)
+                    retryAt.remove(key)
                     Async.main.post { listeners.forEach { it() } }
                 }
             } catch (t: Throwable) {
-                Log.w("LidarProvider", "could not shade $square", t)
-                retryAt[square] = System.currentTimeMillis() + RETRY_MS
+                Log.w("LidarProvider", "could not shade $key", t)
+                retryAt[key] = System.currentTimeMillis() + RETRY_MS
             } finally {
                 // The old shading on screen still lacks its neighbour's edge until a rebuild succeeds.
-                if (wasStale && !built) stale += square
-                wantedAt.remove(square)
-                pending.remove(square)
+                if (wasStale && !built) stale += key
+                wantedAt.remove(key)
+                pending.remove(key)
             }
         }
     }
@@ -193,9 +210,13 @@ class LidarProvider(private val app: TrailMindApp) {
         }
     }
 
-    private fun build(square: Lidar.Square, allowNetwork: Boolean): Bitmap? {
+    private fun build(square: Lidar.Square, style: LidarReveal.Style?, allowNetwork: Boolean): Bitmap? {
         val centre = heights(square, allowNetwork) ?: return null
         if (centre === NO_DATA) return EMPTY
+        if (style != null) {
+            val wide = Lidar.padded(centre, LidarReveal.BORDER) { dx, dy -> neighbour(square, dx, dy) }
+            return Bitmap.createBitmap(LidarReveal.render(wide, style), Lidar.SIZE, Lidar.SIZE, Bitmap.Config.ARGB_8888)
+        }
         val padded = padded(square, centre)
         // Always worked out afresh: a cached mask may predate a neighbour that has just arrived.
         val mask = Lidar.crags(padded).also { crags.put(square, it) }
@@ -208,10 +229,11 @@ class LidarProvider(private val app: TrailMindApp) {
         return Lidar.crags(padded(square, centre)).also { crags.put(square, it) }
     }
 
-    private fun padded(square: Lidar.Square, centre: FloatArray): FloatArray = Lidar.padded(centre) { dx, dy ->
-        // Rows run south, so the square above (dy = -1) is the next one north.
+    private fun padded(square: Lidar.Square, centre: FloatArray): FloatArray = Lidar.padded(centre) { dx, dy -> neighbour(square, dx, dy) }
+
+    // Rows run south, so the square above (dy = -1) is the next one north.
+    private fun neighbour(square: Lidar.Square, dx: Int, dy: Int): FloatArray? =
         heights(Lidar.Square(square.col + dx, square.row - dy), allowNetwork = false)?.takeIf { it !== NO_DATA }
-    }
 
     private fun decode(bytes: ByteArray, square: Lidar.Square): FloatArray? {
         val raster = try { GeoTiff.read(bytes) } catch (_: IOException) { return null }
@@ -221,6 +243,7 @@ class LidarProvider(private val app: TrailMindApp) {
 
     private fun fetch(square: Lidar.Square): ByteArray? {
         permits.acquireUninterruptibly()
+        downloads.incrementAndGet()
         try {
             if (!app.tiles.networkAllowed()) return null
             val connection = URL(url(square)).openConnection() as HttpURLConnection
@@ -249,6 +272,8 @@ class LidarProvider(private val app: TrailMindApp) {
             return null
         } finally {
             permits.release()
+            // Squares have stopped arriving: pictures that were waiting for a neighbour's edge can be redrawn now.
+            if (downloads.decrementAndGet() == 0) Async.main.post { listeners.forEach { it() } }
         }
     }
 
@@ -285,11 +310,14 @@ class LidarProvider(private val app: TrailMindApp) {
         const val MAX_VISIBLE = 144
         /** Marks a square with no LiDAR. */
         val NO_DATA = FloatArray(0)
+        private val STYLES: List<LidarReveal.Style?> = listOf(null) + LidarReveal.Style.entries
         /** The shading for a square with no LiDAR: nothing to draw. */
         val EMPTY: Bitmap by lazy { Bitmap.createBitmap(1, 1, Bitmap.Config.ALPHA_8) }
         private const val MAX_DISK_BYTES = 300L * 1024 * 1024
         private const val MAX_SQUARE_BYTES = 2 * 1024 * 1024
-        private const val HEIGHT_CACHE_BYTES = 48 * Lidar.SIZE * Lidar.SIZE * 4
+        private const val HEIGHT_CACHE_BYTES = 160 * Lidar.SIZE * Lidar.SIZE * 4
+        /** Squares downloaded, and pictures built, at once. */
+        private const val DOWNLOADS = 6
         private const val CRAG_CACHE_BYTES = 64 * Lidar.SIZE * Lidar.SIZE
         private const val OVERLAY_BYTES = Lidar.SIZE * Lidar.SIZE * 4
         private const val RETRY_MS = 30_000L

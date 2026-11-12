@@ -126,19 +126,19 @@ object Lidar {
     }
 
     /**
-     * [centre] with [BORDER] pixels around it from its neighbours. [neighbour] gets the offset in pixel rows and
+     * [centre] with [border] pixels around it from its neighbours. [neighbour] gets the offset in pixel rows and
      * columns, so dy = -1 is the square to the north; where it has none, the centre's own edge is repeated.
      */
-    fun padded(centre: FloatArray, neighbour: (dx: Int, dy: Int) -> FloatArray?): FloatArray {
-        require(centre.size == SIZE * SIZE)
-        val stride = SIZE + 2 * BORDER
+    fun padded(centre: FloatArray, border: Int = BORDER, neighbour: (dx: Int, dy: Int) -> FloatArray?): FloatArray {
+        require(centre.size == SIZE * SIZE && border in 0..SIZE)
+        val stride = SIZE + 2 * border
         val around = Array(9) { i -> if (i == 4) centre else neighbour(i % 3 - 1, i / 3 - 1)?.takeIf { it.size == SIZE * SIZE } }
         val out = FloatArray(stride * stride)
-        for (row in -BORDER until SIZE + BORDER) for (col in -BORDER until SIZE + BORDER) {
+        for (row in -border until SIZE + border) for (col in -border until SIZE + border) {
             val dx = if (col < 0) -1 else if (col >= SIZE) 1 else 0
             val dy = if (row < 0) -1 else if (row >= SIZE) 1 else 0
             val source = around[(dy + 1) * 3 + dx + 1]
-            out[(row + BORDER) * stride + col + BORDER] = if (source != null) source[Math.floorMod(row, SIZE) * SIZE + Math.floorMod(col, SIZE)]
+            out[(row + border) * stride + col + border] = if (source != null) source[Math.floorMod(row, SIZE) * SIZE + Math.floorMod(col, SIZE)]
                 else centre[row.coerceIn(0, SIZE - 1) * SIZE + col.coerceIn(0, SIZE - 1)]
         }
         return out

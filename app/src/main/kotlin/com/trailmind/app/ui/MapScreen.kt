@@ -32,12 +32,14 @@ import com.trailmind.core.geo.Geo
 import com.trailmind.core.geo.LatLon
 import com.trailmind.core.geo.OsGrid
 import com.trailmind.core.geo.TrackPoint
+import com.trailmind.core.map.LidarReveal
 import com.trailmind.core.nav.DistanceMarks
 import com.trailmind.core.stats.TrackStats
 import com.trailmind.app.location.CheckIn
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** Side length of a button in the map's tool capsule. */
 private const val FAB_DP = 44
@@ -54,7 +56,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             val gap = freeBottom() - freeTop()
-            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 7 else 6
+            val fabs = if (fullScreenFab.visibility == View.VISIBLE) 8 else 7
             val showZoom = gap >= host.dp(fabs * FAB_DP + 12)
             if (zoomButtons.any { (it.visibility == View.VISIBLE) != showZoom }) {
                 zoomButtons.forEach { it.visibility = if (showZoom) View.VISIBLE else View.GONE }
@@ -92,6 +94,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private var headingAnimation: android.animation.ValueAnimator? = null
     private var headingTarget: Double? = null
     private val fullScreenFab = ui.fab(R.drawable.ic_fullscreen, "Full-screen map", sizeDp = FAB_DP, flat = true) { host.setMapFullScreen(!host.mapFullScreen) }
+    private val revealFab = ui.fab(R.drawable.ic_reveal, "Reveal LiDAR", sizeDp = FAB_DP, flat = true) { toggleReveal() }
     private val zoomButtons: List<View>
     // Caps the recording card at 420 dp in the wide layout without overflowing a narrower map pane.
     private val recordBar = object : FrameLayout(host) {
@@ -118,6 +121,10 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
     private val oldMapChip = ui.chip("Old map", glass = true) { chooseOldMap() }.apply {
         visibility = View.GONE
         contentDescription = "Old map settings"
+    }
+    private val revealChip = ui.chip("Reveal", glass = true) { chooseReveal() }.apply {
+        visibility = View.GONE
+        contentDescription = "Reveal LiDAR settings"
     }
     private val groupChip = ui.chip("Group", glass = true) { fitGroup() }.apply {
         visibility = View.GONE
@@ -168,6 +175,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         statusRow.addView(layerChip)
         statusRow.addView(trackChip)
         statusRow.addView(oldMapChip)
+        statusRow.addView(revealChip)
         statusRow.addView(pinChip)
         layerChip.maxWidth = host.dp(170)
         oldMapChip.maxWidth = host.dp(230)
@@ -180,6 +188,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         fabColumn.addView(ui.fab(R.drawable.ic_search, "Search", sizeDp = FAB_DP, flat = true) { host.push(SearchPage(host)) })
         fabColumn.addView(fullScreenFab)
         fabColumn.addView(ui.fab(R.drawable.ic_layers, "Map layers", sizeDp = FAB_DP, flat = true) { chooseLayer() })
+        fabColumn.addView(revealFab)
         zoomButtons = listOf(
             ui.fab(R.drawable.ic_add, "Zoom in", sizeDp = FAB_DP, flat = true) { mapView.zoomBy(1.0) },
             ui.fab(R.drawable.ic_remove, "Zoom out", sizeDp = FAB_DP, flat = true) { mapView.zoomBy(-1.0) },
@@ -400,6 +409,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
         mapView.source = s
         mapView.showSteepGround = app.prefs.showSteepGround
         mapView.showLidar = app.prefs.showLidar
+        applyReveal()
         layerChip.text = s.name
         applyHistoric()
         updateHint()
@@ -530,6 +540,69 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             app.tiles.lastError != null && (s.isOnline || mapView.historic != null) -> app.tiles.lastError
             else -> null
         }
+    }
+
+    /** The Reveal slider's one control: off, or which picture of the ground it shows. */
+    private fun chooseReveal() {
+        val styles = LidarReveal.Style.entries
+        val labels = (listOf("Off: the map only") + styles.map { it.label }).toTypedArray()
+        val note = ui.text("", Ui.T.CAPTION)
+        fun showNote() {
+            note.text = if (app.prefs.revealLidar) app.prefs.revealStyle.note else "Turn it on to pull the map back and see the ground under it."
+        }
+        val title = ui.column(padding = 20, spacing = 6) {
+            addView(ui.text("Reveal the ground", Ui.T.TITLE))
+            addView(ui.text("Drag the handle across the map to pull it back and show a 1 m LiDAR picture of the ground, where ruins, " +
+                "earthworks and old field systems show that you can't see from the path. England only. ${LidarProvider.CREDIT}", Ui.T.CAPTION))
+            addView(note)
+        }
+        showNote()
+        val current = if (app.prefs.revealLidar) styles.indexOf(app.prefs.revealStyle) + 1 else 0
+        ui.dialog().setCustomTitle(title)
+            .setSingleChoiceItems(labels, current) { _, which ->
+                if (which == 0) {
+                    app.prefs.revealLidar = false
+                } else {
+                    app.prefs.revealStyle = styles[which - 1]
+                    if (!app.prefs.revealLidar) startReveal()
+                }
+                applyReveal()
+                showNote()
+            }
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    /** The map tool's button switches Reveal on and off; the status chip opens its settings. */
+    private fun toggleReveal() {
+        if (app.prefs.revealLidar) {
+            app.prefs.revealLidar = false
+        } else {
+            startReveal()
+        }
+        applyReveal()
+    }
+
+    /** Turns the Reveal slider on, close enough to the ground for LiDAR to show. */
+    private fun startReveal() {
+        app.prefs.revealLidar = true
+        if (mapView.zoom < TileMapView.REVEAL_START_ZOOM) mapView.zoomBy(TileMapView.REVEAL_START_ZOOM - mapView.zoom)
+        host.toast("Drag the handle across the map to reveal the ground under it. LiDAR covers England.")
+    }
+
+    private fun applyReveal() {
+        val on = app.prefs.revealLidar
+        mapView.revealStyle = app.prefs.revealStyle
+        mapView.revealFraction = app.prefs.revealPercent / 100f
+        mapView.reveal = on
+        revealChip.visibility = if (on) View.VISIBLE else View.GONE
+        revealChip.text = "Reveal · ${app.prefs.revealStyle.label}"
+        revealFab.setImageDrawable(host.getDrawable(R.drawable.ic_reveal)?.mutate()?.apply { setTint(if (on) p.primary else p.onSurface) })
+        revealFab.contentDescription = if (on) "Reveal LiDAR is on. Tap to turn it off" else "Reveal LiDAR: pull the map back to see the ground"
+    }
+
+    override fun onRevealMoved(fraction: Float) {
+        app.prefs.revealPercent = (fraction * 100).roundToInt()
     }
 
     private fun chooseLayer() {
@@ -699,7 +772,7 @@ class MapScreen(private val host: MainActivity) : TileMapView.Listener {
             mapView.historic?.let { "${it.attribution}\n${TileSources.NLS_MAPS_URL}\nScanned and georeferenced: features may sit a little off their true position." },
             OverpassFacilities.ATTRIBUTION.takeIf { mapView.facilities.isNotEmpty() },
             TerrainProvider.CREDIT.takeIf { app.prefs.showSteepGround },
-            LidarProvider.CREDIT.takeIf { app.prefs.showLidar },
+            LidarProvider.CREDIT.takeIf { app.prefs.showLidar || app.prefs.revealLidar },
         ).joinToString("\n\n")
         val dialog = ui.dialog().setTitle("Map data").setMessage(credits).setNegativeButton("Close", null)
         when {

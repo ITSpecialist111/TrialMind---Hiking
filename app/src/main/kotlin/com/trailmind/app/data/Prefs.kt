@@ -6,6 +6,7 @@ import com.trailmind.app.frontier.group.GroupKeyStore
 import org.json.JSONArray
 import org.json.JSONObject
 import com.trailmind.core.stats.PaceSettings
+import com.trailmind.core.map.LidarReveal
 import com.trailmind.core.frontier.FallVector
 
 /** User settings. Stored in app-private SharedPreferences (app backup is disabled). */
@@ -81,6 +82,20 @@ class Prefs(context: Context) {
     var packLidar: Boolean
         get() = sp.getBoolean("pack_lidar", true)
         set(v) = sp.edit().putBoolean("pack_lidar", v).apply()
+
+    /** The Reveal slider: LiDAR picture of the ground drawn over the part of the map to one side of a draggable line. */
+    var revealLidar: Boolean
+        get() = sp.getBoolean("reveal_lidar", false)
+        set(v) = sp.edit().putBoolean("reveal_lidar", v).apply()
+
+    var revealStyle: LidarReveal.Style
+        get() = LidarReveal.Style.of(sp.getString("reveal_style", null))
+        set(v) = sp.edit().putString("reveal_style", v.id).apply()
+
+    /** How much of the map width, from the left, the Reveal picture covers: 0–100. */
+    var revealPercent: Int
+        get() = sp.getInt("reveal_percent", 50).coerceIn(0, 100)
+        set(v) = sp.edit().putInt("reveal_percent", v.coerceIn(0, 100)).apply()
 
     var showFacilities: Boolean
         get() = sp.getBoolean("show_facilities", true)
