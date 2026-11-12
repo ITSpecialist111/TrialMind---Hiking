@@ -1,5 +1,5 @@
 <!--
-Before publishing: replace [Developer name] and [contact email] below, then use this page's public web address (for
+Before publishing: use this page's public web address (for
 example its GitHub page; not a PDF) in App Store Connect > TrailMind > TestFlight > Test Information > Privacy Policy
 URL (and, for a public release, App Information > Privacy Policy URL).
 Keep it in step with privacy-policy.md (Android) and ios/TrailMind/Resources/PrivacyInfo.xcprivacy whenever the app's
@@ -10,7 +10,7 @@ network use changes.
 
 *Effective 1 November 2026*
 
-TrailMind is a hiking app for iPhone, published by [Developer name] ("we"). This policy explains what TrailMind
+TrailMind is a hiking app for iPhone, published by Byzantium Systems ("we"). This policy explains what TrailMind
 does with your information. In short: TrailMind has no accounts, no ads, no analytics and no servers of our own.
 Your routes, hikes and settings stay on your iPhone.
 
@@ -140,4 +140,4 @@ TrailMind is intended for adults and is not directed at children.
 ## Changes and contact
 
 If this policy changes, we will update this page and its effective date. For questions or requests, contact
-[contact email].
+graham@hosking.wales.

@@ -1,5 +1,10 @@
+---
+layout: default
+title: TrailMind privacy policy
+---
+
 <!--
-Before publishing: replace [Developer name] and [contact email] below, then host this page at a public web
+Before publishing: host this page at a public web
 address (not a PDF) and paste that address into Play Console > Policy > App content > Privacy policy.
 Keep it in step with the Data safety answers in google-play.md whenever the app's network use changes.
 -->
@@ -8,7 +13,7 @@ Keep it in step with the Data safety answers in google-play.md whenever the app'
 
 *Effective 24 October 2026*
 
-TrailMind is a hiking app for Android phones and Wear OS watches, published by [Developer name] ("we"). This
+TrailMind is a hiking app for Android phones and Wear OS watches, published by Byzantium Systems ("we"). This
 policy explains what TrailMind does with your information. In short: TrailMind has no accounts, no ads, no
 analytics and no servers of our own. Your routes, hikes and settings stay on your devices.
 
@@ -131,4 +136,4 @@ TrailMind is intended for adults and is not directed at children.
 ## Changes and contact
 
 If this policy changes, we will update this page and its effective date. For questions or requests, contact
-[contact email].
+graham@hosking.wales.
